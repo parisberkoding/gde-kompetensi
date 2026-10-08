@@ -74,7 +74,7 @@ function renderDsKerangka() {
     return '<option value="' + SIAGA.attr(k) + '">' + SIAGA.esc(k) + '</option>';
   }).join('');
 
-  SIAGA.el('dsRoot').innerHTML = ''
+  SIAGA.isiHtml('dsRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Penelusuran</div>'
@@ -147,7 +147,7 @@ function renderDsKerangka() {
     + '  </div>'
 
     + '  <div id="dsTabel"></div>'
-    + '</div>';
+    + '</div>');
 
   isiOpsiDivisiDs(meta.divisi_options || []);
 
@@ -217,13 +217,13 @@ function muatDs(sekaligus) {
     var meta = SIAGA.state.meta || {};
     isiOpsiDivisiDs(meta.divisi_options || []);
   }
-  SIAGA.el('dsTabel').innerHTML = SIAGA.pemuatHtml('Memuat data...');
+  SIAGA.isiHtml('dsTabel', SIAGA.pemuatHtml('Memuat data...'));
   SIAGA.api('apiListFiles', [DsState.filter]).then(function (d) {
     DsState.hasil = d;
     renderDsRingkas(d);
     renderDsTabel(d);
   }).catch(function (e) {
-    SIAGA.el('dsTabel').innerHTML = SIAGA.galatHtml(e.message);
+    SIAGA.isiHtml('dsTabel', SIAGA.galatHtml(e.message));
   });
 }
 
@@ -240,7 +240,7 @@ function renderDsRingkas(d) {
       + '<div class="siaga-mini__value">' + SIAGA.angka(r[s.key] || 0) + '</div>'
       + '</div></div>';
   }).join('');
-  SIAGA.el('dsRingkas').innerHTML = html;
+  SIAGA.isiHtml('dsRingkas', html);
 }
 
 /* ---------------------------------------------------------------- tabel -- */
@@ -384,15 +384,15 @@ function pasangEventTabel() {
 
 /* ---------------------------------------------------------- modal detail -- */
 function bukaDetail(docId) {
-  SIAGA.el('dsDetailIsi').innerHTML = SIAGA.pemuatHtml('Memuat detail...');
-  SIAGA.el('dsDetailAksi').innerHTML = '';
+  SIAGA.isiHtml('dsDetailIsi', SIAGA.pemuatHtml('Memuat detail...'));
+  SIAGA.isiHtml('dsDetailAksi', '');
   SIAGA.modalBuka('dsModalDetail');
 
   SIAGA.api('apiGetFile', [docId]).then(function (d) {
     DsState.detail = d.file;
     renderDetail(d.file);
   }).catch(function (e) {
-    SIAGA.el('dsDetailIsi').innerHTML = SIAGA.galatHtml(e.message);
+    SIAGA.isiHtml('dsDetailIsi', SIAGA.galatHtml(e.message));
   });
 }
 
@@ -442,7 +442,7 @@ function renderDetail(f) {
     + '</div>'
     + '</div>';
 
-  SIAGA.el('dsDetailIsi').innerHTML = html;
+  SIAGA.isiHtml('dsDetailIsi', html);
 
   /* ---- aksi modal ---- */
   var isHc = SIAGA.isHc();
@@ -463,7 +463,7 @@ function renderDetail(f) {
   }
   aksi += '<button class="gde-btn gde-btn--primary" type="button" id="dsUbahBtn">'
     + '<i class="bi bi-pencil"></i> Ubah</button>';
-  SIAGA.el('dsDetailAksi').innerHTML = aksi;
+  SIAGA.isiHtml('dsDetailAksi', aksi);
 
   var vb = SIAGA.el('dsVerifikasiBtn');
   if (vb) vb.addEventListener('click', function () { SIAGA.modalTutup('dsModalDetail'); bukaVerifikasi(f.doc_id); });

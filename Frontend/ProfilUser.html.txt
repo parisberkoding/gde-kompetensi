@@ -27,7 +27,7 @@ function initProfilUser(param) {
 
 /* --------------------------------------------------------------- kerangka -- */
 function puRenderKerangka() {
-  SIAGA.el('puRoot').innerHTML = ''
+  SIAGA.isiHtml('puRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Akun</div>'
@@ -40,7 +40,7 @@ function puRenderKerangka() {
     + '      <i class="bi bi-arrow-clockwise"></i> Segarkan</button>'
     + '  </div>'
     + '</div>'
-    + '<div id="puIsi">' + SIAGA.pemuatHtml('Memuat profil...') + '</div>';
+    + '<div id="puIsi">' + SIAGA.pemuatHtml('Memuat profil...') + '</div>');
 
   var ulang = SIAGA.el('puMuatUlang');
   if (ulang) ulang.addEventListener('click', function () { puMuat(); });
@@ -66,15 +66,15 @@ function puRenderIsi(d) {
   var ring = (d && d.ringkasan) || {};
 
   if (!user || !user.employee_code) {
-    SIAGA.el('puIsi').innerHTML = SIAGA.kosongHtml('bi-person-x', 'Profil tidak ditemukan',
-      'Data karyawan tidak dapat dimuat. Hubungi Human Capital untuk memastikan akun Anda terdaftar.');
+    SIAGA.isiHtml('puIsi', SIAGA.kosongHtml('bi-person-x', 'Profil tidak ditemukan',
+      'Data karyawan tidak dapat dimuat. Hubungi Human Capital untuk memastikan akun Anda terdaftar.'));
     return;
   }
 
-  SIAGA.el('puIsi').innerHTML = '<div class="siaga-2col">'
+  SIAGA.isiHtml('puIsi', '<div class="siaga-2col">'
     + puKolomKiri(user, ring)
     + puKolomKanan(user)
-    + '</div>';
+    + '</div>');
 
   puPasangPerilaku(user);
   puMuatDivisi();

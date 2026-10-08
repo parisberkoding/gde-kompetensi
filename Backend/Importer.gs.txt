@@ -247,90 +247,145 @@ function bacaSheetImpor_(namaSheet) {
 // ============================================================================
 
 /**
- * Tebak tanggal mulai & selesai dari teks bebas kolom Pelaksanaan.
- * Contoh yang ditangani: "20 - 21, 24 Februari 2023", "Sept'13", "Mei 2015",
- * "28 Sept–3 Okt'15", "'5-8 November 2018", "7-19, 21-23 Maret", Date object.
+ * Tebak tanggal mulai & selesai dari teks bebas kolom "Pelaksanaan".
+ *
+ * Contoh yang ditangani (semua berasal dari data asli Excel):
+ *   "20 - 21, 24 Februari 2023"                       -> 20..24 Feb 2023
+ *   "23 Februari - 12 Maret 2023"                     -> 23 Feb..12 Mar 2023
+ *   "28 Sept–3 Okt’15"                                   -> 28 Sep..3 Okt 2015
+ *   "Sept’13" / "Mei 2015" / "31 Okt’14"                -> seluruh bulan itu
+ *   "'5-8 November 2018"                              -> 5..8 Nov 2018
+ *   "7-19, 21-23 Maret"  (tanpa tahun)                -> pakai tahun berjalan
+ *   Date object / "2022-05-10"                        -> langsung dipakai
+ *
+ * Cara kerja: setiap angka hari dipasangkan dengan BULAN PERTAMA yang muncul
+ * setelahnya. Kalau tidak ada bulan setelahnya, dipakai bulan terakhir
+ * sebelumnya. Cara ini menangani rentang yang melewati dua bulan.
+ *
+ * @param {*} nilai
  * @return {Object} { mulai, selesai, tahun }
  */
 function parsePelaksanaan_(nilai) {
   var kosong = { mulai: null, selesai: null, tahun: null };
   if (nilai === null || nilai === undefined || nilai === '') return kosong;
+
   if (nilai instanceof Date) {
-    var d = toDate_(nilai);
-    return { mulai: d, selesai: d, tahun: d ? d.getFullYear() : null };
+    var dd = toDate_(nilai);
+    return { mulai: dd, selesai: dd, tahun: dd ? dd.getFullYear() : null };
   }
 
-  var s = String(nilai);
-  s = s.replace(/pelaksanaan/ig, ' ')
-    .replace(/[\u2013\u2014\u2012\u2015]/g, '-')   // en/em dash -> minus
-    .replace(/[’‘`]/g, "'")
+  var s = String(nilai)
+    .replace(/pelaksanaan/ig, ' ')
+    .replace(/[\u2013\u2014\u2012\u2015]/g, '-')
+    .replace(/[\u2019\u2018`]/g, "'")
     .replace(/^[\s'"]+/, '')
     .replace(/\s+/g, ' ')
     .trim();
   if (!s) return kosong;
 
-  // ---------- tahun ----------
+  // ---------- tanggal utuh ----------
+  var iso = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    var dIso = new Date(+iso[1], +iso[2] - 1, +iso[3]);
+    return { mulai: dIso, selesai: dIso, tahun: +iso[1] };
+  }
+  var dmy = s.match(/^(\d{1,2})[\/](\d{1,2})[\/](\d{4})/);
+  if (dmy) {
+    var dDmy = new Date(+dmy[3], +dmy[2] - 1, +dmy[1]);
+    return { mulai: dDmy, selesai: dDmy, tahun: +dmy[3] };
+  }
+
+  // ---------- tahun (dinatralkan agar tidak dibaca sebagai hari) ----------
   var tahun = null;
-  var m4 = s.match(/(19|20)\d{2}/);
-  if (m4) tahun = parseInt(m4[0], 10);
-  else {
-    var m2 = s.match(/'(\d{2})\b/);
-    if (m2) tahun = 2000 + parseInt(m2[1], 10);
-  }
+  var kerja = s;
 
-  // ---------- bulan ----------
-  var bulan = null;
-  var kata = s.toLowerCase().split(/[^a-z]+/);
-  for (var i = 0; i < kata.length; i++) {
-    var k = kata[i];
-    if (!k || k.length < 3) continue;
-    if (BULAN_PETA_[k]) { bulan = BULAN_PETA_[k]; break; }
-    // cocokkan awalan 3-4 huruf (mis. "agust" -> agustus, "sept" -> september)
-    var potong = k.substring(0, 4);
-    if (BULAN_PETA_[potong]) { bulan = BULAN_PETA_[potong]; break; }
-    var potong3 = k.substring(0, 3);
-    if (BULAN_PETA_[potong3]) { bulan = BULAN_PETA_[potong3]; break; }
-  }
-
-  // ---------- hari ----------
-  var hariArr = [];
-  var reHari = /(?:^|[^\d])(\d{1,2})(?![\d])/g;
-  var mh;
-  var batas = tahun ? String(tahun) : '';
-  while ((mh = reHari.exec(s)) !== null) {
-    var angka = mh[1];
-    if (batas && (batas === angka || batas.indexOf(angka) === 0)) continue;   // jangan ambil bagian tahun
-    var n = parseInt(angka, 10);
-    if (n >= 1 && n <= 31) hariArr.push(n);
-  }
-
-  if (!bulan || hariArr.length === 0) {
-    // paling tidak kita tahu tahunnya + bulan
-    if (tahun && bulan) {
-      var awal = new Date(tahun, bulan - 1, 1);
-      var akhir = new Date(tahun, bulan, 0);
-      return { mulai: awal, selesai: akhir, tahun: tahun };
+  var m4 = kerja.match(/(?:^|[^\d])((?:19|20)\d{2})(?!\d)/);
+  if (m4) {
+    tahun = parseInt(m4[1], 10);
+    kerja = kerja.replace(m4[1], '    ');
+  } else {
+    var m2 = kerja.match(/'(\d{2})(?!\d)/);
+    if (m2) {
+      tahun = 2000 + parseInt(m2[1], 10);
+      kerja = kerja.replace("'" + m2[1], '   ');
     }
-    if (tahun) {
-      var a2 = new Date(tahun, 0, 1);
-      var a3 = new Date(tahun, 11, 31);
-      return { mulai: a2, selesai: a3, tahun: tahun };
+  }
+
+  // ---------- bulan beserta posisinya ----------
+  var bulanList = [];
+  var reKata = /[A-Za-z]{3,}/g;
+  var mk;
+  while ((mk = reKata.exec(kerja)) !== null) {
+    var kata = mk[0].toLowerCase();
+    var b = BULAN_PETA_[kata]
+      || BULAN_PETA_[kata.substring(0, 4)]
+      || BULAN_PETA_[kata.substring(0, 3)];
+    if (b) bulanList.push({ pos: mk.index, bulan: b });
+  }
+
+  // ---------- hari beserta posisinya ----------
+  var hariList = [];
+  var reAngka = /(?:^|[^\d])(\d{1,2})(?!\d)/g;
+  var ma;
+  while ((ma = reAngka.exec(kerja)) !== null) {
+    var pos = ma.index + (ma[0].length - ma[1].length);
+    var n = parseInt(ma[1], 10);
+    if (n >= 1 && n <= 31) hariList.push({ pos: pos, hari: n });
+  }
+
+  // ---------- tidak ada bulan ----------
+  if (!bulanList.length) {
+    if (hariList.length) {
+      var ySaja = tahun || new Date().getFullYear();
+      var hariAja = hariList.map(function (h) { return h.hari; });
+      return {
+        mulai: new Date(ySaja, 0, Math.min.apply(null, hariAja)),
+        selesai: new Date(ySaja, 0, Math.max.apply(null, hariAja)),
+        tahun: ySaja
+      };
     }
-    return { mulai: null, selesai: null, tahun: tahun };
+    if (tahun) return { mulai: new Date(tahun, 0, 1), selesai: new Date(tahun, 11, 31), tahun: tahun };
+    return kosong;
   }
 
   var tahunPakai = tahun || new Date().getFullYear();
-  var hariMin = Math.min.apply(null, hariArr);
-  var hariMax = Math.max.apply(null, hariArr);
 
   function buatTanggal(y, m, d) {
-    var hariTerakhir = new Date(y, m, 0).getDate();
-    return new Date(y, m - 1, Math.min(d, hariTerakhir));
+    var maks = new Date(y, m, 0).getDate();
+    return new Date(y, m - 1, Math.min(d, maks));
   }
 
+  // ---------- hanya bulan, tanpa hari -> seluruh bulan itu ----------
+  if (!hariList.length) {
+    var b0 = bulanList[0].bulan;
+    return {
+      mulai: new Date(tahunPakai, b0 - 1, 1),
+      selesai: new Date(tahunPakai, b0, 0),
+      tahun: tahunPakai
+    };
+  }
+
+  // ---------- pasangkan tiap hari dengan bulan yang tepat ----------
+  var kandidat = hariList.map(function (h) {
+    var bulan = null;
+    for (var i = 0; i < bulanList.length; i++) {
+      if (bulanList[i].pos > h.pos) { bulan = bulanList[i].bulan; break; }
+    }
+    if (bulan === null) bulan = bulanList[bulanList.length - 1].bulan;
+    return { hari: h.hari, bulan: bulan };
+  });
+
+  kandidat.sort(function (a, b) {
+    if (a.bulan !== b.bulan) return a.bulan - b.bulan;
+    return a.hari - b.hari;
+  });
+
+  var pertama = kandidat[0];
+  var terakhir = kandidat[kandidat.length - 1];
+
   return {
-    mulai: buatTanggal(tahunPakai, bulan, hariMin),
-    selesai: buatTanggal(tahunPakai, bulan, hariMax),
+    mulai: buatTanggal(tahunPakai, pertama.bulan, pertama.hari),
+    selesai: buatTanggal(tahunPakai, terakhir.bulan, terakhir.hari),
     tahun: tahunPakai
   };
 }
@@ -606,21 +661,45 @@ function jalankanImporDariSheet_(namaSheet, opsi) {
 
           var pel = parsePelaksanaan_(r.pelaksanaan_raw);
           var expired = toDate_(r.expired_raw);
-          if (!expired && pel.selesai) {
-            expired = deriveExpiredAt_(pel.selesai, masaBerlakuDariNama_(r.sertifikasi));
-          }
+          var masaAcuan = masaBerlakuDariNama_(r.sertifikasi);
+
+          if (!expired && pel.selesai) expired = addMonths_(pel.selesai, masaAcuan);
           if (!expired) {
-            hasil.errors.push('Baris ' + r.baris + ' (' + r.sertifikasi + '): tanggal kedaluwarsa tidak terbaca — dilewati.');
+            hasil.errors.push('Baris ' + r.baris + ' (' + r.sertifikasi
+              + '): tanggal kedaluwarsa tidak terbaca — dilewati.');
             return;
           }
 
-          var akhir = pel.selesai || toDate_(r.expired_raw) || sekarang;
-          var mulai = pel.mulai || akhir;
-          var masa = 0;
-          if (akhir && expired) {
-            masa = Math.round(diffDays_(expired, akhir) / 30);
+          var akhir = pel.selesai;
+          var mulai = pel.mulai;
+
+          // Sumber lama kadang TIDAK memuat tahun pada kolom Pelaksanaan
+          // (contoh "7-19, 21-23 Maret"). Bila demikian, atau bila tahunnya
+          // tidak masuk akal dibanding Expired_at, tanggal pelaksanaan
+          // dimundurkan dari Expired_at sebesar masa berlaku.
+          if (!akhir || pel.tahun === null) {
+            akhir = addMonths_(expired, -masaAcuan);
+            mulai = akhir;
+          } else {
+            var bedaTahun = expired.getFullYear() - akhir.getFullYear();
+            if (bedaTahun < 0 || bedaTahun > 6) {
+              var geser = addMonths_(expired, -masaAcuan);
+              var delta = geser.getFullYear() - akhir.getFullYear();
+              if (delta !== 0) {
+                akhir = new Date(akhir.getFullYear() + delta, akhir.getMonth(), akhir.getDate());
+                mulai = new Date(mulai.getFullYear() + delta, mulai.getMonth(), mulai.getDate());
+              }
+            }
           }
-          if (!masa || masa < 1) masa = masaBerlakuDariNama_(r.sertifikasi);
+          if (!mulai) mulai = akhir;
+
+          // Masa berlaku: pakai hasil hitung, tetapi bila hasilnya hanya
+          // meleset <= 2 bulan dari acuan jenis sertifikasi (akibat pembulatan
+          // hari/tahun kabisat), pakai acuan supaya tetap bulat: 36 / 60.
+          var masaHitung = Math.round(diffDays_(expired, akhir) / 30);
+          var masa = masaHitung;
+          if (masaAcuan > 0 && Math.abs(masaHitung - masaAcuan) <= 2) masa = masaAcuan;
+          if (!masa || masa < 1 || masa > 600) masa = masaAcuan;
 
           var hit = hitungMasaBerlaku_(expired, sekarang);
 

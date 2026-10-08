@@ -30,7 +30,7 @@ function initKeamananAkun(param) {
 function akRenderKerangka() {
   var u = SIAGA.pengguna();
 
-  SIAGA.el('akRoot').innerHTML = ''
+  SIAGA.isiHtml('akRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Keamanan</div>'
@@ -47,7 +47,7 @@ function akRenderKerangka() {
     + akKartuUsername(u)
     + akKartuPassword()
     + '</div>'
-    + '<div class="siaga-mt-4" id="akSesi">' + SIAGA.pemuatHtml('Memeriksa sesi...') + '</div>';
+    + '<div class="siaga-mt-4" id="akSesi">' + SIAGA.pemuatHtml('Memeriksa sesi...') + '</div>');
 }
 
 function akKartuUsername(u) {
@@ -93,8 +93,8 @@ function akKartuPassword() {
     + '<div class="gde-card">'
     + '  <div class="siaga-panel-head">'
     + '    <i class="bi bi-shield-lock" style="color:var(--gde-blue)"></i>'
-    + '    <div><h3>Password (Opsional)</h3>'
-    + '    <div class="siaga-panel-head__sub">Login utama memakai Employee Code</div></div>'
+    + '    <div><h3>Password</h3>'
+    + '    <div class="siaga-panel-head__sub">Bawaan = Employee Code penuh</div></div>'
     + '  </div>'
     + '  <div class="gde-card__body">'
     + '    <form id="akFormPassword" autocomplete="off" novalidate>'
@@ -137,9 +137,9 @@ function akKartuPassword() {
     + '      </div>'
     + '      <div class="gde-alert gde-alert--info" style="margin-top:1rem">'
     + '        <i class="bi bi-info-circle gde-alert__icon"></i>'
-    + '        <div class="gde-alert__body"><strong>Login memakai Employee Code</strong>'
-    + '        Password tidak diwajibkan dan tidak di-hash — cukup dicocokkan langsung. '
-    + '        Isi password hanya bila Anda ingin lapisan pengaman tambahan.</div></div>'
+    + '        <div class="gde-alert__body"><strong>Password Anda = Employee Code penuh</strong>'
+    + '        Tidak ada hashing — password dicocokkan langsung. '
+    + '        Kosongkan lalu simpan hanya bila ingin menghapus password.</div></div>'
     + '      <button class="gde-btn gde-btn--primary gde-btn--block siaga-mt-4" type="submit" id="akSubmitPassword">'
     + '        <i class="bi bi-key"></i> Simpan password</button>'
     + '    </form>'

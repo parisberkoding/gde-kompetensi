@@ -51,7 +51,7 @@ function initProfilPekerja(param) {
 /* -------------------------------------------------------------- kerangka -- */
 function renderPpKerangka() {
   var isHc = SIAGA.isHc();
-  SIAGA.el('ppRoot').innerHTML = ''
+  SIAGA.isiHtml('ppRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Profil &amp; Kompetensi</div>'
@@ -60,35 +60,60 @@ function renderPpKerangka() {
     + '  </div>'
     + '  <div class="gde-page-actions">'
     + (isHc ? ('<div class="siaga-toolbar__field" style="min-width:260px">'
-      + '<label class="gde-label" for="ppPilih">Pilih pekerja</label>'
-      + '<select class="gde-select" id="ppPilih"></select></div>') : '')
+      + '<label class="gde-label" for="ppCariPekerja">Cari pekerja</label>'
+      + '<div class="siaga-cb" id="ppCb">'
+      + '<input class="gde-input" type="text" id="ppCariPekerja" autocomplete="off" '
+      + 'placeholder="Ketik nama, Employee Code, atau divisi...">'
+      + '<div class="siaga-cb__panel" id="ppCbPanel"></div>'
+      + '</div>'
+      + '<div class="gde-hint" id="ppCbHint">Ketik untuk mencari, lalu pilih dari daftar.</div>'
+      + '</div>') : '')
     + '    <button class="gde-btn gde-btn--outline" type="button" id="ppEkspor">'
     + '      <i class="bi bi-file-earmark-pdf"></i> Ekspor profil PDF</button>'
     + '    <button class="gde-btn gde-btn--primary" type="button" id="ppTambah">'
     + '      <i class="bi bi-plus-circle"></i> Tambah sertifikasi</button>'
     + '  </div>'
     + '</div>'
-    + '<div id="ppIsi"></div>';
+    + '<div id="ppIsi"></div>');
 
-  var pilih = SIAGA.el('ppPilih');
-  if (pilih) {
-    pilih.innerHTML = '<option value="">Memuat daftar pekerja...</option>';
-    SIAGA.api('apiListEmployees', [{}]).then(function (d) {
-      pilih.innerHTML = (d.rows || []).map(function (u) {
-        return '<option value="' + SIAGA.attr(u.employee_code) + '"'
-          + (u.employee_code === PpState.kode ? ' selected' : '') + '>'
-          + SIAGA.esc(u.nama_lengkap) + ' — ' + SIAGA.esc(u.employee_code)
-          + (u.divisi ? (' (' + SIAGA.esc(u.divisi) + ')') : '') + '</option>';
-      }).join('');
-      pilih.value = PpState.kode;
-    }).catch(function () {
-      pilih.innerHTML = '<option value="' + SIAGA.attr(PpState.kode) + '">' + SIAGA.esc(PpState.kode) + '</option>';
+  /* ---- PENCARIAN PEKERJA (menggantikan dropdown panjang) ---- */
+  var inputCari = SIAGA.el('ppCariPekerja');
+  if (inputCari) {
+    var hintCb = SIAGA.el('ppCbHint');
+    var cbPekerja = SIAGA.combobox({
+      input: inputCari,
+      panel: SIAGA.el('ppCbPanel'),
+      placeholder: 'Ketik nama, Employee Code, atau divisi...',
+      onPilih: function (item) {
+        PpState.kode = item.value;
+        PpState.modeEdit = false;
+        muatProfil(PpState.kode);
+      }
     });
+    PpState.cbPekerja = cbPekerja;
 
-    pilih.addEventListener('change', function () {
-      PpState.kode = pilih.value;
-      PpState.modeEdit = false;
-      muatProfil(PpState.kode);
+    SIAGA.api('apiListEmployees', [{}]).then(function (d) {
+      var rows = d.rows || [];
+      var items = rows.map(function (u) {
+        var sub = u.employee_code
+          + (u.divisi ? (' · ' + u.divisi) : '')
+          + (u.jabatan ? (' · ' + u.jabatan) : '')
+          + ' · ' + SIAGA.angka(u.jumlah_sertifikasi) + ' sertifikasi';
+        return {
+          value: u.employee_code,
+          label: u.nama_lengkap || u.employee_code,
+          sub: sub,
+          badge: u.role_label || u.role
+        };
+      });
+      cbPekerja.setItems(items);
+      cbPekerja.setNilai(PpState.kode);
+      if (hintCb) {
+        hintCb.textContent = SIAGA.angka(items.length)
+          + ' pekerja terdaftar — ketik untuk mencari, lalu pilih dari daftar.';
+      }
+    }).catch(function (e) {
+      if (hintCb) hintCb.textContent = 'Gagal memuat daftar pekerja: ' + e.message;
     });
   }
 
@@ -118,7 +143,11 @@ function renderPpKerangka() {
 
 /* ------------------------------------------------------------- pemuatan -- */
 function muatProfil(kode) {
-  SIAGA.el('ppIsi').innerHTML = SIAGA.pemuatHtml('Memuat profil...');
+  // sinkronkan kotak pencarian bila profil dibuka dari halaman lain
+  if (PpState.cbPekerja && String(PpState.cbPekerja.nilai()) !== String(kode)) {
+    PpState.cbPekerja.setNilai(kode);
+  }
+  SIAGA.isiHtml('ppIsi', SIAGA.pemuatHtml('Memuat profil...'));
   SIAGA.api('apiGetEmployeeProfile', [kode]).then(function (d) {
     PpState.data = d;
     if (!PpState.lampiranAktif || !cariLampiran(PpState.lampiranAktif)) {
@@ -127,7 +156,7 @@ function muatProfil(kode) {
     }
     renderPpIsi(d);
   }).catch(function (e) {
-    SIAGA.el('ppIsi').innerHTML = SIAGA.galatHtml(e.message);
+    SIAGA.isiHtml('ppIsi', SIAGA.galatHtml(e.message));
   });
 }
 
@@ -307,7 +336,7 @@ function renderPpIsi(d) {
   }
   html += '</div>';
 
-  SIAGA.el('ppIsi').innerHTML = html;
+  SIAGA.isiHtml('ppIsi', html);
   pasangEventPp();
 }
 

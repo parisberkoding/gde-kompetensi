@@ -23,7 +23,14 @@ var SIAGA = (function () {
     name: 'SIAGA Sertifikasi',
     sub: 'Sistem Informasi & Pengingat Masa Berlaku Sertifikasi',
     owner: 'PT Geo Dipa Energi (Persero) — Unit Patuha',
-    version: 'v1.0.0'
+    version: 'v1.0.0',
+    /**
+     * Versi berkas Frontend/Javascript.html ini.
+     * Dipakai Index.html untuk memastikan berkas Frontend lain tidak
+     * tertinggal (lihat cekKesiapanFrontend_() di Index.html).
+     * Naikkan setiap kali berkas ini berubah.
+     */
+    build: 'v1.4.0'
   };
 
   var state = {
@@ -33,6 +40,7 @@ var SIAGA = (function () {
     view: '',
     param: '',
     views: {},
+    viewSeq: 0,             // nomor urut pemuatan view (untuk membatalkan kerja lama)
     viewCache: {},          // cache HTML view (statis) -> pindah halaman tanpa kedipan
     autoLoginInfo: '',
     lastError: ''
@@ -295,7 +303,26 @@ var SIAGA = (function () {
     var o = opts || {};
     var a = (args || []).slice();
     if (o.token !== false) a.unshift(state.token);
+    var seq = state.viewSeq;
+
     return gsr.apply(null, [fn].concat(a)).then(function (res) {
+      /*
+       * PENTING — mencegah error "Cannot set properties of null".
+       * Bila pengguna berpindah halaman sebelum permintaan server selesai,
+       * seluruh isi halaman lama sudah dibuang. Melanjutkan rantai .then()
+       * akan menulis ke elemen yang sudah tidak ada. Karena itu hasilnya
+       * dibuang begitu saja (promise tidak diselesaikan) sehingga .then()
+       * milik halaman lama tidak pernah dijalankan.
+       *
+       * Konsekuensi yang disengaja: bila pengguna pindah halaman di tengah
+       * proses simpan/hapus, prosesnya TETAP berjalan di server (audit trail
+       * mencatatnya) hanya saja notifikasinya tidak ditampilkan.
+       * Opt-out: panggil dengan { tetap: true } bila memang ingin lanjut.
+       */
+      if (o.tetap !== true && seq !== state.viewSeq) {
+        return new Promise(function () { /* sengaja tidak diselesaikan */ });
+      }
+
       if (!res || typeof res !== 'object') throw new Error('Respons server tidak dikenal.');
       if (res.ok === false) {
         var e = new Error(res.error || 'Terjadi kesalahan pada server.');
@@ -304,6 +331,15 @@ var SIAGA = (function () {
       }
       return res.data === undefined ? null : res.data;
     }).catch(function (err) {
+      /*
+       * Penjaga yang sama untuk jalur GAGAL. Tanpa ini, respons error milik
+       * halaman lama tetap muncul sebagai toast di halaman baru — dan
+       * penanganan sesi bisa memicu tampilan login di halaman yang salah.
+       */
+      if (o.tetap !== true && seq !== state.viewSeq) {
+        return new Promise(function () { /* sengaja tidak diselesaikan */ });
+      }
+
       var msg = (err && err.message) ? err.message : String(err);
       if (/Sesi|login|AUTH/i.test(msg) && o.silent !== true) {
         tanganiSesiHabis_(msg);
@@ -532,6 +568,9 @@ var SIAGA = (function () {
     var js = el('siagaPageSub');
     if (js) js.textContent = v.sub || '';
 
+    // nomor urut: supaya jawaban permintaan LAMA tidak menimpa halaman baru
+    var seq = ++state.viewSeq;
+
     // tampilkan isi segera; kalau HTML halaman sudah pernah diambil, pakai
     // cache supaya perpindahan halaman terasa mulus (tanpa kedipan).
     terapkanView_(konten, namaView, v, state.viewCache[namaView] || '');
@@ -540,10 +579,12 @@ var SIAGA = (function () {
 
     konten.innerHTML = pemuatHtml('Memuat ' + v.judul + '...');
     gsr('getView', v.file).then(function (html) {
+      if (seq !== state.viewSeq) return;     // sudah pindah halaman lagi
       if (!html) throw new Error('Halaman ' + v.file + ' tidak ditemukan.');
       state.viewCache[namaView] = html;      // cache: view bersifat statis
       terapkanView_(konten, namaView, v, html);
     }).catch(function (err) {
+      if (seq !== state.viewSeq) return;
       konten.innerHTML = galatHtml(err.message || String(err));
     });
   }
@@ -577,6 +618,41 @@ var SIAGA = (function () {
       + '<i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>'
       + '<div class="gde-alert__body"><strong>Terjadi kesalahan</strong>' + esc(pesan) + '</div>'
       + '</div></div></div>';
+  }
+
+  /**
+   * Tulis HTML ke elemen dengan AMAN.
+   * Kalau elemennya sudah tidak ada (mis. pengguna sudah pindah halaman),
+   * penulisan dilewati tanpa melempar error.
+   * @return {boolean} true bila berhasil ditulis
+   */
+  function isiHtml(id, html) {
+    var n = el(id);
+    if (!n) {
+      // Biasanya karena halaman sudah berganti -> wajar, cukup dicatat.
+      // Kalau muncul saat halaman TIDAK berpindah, berarti ada salah ketik id.
+      try {
+        console.warn('[SIAGA] #' + id + ' tidak ada — penulisan dilewati '
+          + '(wajar bila halaman sudah berganti).');
+      } catch (e) { }
+      return false;
+    }
+    n.innerHTML = html;
+    return true;
+  }
+
+  /** Sama seperti isiHtml(), untuk textContent. */
+  function isiTeks(id, teks) {
+    var n = el(id);
+    if (!n) {
+      try {
+        console.warn('[SIAGA] #' + id + ' tidak ada — penulisan dilewati '
+          + '(wajar bila halaman sudah berganti).');
+      } catch (e) { }
+      return false;
+    }
+    n.textContent = teks === null || teks === undefined ? '' : teks;
+    return true;
   }
 
   function kosongHtml(ikon, judul, pesan, aksiHtml) {
@@ -651,40 +727,130 @@ var SIAGA = (function () {
        cb.item();                 // objek terpilih (null)
      Setiap item: { value, label, sub, tone } (sub & tone opsional)
      ======================================================================== */
+  /**
+   * CSS komponen pencarian disuntikkan dari JavaScript.
+   *
+   * Alasannya: berkas Stylesheet.html di editor bisa saja belum ikut
+   * diperbarui. Tanpa CSS ini, panel daftar tidak punya `display:none`
+   * sehingga selalu tampil dan teks nama/keterangan menyatu. Dengan
+   * menyuntikkan gaya sendiri, komponen tetap benar walau Stylesheet lama.
+   * (Bila Stylesheet sudah memuat gaya yang sama, blok ini tidak berpengaruh.)
+   */
+  var CSS_CB_ID_ = 'siagaCbCss';
+  var cssCbSudah_ = false;          // penjaga kedua (selain id elemen <style>)
+  function pastikanCssCombobox_() {
+    try {
+      if (cssCbSudah_) return true;
+      if (document.getElementById(CSS_CB_ID_)) { cssCbSudah_ = true; return true; }
+      var css = ''
+        + '.siaga-cb{position:relative;min-width:0}'
+        + '.siaga-cb input[type="text"]{padding-right:2.4rem}'
+        + '.siaga-cb__icon{position:absolute;right:.8rem;top:50%;transform:translateY(-50%);'
+        + 'color:#8494A8;pointer-events:none;font-size:.95rem}'
+        + '.siaga-cb__panel{position:absolute;z-index:1040;left:0;right:0;top:calc(100% + 4px);'
+        + 'max-height:320px;overflow-y:auto;background:#fff;border:1px solid #E4E9F0;'
+        + 'border-radius:14px;box-shadow:0 4px 12px rgba(16,32,46,.06),0 12px 32px rgba(16,32,46,.06);'
+        + 'padding:.25rem;display:none}'
+        + '.siaga-cb.is-open .siaga-cb__panel{display:block}'
+        + '.siaga-cb__item{display:flex;align-items:center;gap:.75rem;padding:.5rem .65rem;'
+        + 'border-radius:10px;cursor:pointer}'
+        + '.siaga-cb__item:hover,.siaga-cb__item.is-active{background:#EAF1FA}'
+        + '.siaga-cb__item.is-dipilih{background:#F2F9E8}'
+        + '.siaga-cb__meta{min-width:0;flex:1}'
+        + '.siaga-cb__nama{display:block;font-size:.875rem;font-weight:600;color:#16202E;'
+        + 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+        + '.siaga-cb__sub{display:block;font-size:.6875rem;color:#5B6B80;'
+        + 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+        + '.siaga-cb__info{padding:.75rem 1rem;text-align:center;font-size:.75rem;color:#5B6B80}'
+        + '.siaga-cb__hitung{padding:.35rem .65rem;font-size:.6875rem;color:#8494A8;'
+        + 'border-bottom:1px solid #F1F5F9;margin-bottom:.25rem}';
+
+      var st = document.createElement('style');
+      st.id = CSS_CB_ID_;
+      st.type = 'text/css';
+      if (st.styleSheet) st.styleSheet.cssText = css;   // peramban lama
+      else st.appendChild(document.createTextNode(css));
+
+      var kepala = document.head
+        || document.getElementsByTagName('head')[0]
+        || document.body;
+      kepala.appendChild(st);
+      cssCbSudah_ = true;
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function combobox(opsi) {
     var o = opsi || {};
     var input = o.input;
     var panel = o.panel;
     if (!input || !panel) return null;
 
+    pastikanCssCombobox_();
+
+    // Pembungkus wajib ada agar panel bisa diposisikan relatif terhadap input.
+    // Bila markup tidak menyediakannya, dibuat otomatis (lebih tahan salah tempel).
     var wrap = input.closest('.siaga-cb') || input.parentNode;
+    if (!wrap || wrap === document.body) {
+      wrap = document.createElement('div');
+      wrap.className = 'siaga-cb';
+      if (input.parentNode) input.parentNode.insertBefore(wrap, input);
+      wrap.appendChild(input);
+    }
+
     var items = o.items || [];
     var tersaring = items.slice();
     var aktif = -1;
     var terpilih = null;
     var onPilih = o.onPilih || function () { };
 
-    input.setAttribute('autocomplete', 'off');
-    if (o.placeholder) input.setAttribute('placeholder', o.placeholder);
-    if (!document.getElementById(panel.id + '_ikon')) {
-      var ikon = document.createElement('i');
-      ikon.className = 'bi bi-search siaga-cb__icon';
-      ikon.id = panel.id + '_ikon';
-      wrap.appendChild(ikon);
+    if (panel.parentNode !== wrap) {
+      try { wrap.appendChild(panel); } catch (ePanel) { }
     }
 
-    function buka() { if (wrap) wrap.classList.add('is-open'); }
-    function tutup() { if (wrap) wrap.classList.remove('is-open'); aktif = -1; }
+    input.setAttribute('autocomplete', 'off');
+    if (o.placeholder) input.setAttribute('placeholder', o.placeholder);
+    try {
+      var idIkon = (panel.id || 'siagaCb') + '_ikon';
+      if (!document.getElementById(idIkon)) {
+        var ikon = document.createElement('i');
+        ikon.className = 'bi bi-search siaga-cb__icon';
+        ikon.id = idIkon;
+        wrap.appendChild(ikon);
+      }
+    } catch (eIkon) { /* ikon hanya hiasan: jangan sampai menghentikan komponen */ }
+
+    // PENGAMAN: panel dikendalikan juga lewat inline style, sehingga tetap
+    // benar walau CSS (Stylesheet.html) belum ikut diperbarui.
+    panel.style.display = 'none';
+
+    function buka() {
+      if (wrap) wrap.classList.add('is-open');
+      panel.style.display = 'block';
+    }
+    function tutup() {
+      if (wrap) wrap.classList.remove('is-open');
+      panel.style.display = 'none';
+      aktif = -1;
+    }
 
     function labelItem(it) {
       var tone = it.tone ? (' gde-status--' + it.tone) : '';
+      // Badge hanya ditampilkan bila memang informatif (mis. HC / Super Admin).
+      var badge = String(it.badge || '');
+      if (/^(employee|emp)$/i.test(badge)) badge = '';
       return '<div class="siaga-cb__item' + (terpilih && terpilih.value === it.value ? ' is-dipilih' : '')
-        + '" data-cb-val="' + esc(it.value) + '">'
-        + '<div class="siaga-cb__meta">'
-        + '<span class="siaga-cb__nama">' + esc(it.label || it.value) + '</span>'
-        + (it.sub ? '<span class="siaga-cb__sub">' + esc(it.sub) + '</span>' : '')
+        + '" data-cb-val="' + esc(it.value) + '" '
+        + 'style="display:flex;align-items:center;gap:.75rem;padding:.5rem .65rem;cursor:pointer">'
+        + '<div class="siaga-cb__meta" style="min-width:0;flex:1">'
+        + '<span class="siaga-cb__nama" style="display:block;font-weight:600">'
+        + esc(it.label || it.value) + '</span>'
+        + (it.sub ? '<span class="siaga-cb__sub" style="display:block;font-size:.7rem;opacity:.75">'
+          + esc(it.sub) + '</span>' : '')
         + '</div>'
-        + (it.badge ? '<span class="gde-status' + tone + '">' + esc(it.badge) + '</span>' : '')
+        + (badge ? '<span class="gde-status' + tone + '">' + esc(badge) + '</span>' : '')
         + '</div>';
     }
 
@@ -725,8 +891,15 @@ var SIAGA = (function () {
       try { onPilih(it); } catch (e) { }
     }
 
+    /**
+     * Pilih item berdasarkan kodenya.
+     * PENTING: bila kode tidak ditemukan, pilihan LAMA dibuang (bukan
+     * dipertahankan) supaya tidak ada risiko mengirim kode yang salah.
+     * @return {Object|null} item yang ditemukan
+     */
     function pilihDariKode(v) {
       var target = String(v || '');
+      if (!target) { terpilih = null; input.value = ''; return null; }
       for (var i = 0; i < items.length; i++) {
         if (String(items[i].value) === target) {
           terpilih = items[i];
@@ -734,7 +907,8 @@ var SIAGA = (function () {
           return items[i];
         }
       }
-      if (!target) { terpilih = null; input.value = ''; }
+      // tidak ditemukan: kosongkan supaya pemanggil memutuskan sendiri
+      terpilih = null;
       return null;
     }
 
@@ -762,6 +936,22 @@ var SIAGA = (function () {
       }
       if (e.key === 'Escape') { tutup(); input.blur(); }
     });
+
+    // dasar tata letak panel (cadangan bila CSS belum ada)
+    try {
+      panel.style.position = 'absolute';
+      panel.style.left = '0';
+      panel.style.right = '0';
+      panel.style.top = 'calc(100% + 4px)';
+      panel.style.zIndex = '1040';
+      panel.style.maxHeight = '320px';
+      panel.style.overflowY = 'auto';
+      panel.style.background = '#fff';
+      panel.style.border = '1px solid #E4E9F0';
+      panel.style.borderRadius = '14px';
+      panel.style.boxShadow = '0 12px 32px rgba(16,32,46,.12)';
+      panel.style.padding = '.25rem';
+    } catch (e) { }
 
     panel.addEventListener('mousedown', function (e) {
       var t = e.target.closest('[data-cb-val]');
@@ -1206,6 +1396,7 @@ var SIAGA = (function () {
     toast: toast, sukses: sukses, gagal: gagal, info: info, ingat: ingat,
     modalBuka: modalBuka, modalTutup: modalTutup, modalTutupSemua: modalTutupSemua,
     konfirmasi: konfirmasi, pemuatHtml: pemuatHtml, galatHtml: galatHtml, kosongHtml: kosongHtml,
+    isiHtml: isiHtml, isiTeks: isiTeks,
     jalankanSkrip: jalankanSkrip,
 
     // api & sesi
@@ -1223,6 +1414,7 @@ var SIAGA = (function () {
 
     // form & berkas
     nilaiForm: nilaiForm, isiForm: isiForm, resetForm: resetForm, combobox: combobox,
+    pastikanCssCombobox: pastikanCssCombobox_,
     tandaiInvalid: tandaiInvalid, bersihkanInvalid: bersihkanInvalid, tombolSibuk: tombolSibuk,
     validasiBerkas: validasiBerkas, bacaBerkas: bacaBerkas, pratinjauUrl: pratinjauUrl,
     ikonBerkas: ikonBerkas, extDari: extDari,

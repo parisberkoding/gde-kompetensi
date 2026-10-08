@@ -8,9 +8,9 @@
   KONTRAK API (lihat subprocess.gs bagian 3 & 10):
     apiListUsers(token, filter)      -> { rows:[userPublic_ + jumlah_sertifikasi], total }
     apiGetUser(token, employee_code) -> { user }
-    apiSaveUser(token, data)         -> { mode:'insert'|'update', employee_code, username, login_cukup_kode? }
+    apiSaveUser(token, data)         -> { mode:'insert'|'update', employee_code, username, password_awal? }
     apiDeleteUser(token, employee_code) -> { ok, employee_code }
-    apiResetPassword(token, employee_code) -> { employee_code, password_dihapus:true }
+    apiResetPassword(token, employee_code) -> { employee_code, password_awal }
     apiSyncUsersFromFiles(token)     -> { dibuat, dilewati, daftar[], errors[] }
     apiImportUsers(token, teks, opsi)-> { dibuat, diperbarui, gagal, pesan[] }
     apiGetMeta(token)                -> { divisi_options[], ... }
@@ -42,8 +42,8 @@ function initMasterUser(param) {
 
   /* Guard role: halaman ini khusus HC / SA */
   if (!SIAGA.isHc()) {
-    SIAGA.el('muRoot').innerHTML = SIAGA.galatHtml(
-      'Akses ditolak. Halaman Master User hanya dapat dibuka oleh Human Capital atau Super Admin.');
+    SIAGA.isiHtml('muRoot', SIAGA.galatHtml(
+      'Akses ditolak. Halaman Master User hanya dapat dibuka oleh Human Capital atau Super Admin.'));
     return;
   }
 
@@ -61,7 +61,7 @@ function initMasterUser(param) {
 
 /* -------------------------------------------------------------- kerangka -- */
 function renderMuKerangka() {
-  SIAGA.el('muRoot').innerHTML = ''
+  SIAGA.isiHtml('muRoot', ''
     /* ---------- header ---------- */
     + '<div class="gde-page-head">'
     + '  <div>'
@@ -122,7 +122,7 @@ function renderMuKerangka() {
     /* ---------- modal impor ---------- */
     + muModalImporHtml()
     /* ---------- modal hasil sinkron ---------- */
-    + muModalHasilHtml();
+    + muModalHasilHtml());
 
   pasangPerilakuMu();
 }
@@ -143,7 +143,7 @@ function muModalFormHtml() {
     + '            <label class="gde-label" for="muEmployeeCode">Employee Code <span class="gde-req">*</span></label>'
     + '            <input class="gde-input" type="text" id="muEmployeeCode" name="employee_code" '
     + '                   placeholder="contoh: 4122196-C" autocapitalize="characters" spellcheck="false">'
-    + '            <div class="gde-hint" id="muHintCode">Menjadi kunci data sertifikasi sekaligus cara masuk (login).</div>'
+    + '            <div class="gde-hint" id="muHintCode">Menjadi kunci data sertifikasi sekaligus <b>password awal</b> akun.</div>'
     + '          </div>'
     + '          <div>'
     + '            <label class="gde-label" for="muNama">Nama Lengkap <span class="gde-req">*</span></label>'
@@ -244,7 +244,7 @@ function muModalImporHtml() {
     + '4122196-C ; Adi Asa Nugraha ; adi.asa@geodipa.co.id ; Operasi ; Operator PLTP ; EMP\n'
     + '4122197-C ; Budi Santoso ; budi.santoso@geodipa.co.id ; Pemeliharaan ; Teknisi ; EMP</div>'
     + '          <div style="margin-top:6px">Hanya <b>Employee_code</b> yang wajib. Role diisi SA, HC, atau EMP '
-    + '          (bawaan EMP). Baris header otomatis diabaikan. Akun baru langsung bisa masuk memakai Employee Code-nya.</div>'
+    + '          (bawaan EMP). Baris header otomatis diabaikan. Username dibuat dari nama depan, password = Employee Code.</div>'
     + '        </div>'
     + '      </div>'
     + '      <div class="siaga-mt-3">'
@@ -594,7 +594,7 @@ function muBarisHtml(u, no) {
     + '            data-mu-aksi="ubah" data-mu-kode="' + SIAGA.attr(kode) + '">Ubah</button>'
     + '    <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" '
     + '            data-mu-aksi="reset" data-mu-kode="' + SIAGA.attr(kode) + '" '
-    + '            title="Reset akun: hapus password &amp; cabut sesi">Reset akun</button>'
+    + '            title="Reset akun: password kembali ke Employee Code">Reset akun</button>'
     + '    <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" '
     + '            data-mu-aksi="toggle" data-mu-kode="' + SIAGA.attr(kode) + '" '
     + '            title="' + (aktif ? 'Nonaktifkan akun ini' : 'Aktifkan kembali akun ini') + '">'
@@ -709,7 +709,7 @@ function bukaMuForm(mode, kode) {
   } else {
     if (judul) judul.textContent = 'Tambah user';
     if (inKode) inKode.disabled = false;
-    if (hintKode) hintKode.innerHTML = 'Menjadi kunci data sertifikasi sekaligus cara masuk (login).';
+    if (hintKode) hintKode.innerHTML = 'Menjadi kunci data sertifikasi sekaligus <b>password awal</b> akun.';
     if (passWrap) passWrap.classList.add('gde-u-hide');
     SIAGA.isiForm(form, { role: 'EMP', status: 'ACTIVE' });
   }
@@ -763,8 +763,8 @@ function simpanMu() {
         'Perubahan disimpan');
     } else {
       SIAGA.sukses('User ' + hasil.employee_code + ' dibuat dengan username "' + (hasil.username || '')
-        + '". Cara masuk: cukup Employee Code ' + (hasil.employee_code)
-        + '. Karyawan dapat langsung masuk memakai Employee Code tersebut.', 'User ditambahkan');
+        + '". Username: ' + (hasil.username || '-') + ' · Password: ' + (hasil.password_awal || hasil.employee_code)
+        + '. Sampaikan username & password tersebut ke karyawan.', 'User ditambahkan');
     }
     muatUser();
   }).catch(function (e) {
@@ -780,15 +780,15 @@ function muResetPassword(kode) {
   SIAGA.konfirmasi({
     judul: 'Reset akun pengguna',
     pesan: 'Password akun ' + nama + ' (' + kode + ') akan dikembalikan ke Employee Code: '
-      + kode + '. Passwordnya dihapus (kembali cukup memakai Employee Code) dan seluruh sesi aktifnya dicabut.',
+      + kode + '. Passwordnya dikembalikan ke Employee Code dan seluruh sesi aktifnya dicabut.',
     labelOk: 'Reset akun',
     bahaya: true
   }).then(function (ya) {
     if (!ya) return;
     return SIAGA.api('apiResetPassword', [kode]).then(function (r) {
       var d = r || {};
-      SIAGA.sukses('Akun ' + kode + ' direset: password dihapus dan sesi lama dicabut. '
-        + 'Karyawan kini cukup memasukkan Employee Code untuk masuk.', 'Akun direset');
+      SIAGA.sukses('Akun ' + kode + ' direset: password kembali ke Employee Code ('
+        + (d.password_awal || kode) + ') dan sesi lama dicabut.', 'Akun direset');
     });
   }).catch(function (e) {
     SIAGA.gagal(e.message);
@@ -890,7 +890,7 @@ function muTampilkanHasilSinkron(r) {
   if (daftar.length) html += muKotakDaftar('Akun baru yang dibuat', daftar, 'info');
   if (errors.length) html += muKotakDaftar('Akun yang gagal dibuat', errors, 'danger');
 
-  SIAGA.el('muHasilIsi').innerHTML = html;
+  SIAGA.isiHtml('muHasilIsi', html);
   SIAGA.modalBuka('muHasil');
 
   if (dibuat) {
@@ -956,7 +956,7 @@ function muTampilkanHasilImpor(r) {
 
   if (pesan.length) html += muKotakDaftar('Catatan baris', pesan, gagal ? 'danger' : 'info');
 
-  SIAGA.el('muImporHasil').innerHTML = html;
+  SIAGA.isiHtml('muImporHasil', html);
 
   if (gagal) {
     SIAGA.ingat('Impor selesai dengan ' + SIAGA.angka(gagal)

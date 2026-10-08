@@ -33,7 +33,7 @@ function initDashboard(param) {
 /* -------------------------------------------------------------- kerangka -- */
 function renderDashKerangka() {
   var isHc = SIAGA.isHc();
-  SIAGA.el('dashRoot').innerHTML = ''
+  SIAGA.isiHtml('dashRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Ringkasan</div>'
@@ -52,7 +52,7 @@ function renderDashKerangka() {
       + '      <i class="bi bi-send"></i> Kirim reminder</button>' : '')
     + '  </div>'
     + '</div>'
-    + '<div id="dashIsi"></div>';
+    + '<div id="dashIsi"></div>');
 
   var sel = SIAGA.el('dashDivisi');
   if (sel) {
@@ -111,13 +111,13 @@ function renderDashKerangka() {
 
 /* ------------------------------------------------------------- pemuatan -- */
 function muatDashboard(paksa) {
-  SIAGA.el('dashIsi').innerHTML = SIAGA.pemuatHtml('Menghitung ringkasan...');
+  SIAGA.isiHtml('dashIsi', SIAGA.pemuatHtml('Menghitung ringkasan...'));
   SIAGA.api('apiGetDashboard', [{ divisi: DashState.divisi }]).then(function (d) {
     DashState.data = d;
     isiPilihanDivisi(d.divisi_options || []);
     renderDashIsi(d);
   }).catch(function (e) {
-    SIAGA.el('dashIsi').innerHTML = SIAGA.galatHtml(e.message);
+    SIAGA.isiHtml('dashIsi', SIAGA.galatHtml(e.message));
   });
   if (paksa) SIAGA.perbaruiBadgeNotifikasi();
 }
@@ -296,7 +296,7 @@ function renderDashIsi(d) {
     + 'segera perpanjang ≤ 3 bulan · perlu perhatian ≤ 6 bulan · peringatan ≤ 9 bulan.'
     + '</p>';
 
-  SIAGA.el('dashIsi').innerHTML = html;
+  SIAGA.isiHtml('dashIsi', html);
 
   /* klik baris -> profil pekerja */
   SIAGA.on(SIAGA.el('dashIsi'), 'click', '[data-dash-pekerja]', function (e, t) {

@@ -3,10 +3,14 @@
   SIAGA SERTIFIKASI — Login.html
   Halaman masuk. Dimuat oleh SIAGA.tampilkanLogin() lewat getView('Login').
 
-  CARA MASUK: cukup EMPLOYEE CODE (contoh: 4122196-C).
-  Tidak ada hashing dan tidak ada salt — bila password memang diwajibkan
-  (Config login_wajib_password = TRUE atau user mengisi passwordnya), server
-  akan meminta password pada langkah kedua dan mencocokkannya langsung.
+  CARA MASUK — dua kolom:
+      Username = potongan NAMA DEPAN   (contoh: adiasa)
+      Password = EMPLOYEE CODE PENUH   (contoh: 4122196-C)
+  Keduanya dibuat otomatis oleh Importer.gs dan tersimpan apa adanya pada sheet
+  Master_User (kolom Username & Password). Tidak ada hash dan tidak ada salt —
+  password hanya dicocokkan langsung.
+  Kolom Username juga menerima Employee Code penuh, jadi karyawan yang hanya
+  hafal kodenya tetap bisa masuk.
 
   Login otomatis: bila email akun Google pengguna sudah terdaftar pada
   Master_User, aplikasi langsung masuk tanpa halaman ini.
@@ -62,7 +66,7 @@
         <div class="gde-card__body" style="padding:2rem">
 
           <h2>Masuk ke akun Anda</h2>
-          <p>Cukup masukkan <b>Employee Code</b> Anda.</p>
+          <p>Masuk dengan <b>nama depan</b> sebagai username dan <b>Employee Code</b> sebagai password.</p>
 
           <!-- notifikasi login otomatis (kalau ada) -->
           <div id="siagaLoginAuto" class="gde-alert gde-alert--info gde-u-hide" style="margin-bottom:1rem">
@@ -80,33 +84,34 @@
 
           <form id="siagaLoginForm" autocomplete="on" novalidate>
 
-            <!-- ================= LANGKAH 1: EMPLOYEE CODE ================= -->
+            <!-- ===================== USERNAME (NAMA DEPAN) ===================== -->
             <div style="margin-bottom:1rem">
               <label class="gde-label" for="siagaLoginKode">
-                Employee Code <span class="gde-req">*</span>
+                Username <span class="gde-req">*</span>
               </label>
-              <input class="gde-input" type="text" id="siagaLoginKode" name="kode"
-                     placeholder="contoh: 4122196-C" autocomplete="username"
-                     autocapitalize="characters" spellcheck="false" required
+              <input class="gde-input" type="text" id="siagaLoginKode" name="username"
+                     placeholder="contoh: adiasa" autocomplete="username"
+                     autocapitalize="none" spellcheck="false" required
                      style="font-size:1.05rem;font-weight:600;letter-spacing:.02em">
               <div class="gde-hint">
-                Ada pada kartu karyawan Anda. Username (nama depan) dan email kantor juga diterima.
+                <b>Nama depan</b> Anda (huruf kecil). Employee Code penuh juga bisa dipakai di kolom ini.
               </div>
             </div>
 
-            <!-- ============ LANGKAH 2: PASSWORD (hanya bila diminta) ============ -->
-            <div id="siagaLoginPassWrap" class="gde-u-hide" style="margin-bottom:1rem">
+            <!-- ===================== PASSWORD (EMPLOYEE CODE) ===================== -->
+            <div id="siagaLoginPassWrap" style="margin-bottom:1rem">
               <label class="gde-label" for="siagaLoginPassword">
                 Password <span class="gde-req">*</span>
               </label>
               <div class="siaga-pass">
                 <input class="gde-input" type="password" id="siagaLoginPassword" name="password"
-                       placeholder="Password Anda" autocomplete="current-password">
+                       placeholder="contoh: 4122196-C" autocomplete="current-password">
                 <button class="siaga-pass__toggle" type="button" id="siagaLoginTogglePass"
                         aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>
               </div>
               <div class="gde-hint" id="siagaLoginPassHint">
-                Akun ini memerlukan password. Lupa password? Minta Human Capital melakukan reset.
+                Password Anda adalah <b>Employee Code</b> lengkap (contoh: 4122196-C).
+                Bila sudah diganti lalu lupa, minta Human Capital melakukan reset.
               </div>
             </div>
 
@@ -122,8 +127,10 @@
           </div>
 
           <div class="siaga-login__hint">
-            <b>Tidak bisa masuk?</b> Pastikan Employee Code sudah benar. Bila akun terkunci karena
-            percobaan gagal berulang, tunggu 15 menit atau minta Human Capital mereset akun Anda.
+            <b>Tidak bisa masuk?</b> Username = nama depan Anda, password = Employee Code penuh.
+            Daftar lengkap username &amp; password ada pada sheet <code>Master_User</code>
+            (kolom Username dan Password). Bila akun terkunci karena percobaan gagal berulang,
+            tunggu 15 menit atau minta Human Capital mereset akun Anda.
           </div>
 
         </div>
@@ -154,7 +161,9 @@ function initLogin(pesanAwal) {
   var kotakAuto = SIAGA.el('siagaLoginAuto');
   var autoMsg = SIAGA.el('siagaLoginAutoMsg');
   var tombolAuto = SIAGA.el('siagaLoginCobaAuto');
-  var passDiminta = false;
+  // Password selalu ditampilkan. Akun yang passwordnya belum diisi (jarang)
+  // tetap bisa masuk — server mengabaikan password pada kasus itu.
+  var passDiminta = true;
   var sedangProses = false;
 
   var tahun = SIAGA.el('siagaLoginTahun');
@@ -192,10 +201,8 @@ function initLogin(pesanAwal) {
     });
   }
 
-  /* ---------------- tampilkan kolom password ---------------- */
+  /* ---------------- fokus & tanda ke kolom password ---------------- */
   function mintaPassword(pesan) {
-    passDiminta = true;
-    wrapPass.classList.remove('gde-u-hide');
     if (pesan) {
       var hint = SIAGA.el('siagaLoginPassHint');
       if (hint) hint.textContent = pesan;
@@ -209,20 +216,22 @@ function initLogin(pesanAwal) {
     SIAGA.bersihkanInvalid(form);
 
     var kode = String(inputKode.value || '').trim();
-    var pass = passDiminta ? String(inputPass.value || '') : '';
+    var pass = String(inputPass.value || '');
 
-    if (!kode) { SIAGA.tandaiInvalid(inputKode, 'Employee Code wajib diisi.'); return; }
-    if (passDiminta && !pass) { SIAGA.tandaiInvalid(inputPass, 'Password wajib diisi.'); return; }
+    if (!kode) { SIAGA.tandaiInvalid(inputKode, 'Username (nama depan) wajib diisi.'); return; }
+    if (!pass) { SIAGA.tandaiInvalid(inputPass, 'Password wajib diisi (Employee Code Anda).'); return; }
     if (sedangProses) return;
     sedangProses = true;
 
     SIAGA.tombolSibuk(tombol, true, 'Memeriksa...');
     SIAGA.login(kode, pass).then(function (data) {
-      // ---- server meminta password (langkah kedua) ----
+      // ---- akun tidak punya password (mis. dibuat manual) ----
       if (data && data.butuh_password) {
         sedangProses = false;
         SIAGA.tombolSibuk(tombol, false);
-        mintaPassword((data.pesan || '') + ' — ' + (data.nama_lengkap || kode));
+        SIAGA.ingat('Akun ' + (data.nama_lengkap || kode)
+          + ' belum memiliki password. Minta Human Capital melengkapi, atau tekan Masuk sekali lagi.',
+          'Password belum diisi');
         return null;
       }
 
@@ -235,7 +244,7 @@ function initLogin(pesanAwal) {
       SIAGA.tombolSibuk(tombol, false);
       var msg = (err && err.message) ? err.message : 'Tidak dapat masuk. Coba lagi.';
       tampilkanGalat(msg);
-      if (passDiminta) {
+      if (/password/i.test(msg)) {
         inputPass.value = '';
         try { inputPass.focus(); } catch (e2) { }
       } else {
@@ -251,13 +260,12 @@ function initLogin(pesanAwal) {
     });
   }
 
-  /* Enter di kolom kode */
+  /* Enter di kolom username pindah ke password */
   if (inputKode) {
     inputKode.addEventListener('keydown', function (e) {
       if (e.key !== 'Enter') return;
       e.preventDefault();
-      if (passDiminta) { try { inputPass.focus(); } catch (x) { } }
-      else kirim();
+      try { inputPass.focus(); } catch (x) { }
     });
   }
 

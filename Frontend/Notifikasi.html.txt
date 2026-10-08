@@ -48,7 +48,7 @@ function initNotifikasi(param) {
 function renderNtKerangka() {
   var isHc = SIAGA.isHc();
 
-  SIAGA.el('ntRoot').innerHTML = ''
+  SIAGA.isiHtml('ntRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Pengingat</div>'
@@ -103,7 +103,7 @@ function renderNtKerangka() {
     + '    </div>'
     + '  </div>'
     + '  <div class="gde-card__body" id="ntDaftar"></div>'
-    + '</div>';
+    + '</div>');
 
   /* ---------- aksi header ---------- */
   var semua = SIAGA.el('ntTandaiSemua');
@@ -148,12 +148,12 @@ function muatNotifikasi(segarkanKpi) {
   var isHc = SIAGA.isHc();
 
   if (segarkanKpi) {
-    if (SIAGA.el('ntKpi')) SIAGA.el('ntKpi').innerHTML = SIAGA.pemuatHtml('Memuat ringkasan...');
+    if (SIAGA.el('ntKpi')) SIAGA.isiHtml('ntKpi', SIAGA.pemuatHtml('Memuat ringkasan...'));
     if (isHc && SIAGA.el('ntStatusReminder')) {
-      SIAGA.el('ntStatusReminder').innerHTML = SIAGA.pemuatHtml('Memuat status reminder...');
+      SIAGA.isiHtml('ntStatusReminder', SIAGA.pemuatHtml('Memuat status reminder...'));
     }
   }
-  if (SIAGA.el('ntDaftar')) SIAGA.el('ntDaftar').innerHTML = SIAGA.pemuatHtml('Memuat notifikasi...');
+  if (SIAGA.el('ntDaftar')) SIAGA.isiHtml('ntDaftar', SIAGA.pemuatHtml('Memuat notifikasi...'));
 
   /* daftar notifikasi — limit besar agar filter klien mencakup seluruh riwayat */
   SIAGA.api('apiListNotifications', [{ limit: 300 }]).then(function (d) {
@@ -162,13 +162,13 @@ function muatNotifikasi(segarkanKpi) {
     renderNtKpi(d);
     renderNtDaftar();
   }).catch(function (e) {
-    if (SIAGA.el('ntKpi')) SIAGA.el('ntKpi').innerHTML = '';
-    if (SIAGA.el('ntDaftar')) SIAGA.el('ntDaftar').innerHTML = SIAGA.galatHtml(e.message);
+    if (SIAGA.el('ntKpi')) SIAGA.isiHtml('ntKpi', '');
+    if (SIAGA.el('ntDaftar')) SIAGA.isiHtml('ntDaftar', SIAGA.galatHtml(e.message));
   });
 
   /* ringkasan reminder — hanya HC/SA */
   if (!isHc) {
-    if (SIAGA.el('ntStatusReminder')) SIAGA.el('ntStatusReminder').innerHTML = '';
+    if (SIAGA.el('ntStatusReminder')) SIAGA.isiHtml('ntStatusReminder', '');
     return;
   }
   SIAGA.api('apiRingkasanReminder', []).then(function (r) {
@@ -177,11 +177,11 @@ function muatNotifikasi(segarkanKpi) {
     renderNtKpi({ total: NtState.semua.length, belum_dibaca: hitungBelumDibaca() });
   }).catch(function (e) {
     if (SIAGA.el('ntStatusReminder')) {
-      SIAGA.el('ntStatusReminder').innerHTML = ''
+      SIAGA.isiHtml('ntStatusReminder', ''
         + '<div class="gde-alert gde-alert--warning">'
         + '<i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>'
         + '<div class="gde-alert__body"><strong>Ringkasan reminder tidak tersedia</strong>'
-        + SIAGA.esc(e.message) + '</div></div>';
+        + SIAGA.esc(e.message) + '</div></div>');
     }
   });
 }

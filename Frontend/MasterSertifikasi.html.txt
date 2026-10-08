@@ -40,8 +40,8 @@ function initMasterSertifikasi(param) {
 
   /* Guard role: halaman ini khusus HC / SA */
   if (!SIAGA.isHc()) {
-    SIAGA.el('msRoot').innerHTML = SIAGA.galatHtml(
-      'Akses ditolak. Halaman Jenis Sertifikasi hanya dapat dibuka oleh Human Capital atau Super Admin.');
+    SIAGA.isiHtml('msRoot', SIAGA.galatHtml(
+      'Akses ditolak. Halaman Jenis Sertifikasi hanya dapat dibuka oleh Human Capital atau Super Admin.'));
     return;
   }
 
@@ -57,7 +57,7 @@ function initMasterSertifikasi(param) {
 
 /* -------------------------------------------------------------- kerangka -- */
 function renderMsKerangka() {
-  SIAGA.el('msRoot').innerHTML = ''
+  SIAGA.isiHtml('msRoot', ''
     /* ---------- header ---------- */
     + '<div class="gde-page-head">'
     + '  <div>'
@@ -111,7 +111,7 @@ function renderMsKerangka() {
     + '  <div id="msIsi"></div>'
     + '</div>'
     /* ---------- modal form ---------- */
-    + msModalHtml();
+    + msModalHtml());
 
   pasangPerilakuMs();
 }

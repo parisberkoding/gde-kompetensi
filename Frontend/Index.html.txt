@@ -32,7 +32,63 @@
   (function () {
     'use strict';
 
+    /**
+     * Daftar fungsi dari Javascript.html yang WAJIB ada.
+     * Kalau ada yang kurang, berarti berkas Frontend/Javascript.html di editor
+     * belum ikut diperbarui. Pesannya ditampilkan jelas, bukan error
+     * membingungkan seperti "SIAGA.isiHtml is not a function".
+     */
+    var WAJIB = [
+      'api', 'gsr', 'el', 'esc', 'isiHtml', 'isiTeks', 'combobox',
+      'pastikanCssCombobox', 'jalankanSkrip', 'navigasi', 'muatView',
+      'perbaruiBadgeHeader', 'masukKeAplikasi', 'mulaiRouter', 'tampilkanLogin'
+    ];
+
+    function cekKesiapan() {
+      if (typeof SIAGA === 'undefined') {
+        return ['Seluruh berkas Frontend/Javascript.html belum terpasang'];
+      }
+      return WAJIB.filter(function (n) { return typeof SIAGA[n] !== 'function'; });
+    }
+
+    function tampilkanInstruksi(kurang) {
+      var versi = (typeof SIAGA !== 'undefined' && SIAGA.APP && SIAGA.APP.build)
+        ? SIAGA.APP.build : '(tidak terbaca)';
+      var daftar = kurang.map(function (n) { return '<li><code>SIAGA.' + n + '()</code></li>'; }).join('');
+      var wadah = document.getElementById('siagaApp');
+      wadah.innerHTML = ''
+        + '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;'
+        + 'background:#F4F7FB;padding:24px;font-family:Poppins,system-ui,Segoe UI,Roboto,sans-serif;color:#16202E">'
+        + '<div style="background:#fff;border:1px solid #E4E9F0;border-radius:18px;max-width:720px;width:100%;'
+        + 'padding:28px;box-shadow:0 18px 48px rgba(9,61,125,.14)">'
+        + '<div style="display:inline-block;background:#FDECEE;color:#C4142A;border:1px solid #FAD5D9;'
+        + 'border-radius:100px;padding:5px 14px;font-size:12px;font-weight:700;margin-bottom:14px">'
+        + 'FRONTEND BELUM SINKRON</div>'
+        + '<h1 style="font-size:20px;margin:0 0 8px">Berkas Javascript.html belum diperbarui</h1>'
+        + '<p style="font-size:14px;color:#5B6B80;line-height:1.7;margin:0 0 14px">'
+        + 'Halaman-halaman (view) sudah versi baru, tetapi berkas bersama '
+        + '<code>Frontend/Javascript.html</code> masih versi lama sehingga fungsi berikut belum ada '
+        + '(versi terbaca: <b>' + versi + '</b>):</p>'
+        + '<ul style="background:#FDECEE;border:1px solid #FAD5D9;border-radius:12px;'
+        + 'padding:14px 14px 14px 32px;font-size:13.5px;color:#93131F;line-height:1.9;margin:0 0 16px">'
+        + daftar + '</ul>'
+        + '<p style="font-size:14px;color:#33465C;line-height:1.8;margin:0 0 12px"><b>Tindakan:</b></p>'
+        + '<ol style="font-size:13.5px;color:#33465C;line-height:1.95;padding-left:20px;margin:0">'
+        + '<li>Buka berkas <code>Frontend/Javascript.html.txt</code> pada project ini.</li>'
+        + '<li>Di editor Apps Script, buka berkas <code>Javascript.html</code>.</li>'
+        + '<li>Pilih semua (Ctrl/Cmd + A), lalu tempel seluruh isinya (Ctrl/Cmd + V) — timpa semuanya.</li>'
+        + '<li>Simpan, lalu <b>Deploy &gt; Manage deployments &gt; Edit &gt; Version: New version &gt; Deploy</b>.</li>'
+        + '<li>Muat ulang halaman dengan Ctrl/Cmd + Shift + R.</li>'
+        + '</ol></div></div>';
+    }
+
     function mulai() {
+      var kurang = cekKesiapan();
+      if (kurang.length) {
+        try { console.error('[SIAGA] Frontend/Javascript.html belum diperbarui. Hilang: ' + kurang.join(', ')); } catch (e) { }
+        tampilkanInstruksi(kurang);
+        return;
+      }
       try {
         SIAGA.mulai(SIAGA_BOOTSTRAP || {});
       } catch (e) {

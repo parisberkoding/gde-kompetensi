@@ -15,13 +15,15 @@
  * algoritma kriptografi — password hanya dicocokkan langsung (string compare)
  * bila memang diaktifkan.
  *
- *   1. Pengguna mengetik Employee Code (contoh: 4122196-C).
- *   2. Sistem mencari baris Master_User dengan Employee_code tersebut.
- *      (Username / nama depan juga masih diterima sebagai alternatif.)
- *   3. Bila Config `login_wajib_password` = FALSE dan kolom Password karyawan
- *      KOSONG  -> langsung masuk, tanpa password.
- *      Bila password diperlukan -> permintaan password dikirim balik ke
- *      frontend (butuh_password: true) dan dicocokkan langsung.
+ *   1. Pengguna mengetik USERNAME = nama depan (contoh: adiasa) beserta
+ *      PASSWORD = Employee Code penuh (contoh: 4122196-C). Kolom username
+ *      juga menerima Employee Code penuh.
+ *   2. Sistem mencari baris Master_User lewat Employee_code, lalu Username,
+ *      lalu Email_Perusahaan.
+ *   3. Password dicocokkan LANGSUNG dengan kolom Password (tanpa hash).
+ *      Password bawaan setiap karyawan = Employee Code penuhnya, dibuat
+ *      otomatis oleh Importer.gs. Baris yang passwordnya masih kosong tetap
+ *      dapat masuk (server mengembalikan butuh_password: true).
  *
  * Pengaturan terkait (sheet Config):
  *   login_wajib_password  TRUE/FALSE  (default FALSE = cukup Employee Code)
@@ -197,12 +199,12 @@ function apiLogin(identitas, password) {
   return apiGuard_(function () {
     var id = String(identitas === null || identitas === undefined ? '' : identitas).trim();
     var pass = String(password === null || password === undefined ? '' : password);
-    if (!id) throw new Error('Employee Code wajib diisi.');
+    if (!id) throw new Error('Username (nama depan) atau Employee Code wajib diisi.');
 
     var u = cariUserByLogin_(id);
     if (!u) {
-      throw new Error('Employee Code "' + id + '" tidak terdaftar. '
-        + 'Periksa kembali atau hubungi Human Capital.');
+      throw new Error('"' + id + '" tidak terdaftar. Gunakan nama depan Anda '
+        + '(contoh: adiasa) atau Employee Code penuh. Hubungi Human Capital bila belum punya akun.');
     }
 
     // ---------- kunci sementara ----------
@@ -227,13 +229,14 @@ function apiLogin(identitas, password) {
         butuh_password: true,
         employee_code: String(u.Employee_code || ''),
         nama_lengkap: String(u.Nama_Lengkap || ''),
-        pesan: 'Akun ini memerlukan password. Masukkan Employee Code beserta password Anda.'
+        pesan: 'Akun ini belum memiliki password di database. Minta Human Capital melengkapinya.'
       };
     }
 
     if (perluPassword && !passwordCocok_(pass, u.Password)) {
       catatGagalLogin_(u, 'password salah');
-      throw new Error('Password salah.');
+      throw new Error('Password salah. Password Anda adalah Employee Code lengkap '
+        + '(contoh: 4122196-C). Minta Human Capital melakukan reset bila lupa.');
     }
 
     // ---------- berhasil ----------

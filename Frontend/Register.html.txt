@@ -52,7 +52,7 @@ function initRegister(param) {
 function regRenderKerangka() {
   var isHc = SIAGA.isHc();
 
-  SIAGA.el('regRoot').innerHTML = ''
+  SIAGA.isiHtml('regRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Input data</div>'
@@ -70,7 +70,7 @@ function regRenderKerangka() {
     + '<div class="siaga-2col siaga-2col--wide-right">'
     + regKartuForm(isHc)
     + regKartuRiwayat(isHc)
-    + '</div>';
+    + '</div>');
 }
 
 function regKartuForm(isHc) {
@@ -90,9 +90,13 @@ function regKartuForm(isHc) {
     /* ---------- pemegang sertifikasi ---------- */
     + '    <div style="margin-bottom:.9rem">'
     + '      <label class="gde-label" for="regEmployee">Pemegang sertifikasi <span class="gde-req">*</span></label>'
-    + (isHc ? '      <input class="gde-input" type="text" id="regCariKaryawan" '
-      + 'placeholder="Cari nama / employee code..." style="margin-bottom:.4rem">' : '')
-    + '      <select class="gde-select" id="regEmployee" name="employee_id"></select>'
+    + (isHc
+      ? ('      <div class="siaga-cb" id="regCbKaryawan">'
+        + '<input class="gde-input" type="text" id="regCariKaryawan" autocomplete="off" '
+        + 'placeholder="Ketik nama, Employee Code, atau divisi...">'
+        + '<div class="siaga-cb__panel" id="regCbPanel"></div></div>')
+      : '      <input class="gde-input" type="text" id="regCariKaryawan" disabled>')
+    + '      <input type="hidden" id="regEmployee" name="employee_id">'
     + '      <div class="gde-hint" id="regEmployeeHint"></div>'
     + '    </div>'
 
@@ -255,15 +259,21 @@ function regPasangPerilaku() {
     exp.addEventListener('input', function () { RegState.manualExpired = true; regRenderPreview(); });
   }
 
+  /* ---- PEMEGANG SERTIFIKASI: pencarian-pilih (bukan dropdown panjang) ---- */
   var cari = SIAGA.el('regCariKaryawan');
-  if (cari) {
-    cari.addEventListener('input', SIAGA.debounce(function () {
-      regIsiPilihanKaryawan(cari.value);
-    }, 250));
+  if (cari && SIAGA.isHc()) {
+    RegState.cbKaryawan = SIAGA.combobox({
+      input: cari,
+      panel: SIAGA.el('regCbPanel'),
+      placeholder: 'Ketik nama, Employee Code, atau divisi...',
+      onPilih: function (item) {
+        var emp = SIAGA.el('regEmployee');
+        if (emp) emp.value = item.value;
+        regRenderPreview();
+        regMuatRiwayat();
+      }
+    });
   }
-
-  var emp = SIAGA.el('regEmployee');
-  if (emp) emp.addEventListener('change', function () { regMuatRiwayat(); });
 
   var muat = SIAGA.el('regRiwayatMuatUlang');
   if (muat) muat.addEventListener('click', function () { regMuatRiwayat(); });
@@ -435,44 +445,37 @@ function regMuatKaryawan() {
 }
 
 function regIsiKaryawanSendiri() {
-  var sel = SIAGA.el('regEmployee');
-  if (!sel) return;
   var u = SIAGA.pengguna();
   var kode = String(u.employee_code || '');
-  sel.innerHTML = '<option value="' + SIAGA.attr(kode) + '">'
-    + SIAGA.esc(kode + (u.nama_lengkap ? ' — ' + u.nama_lengkap : '')) + '</option>';
-  sel.value = kode;
-  sel.disabled = true;
+  var tampil = kode + (u.nama_lengkap ? ' — ' + u.nama_lengkap : '');
+  var emp = SIAGA.el('regEmployee');
+  if (emp) emp.value = kode;                 // nilai yang dikirim ke server
+  var cari = SIAGA.el('regCariKaryawan');
+  if (cari) { cari.value = tampil; cari.disabled = true; }
 }
 
+/**
+ * Isi daftar pencarian pemegang sertifikasi.
+ * Pencarian & penyaringan dilakukan oleh komponen combobox, jadi di sini
+ * cukup menyuplai seluruh pekerja (label + keterangan).
+ */
 function regIsiPilihanKaryawan(kata) {
-  var sel = SIAGA.el('regEmployee');
-  if (!sel) return;
-  var nilai = String(sel.value || '');
-  var kunci = String(kata || '').toLowerCase();
-
-  var daftar = RegState.karyawan.filter(function (u) {
-    if (!kunci) return true;
-    return [u.employee_code, u.nama_lengkap, u.username, u.divisi, u.jabatan]
-      .join(' ').toLowerCase().indexOf(kunci) !== -1;
+  var cb = RegState.cbKaryawan;
+  if (!cb) return;
+  var items = (RegState.karyawan || []).map(function (u) {
+    return {
+      value: u.employee_code,
+      label: u.nama_lengkap || u.employee_code,
+      sub: u.employee_code
+        + (u.divisi ? (' · ' + u.divisi) : '')
+        + (u.jabatan ? (' · ' + u.jabatan) : '')
+        + ' · ' + SIAGA.angka(u.jumlah_sertifikasi) + ' sertifikasi',
+      badge: u.role_label || u.role
+    };
   });
-
-  var html = daftar.length
-    ? '<option value="">— Pilih pemegang —</option>'
-    : '<option value="">Tidak ada pekerja yang cocok</option>';
-  html += daftar.map(function (u) {
-    return '<option value="' + SIAGA.attr(u.employee_code) + '">'
-      + SIAGA.esc(u.employee_code + ' — ' + u.nama_lengkap + (u.divisi ? ' · ' + u.divisi : ''))
-      + '</option>';
-  }).join('');
-
-  /* Jaga pilihan yang sedang aktif walau tidak lolos filter. */
-  if (nilai && !adaKaryawan(daftar, nilai)) {
-    html += '<option value="' + SIAGA.attr(nilai) + '">' + SIAGA.esc(nilai) + '</option>';
-  }
-
-  sel.innerHTML = html;
-  sel.value = nilai;
+  cb.setItems(items);
+  var terpilih = String((SIAGA.el('regEmployee') || {}).value || '');
+  if (terpilih) cb.setNilai(terpilih);
 }
 
 function adaKaryawan(daftar, kode) {
@@ -816,16 +819,8 @@ function regIsiForm(file) {
   if (input) input.value = '';
 
   if (SIAGA.isHc()) {
-    var cari = SIAGA.el('regCariKaryawan');
-    if (cari) cari.value = '';
-    regIsiPilihanKaryawan('');
-    var sel = SIAGA.el('regEmployee');
-    if (sel && file.employee_id && !adaKaryawan(RegState.karyawan, file.employee_id)) {
-      var opt = document.createElement('option');
-      opt.value = file.employee_id;
-      opt.textContent = file.employee_id + (file.nama_pemegang ? ' — ' + file.nama_pemegang : '');
-      sel.insertBefore(opt, sel.firstChild);
-    }
+    regIsiPilihanKaryawan();
+    if (file.employee_id) regPilihKaryawan(file.employee_id);
   } else {
     regIsiKaryawanSendiri();
   }
@@ -892,17 +887,21 @@ function regReset() {
 }
 
 function regPilihKaryawan(kode) {
-  var sel = SIAGA.el('regEmployee');
-  if (!sel || !kode) return;
+  if (!kode) return;
   var kodeStr = String(kode);
-  if (!adaKaryawan(RegState.karyawan, kodeStr)) {
-    var u = regCariKaryawan(kodeStr);
-    var opt = document.createElement('option');
-    opt.value = kodeStr;
-    opt.textContent = kodeStr + (u && u.nama_lengkap ? ' — ' + u.nama_lengkap : '');
-    sel.insertBefore(opt, sel.firstChild);
+  var emp = SIAGA.el('regEmployee');
+  if (emp) emp.value = kodeStr;
+
+  var cb = RegState.cbKaryawan;
+  if (cb) {
+    var ada = cb.setNilai(kodeStr);
+    if (!ada) {
+      // pekerja di luar daftar (mis. sudah nonaktif) — tetap tampilkan
+      var u = regCariKaryawan(kodeStr);
+      var cari = SIAGA.el('regCariKaryawan');
+      if (cari) cari.value = kodeStr + (u && u.nama_lengkap ? ' — ' + u.nama_lengkap : '');
+    }
   }
-  sel.value = kodeStr;
 }
 
 /* --------------------------------------------------------------- riwayat -- */

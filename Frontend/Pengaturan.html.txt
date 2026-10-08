@@ -23,12 +23,12 @@ function initPengaturan(param) {
 
   /* ---------- guard: hanya HC & SA ---------- */
   if (!SIAGA.isHc()) {
-    SIAGA.el('setRoot').innerHTML = ''
+    SIAGA.isiHtml('setRoot', ''
       + '<div class="gde-card"><div class="gde-card__body">'
       + SIAGA.kosongHtml('bi-shield-lock', 'Akses ditolak',
         'Halaman pengaturan hanya dapat dibuka oleh Human Capital dan Super Admin. '
         + 'Hubungi Human Capital bila Anda memerlukan perubahan konfigurasi.')
-      + '</div></div>';
+      + '</div></div>');
     SIAGA.gagal('Anda tidak punya akses ke halaman Pengaturan.');
     return;
   }
@@ -42,7 +42,7 @@ function initPengaturan(param) {
 function renderSetKerangka() {
   var isSa = SIAGA.isSa();
 
-  SIAGA.el('setRoot').innerHTML = ''
+  SIAGA.isiHtml('setRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Administrasi</div>'
@@ -57,7 +57,7 @@ function renderSetKerangka() {
     + '      <i class="bi bi-card-checklist"></i> Hitung ulang status semua data</button>'
     + '  </div>'
     + '</div>'
-    + '<div id="setIsi">' + SIAGA.pemuatHtml('Memuat konfigurasi...') + '</div>';
+    + '<div id="setIsi">' + SIAGA.pemuatHtml('Memuat konfigurasi...') + '</div>');
 
   var segar = SIAGA.el('setSegarkan');
   if (segar) segar.addEventListener('click', function () { muatPengaturan(true); });

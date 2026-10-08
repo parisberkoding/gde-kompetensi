@@ -34,8 +34,8 @@ var ImpState = {
 function initImport(param) {
   'use strict';
   if (!SIAGA.isHc()) {
-    SIAGA.el('impRoot').innerHTML = SIAGA.kosongHtml('bi-shield-lock', 'Akses ditolak',
-      'Halaman impor hanya untuk Human Capital dan Super Admin.');
+    SIAGA.isiHtml('impRoot', SIAGA.kosongHtml('bi-shield-lock', 'Akses ditolak',
+      'Halaman impor hanya untuk Human Capital dan Super Admin.'));
     SIAGA.gagal('Anda tidak punya akses ke halaman impor.');
     return;
   }
@@ -45,7 +45,7 @@ function initImport(param) {
 
 /* -------------------------------------------------------------- kerangka -- */
 function renderImpKerangka() {
-  SIAGA.el('impRoot').innerHTML = ''
+  SIAGA.isiHtml('impRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Administrasi</div>'
@@ -115,7 +115,7 @@ function renderImpKerangka() {
     + '        <i class="bi bi-magic"></i> Rapikan username &amp; password semua akun</button>'
     + '    </div>'
     + '  </div>'
-    + '</div>';
+    + '</div>');
 
   var sel = SIAGA.el('impSheet');
   if (sel) sel.addEventListener('change', function () { ImpState.sheet = sel.value; });
@@ -164,7 +164,7 @@ function jalankanPratinjau() {
   if (!sheet) { SIAGA.gagal('Pilih sheet sumber lebih dulu.'); return; }
 
   SIAGA.tombolSibuk(tombol, true, 'Membaca...');
-  SIAGA.el('impHasil').innerHTML = SIAGA.pemuatHtml('Membaca sheet ' + sheet + '...');
+  SIAGA.isiHtml('impHasil', SIAGA.pemuatHtml('Membaca sheet ' + sheet + '...'));
 
   SIAGA.api('apiPratinjauImpor', [sheet]).then(function (p) {
     SIAGA.tombolSibuk(tombol, false);
@@ -173,7 +173,7 @@ function jalankanPratinjau() {
   }).catch(function (e) {
     SIAGA.tombolSibuk(tombol, false);
     SIAGA.el('impHasil').classList.remove('gde-u-hide');
-    SIAGA.el('impHasil').innerHTML = SIAGA.galatHtml(e.message);
+    SIAGA.isiHtml('impHasil', SIAGA.galatHtml(e.message));
   });
 }
 
