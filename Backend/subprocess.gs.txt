@@ -25,6 +25,11 @@
  *   function apiXxx(token, ...) { return apiGuard_(function () { ... }); }
  *   apiGuard_ membungkus hasil menjadi { ok:true, data:... } atau { ok:false, error:... }.
  */
+/** Penanda versi berkas — dipakai diagnosaKode_() untuk mendeteksi
+ *  berkas yang belum ikut diperbarui. JANGAN diubah manual. */
+var MARKER_SUBPROCESS_ = 'v1.2.0';
+var SUBPROCESS_BUILD_ = 'subprocess.gs v1.2.0 — logika bisnis (tanpa autentikasi)';
+
 
 // ============================================================================
 // 1. MESIN STATUS
@@ -166,305 +171,10 @@ function recalcAllStatus_() {
 }
 
 // ============================================================================
-// 2. AUTENTIKASI & SESI
+// 2. PROFIL SENDIRI (karyawan mengubah data dirinya)
+//    Catatan: autentikasi & sesi ada di Session.gs
 // ============================================================================
 
-/** Bungkus hasil endpoint menjadi { ok, data } / { ok, error }. */
-function apiGuard_(fn) {
-  try {
-    return apiSuccess(fn());
-  } catch (e) {
-    return apiError(e);
-  }
-}
-
-function authError_(msg) {
-  var e = new Error(msg || 'Sesi tidak valid. Silakan login kembali.');
-  e.code = 'AUTH';
-  return e;
-}
-
-function cariUser_(employeeCode) {
-  var row = findRowByCol_('Master_User', 'Employee_code', employeeCode);
-  if (row === -1) return null;
-  return rowToObject_('Master_User', row);
-}
-
-function cariUserByUsername_(username) {
-  var target = String(username || '').trim().toLowerCase();
-  if (!target) return null;
-  var semua = sheetToObjects_('Master_User');
-  for (var i = 0; i < semua.length; i++) {
-    if (String(semua[i].Username || '').trim().toLowerCase() === target) return semua[i];
-    // username lama yang mungkin masih memakai email
-    if (String(semua[i].Email_Perusahaan || '').trim().toLowerCase() === target) return semua[i];
-  }
-  return null;
-}
-
-function userExists_(employeeCode) {
-  return findRowByCol_('Master_User', 'Employee_code', employeeCode) !== -1;
-}
-
-function findUserByUsername_(username) { return cariUserByUsername_(username); }
-
-/** Buang kolom sensitif sebelum dikirim ke frontend. */
-function userPublic_(u) {
-  if (!u) return null;
-  return {
-    employee_code: String(u.Employee_code || ''),
-    nama_lengkap: String(u.Nama_Lengkap || ''),
-    username: String(u.Username || ''),
-    role: String(u.Role || 'EMP'),
-    role_label: ROLE_LABEL_[String(u.Role || 'EMP')] || 'Employee',
-    email_perusahaan: String(u.Email_Perusahaan || ''),
-    email_pribadi: String(u.Email_Pribadi || ''),
-    nama_depan: String(u.Nama_Depan || ''),
-    divisi: String(u.Divisi || ''),
-    jabatan: String(u.Jabatan || ''),
-    lokasi_kerja: String(u.Lokasi_Kerja || ''),
-    no_hp: String(u.No_HP || ''),
-    email_atasan: String(u.Email_Atasan || ''),
-    status: String(u.Status || 'ACTIVE'),
-    must_change_password: String(u.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE',
-    login_terakhir: u.Login_Terakhir ? String(u.Login_Terakhir) : '',
-    created_at: u.Created_At ? String(u.Created_At) : '',
-    inisial: inisial_(u.Nama_Lengkap)
-  };
-}
-
-function inisial_(nama) {
-  var bagian = String(nama || '').trim().split(/\s+/).filter(function (x) { return x; });
-  if (!bagian.length) return '?';
-  if (bagian.length === 1) return bagian[0].substring(0, 2).toUpperCase();
-  return (bagian[0].charAt(0) + bagian[1].charAt(0)).toUpperCase();
-}
-
-// ---------- login ----------
-
-function apiLogin(username, password) {
-  return apiGuard_(function () {
-    var uname = String(username || '').trim();
-    var pass = String(password || '');
-    if (!uname || !pass) throw new Error('Username dan password wajib diisi.');
-
-    var u = cariUserByUsername_(uname);
-    if (!u) throw new Error('Username tidak ditemukan. Gunakan nama depan Anda.');
-
-    // ----- kunci sementara -----
-    var terkunci = toDateTime_(u.Terkunci_Sampai);
-    if (terkunci && terkunci.getTime() > Date.now()) {
-      throw new Error('Akun terkunci sementara sampai ' + fmtDate_(terkunci, 'dd MMM yyyy HH:mm')
-        + ' karena percobaan login gagal berulang.');
-    }
-
-    if (String(u.Status || 'ACTIVE').toUpperCase() !== 'ACTIVE') {
-      throw new Error('Akun Anda tidak aktif. Hubungi Human Capital.');
-    }
-
-    // ----- verifikasi password -----
-    if (!verifyPassword_(pass, u.Password)) {
-      var gagal = (Number(u.Gagal_Login) || 0) + 1;
-      var patch = { Gagal_Login: gagal };
-      var maxGagal = getConfigNum_('login_max_percobaan', 5);
-      if (maxGagal > 0 && gagal >= maxGagal) {
-        var sampai = new Date(Date.now() + getConfigNum_('login_lock_menit', 15) * 60000);
-        patch.Terkunci_Sampai = fmtDate_(sampai, 'yyyy-MM-dd HH:mm:ss');
-        patch.Gagal_Login = 0;
-      }
-      updateRowByCol_('Master_User', u.__row, patch);
-      logAudit_(u.Employee_code, u.Username, u.Role, 'LOGIN_GAGAL', 'USER', u.Employee_code, 'password salah');
-      throw new Error('Password salah. Password awal Anda adalah Employee Code (contoh: 4122196-C).');
-    }
-
-    // ----- upgrade hash bila masih plaintext -----
-    if (!isHashed_(u.Password)) {
-      updateRowByCol_('Master_User', u.__row, { Password: hashPassword_(pass) });
-    }
-
-    updateRowByCol_('Master_User', u.__row, {
-      Gagal_Login: 0,
-      Terkunci_Sampai: '',
-      Login_Terakhir: nowStr_()
-    });
-
-    var session = buatSesi_(u);
-    logAudit_(u.Employee_code, u.Username, u.Role, 'LOGIN', 'USER', u.Employee_code, 'berhasil');
-
-    return {
-      token: session.Token,
-      valid_until: session.Valid_Until,
-      user: userPublic_(u),
-      must_change_password: String(u.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE'
-    };
-  });
-}
-
-function buatSesi_(u) {
-  var jam = getConfigNum_('auth_session_jam', 10);
-  var valid = new Date(Date.now() + jam * 3600000);
-  var token = Utilities.getUuid().replace(/-/g, '') + uuid6_();
-  appendObject_('Session_Token', {
-    Token: token,
-    Employee_code: String(u.Employee_code || ''),
-    Username: String(u.Username || ''),
-    Role: String(u.Role || 'EMP'),
-    Valid_Until: fmtDate_(valid, 'yyyy-MM-dd HH:mm:ss'),
-    Status: 'ACTIVE',
-    User_Agent: '',
-    Created_At: nowStr_(),
-    Invalidated_At: ''
-  });
-  return { Token: token, Valid_Until: fmtDate_(valid, 'yyyy-MM-dd HH:mm:ss') };
-}
-
-/**
- * Validasi token. Mengembalikan objek auth atau melempar error.
- * @return {Object} { employee_code, username, role, nama, email, user }
- */
-function requireAuth_(token) {
-  var t = String(token || '').trim();
-  if (!t) throw authError_('Anda belum login.');
-
-  var sesi = null;
-  try {
-    var row = findRowByCol_('Session_Token', 'Token', t);
-    if (row !== -1) sesi = rowToObject_('Session_Token', row);
-  } catch (e) { sesi = null; }
-
-  if (!sesi) throw authError_('Sesi tidak ditemukan. Silakan login kembali.');
-  if (String(sesi.Status || '').toUpperCase() !== 'ACTIVE') throw authError_('Sesi sudah berakhir. Silakan login kembali.');
-
-  var valid = toDateTime_(sesi.Valid_Until);
-  if (valid && valid.getTime() < Date.now()) {
-    try { updateRowByCol_('Session_Token', sesi.__row, { Status: 'EXPIRED' }); } catch (e) { }
-    throw authError_('Sesi sudah kedaluwarsa. Silakan login kembali.');
-  }
-
-  var u = cariUser_(sesi.Employee_code);
-  if (!u) throw authError_('Akun tidak ditemukan. Hubungi Human Capital.');
-  if (String(u.Status || 'ACTIVE').toUpperCase() !== 'ACTIVE') throw authError_('Akun Anda tidak aktif.');
-
-  return {
-    employee_code: String(u.Employee_code || ''),
-    username: String(u.Username || ''),
-    role: String(u.Role || 'EMP'),
-    nama: String(u.Nama_Lengkap || ''),
-    email: String(u.Email_Perusahaan || ''),
-    user: u,
-    sesi: sesi
-  };
-}
-
-/** Validasi token + pastikan role termasuk daftar yang diizinkan. */
-function requireRole_(token, roles) {
-  var auth = requireAuth_(token);
-  if (roles && roles.length && roles.indexOf(auth.role) === -1) {
-    var e = new Error('Anda tidak punya hak akses untuk tindakan ini.');
-    e.code = 'FORBIDDEN';
-    throw e;
-  }
-  return auth;
-}
-
-/** HC & Super Admin. */
-function requireHc_(token) { return requireRole_(token, ['HC', 'SA']); }
-
-function apiGetSession(token) {
-  return apiGuard_(function () {
-    var auth = requireAuth_(token);
-    return {
-      user: userPublic_(auth.user),
-      role: auth.role,
-      valid_until: auth.sesi.Valid_Until,
-      must_change_password: String(auth.user.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE'
-    };
-  });
-}
-
-function apiLogout(token) {
-  return apiGuard_(function () {
-    var t = String(token || '').trim();
-    if (!t) return { ok: true };
-    var row = findRowByCol_('Session_Token', 'Token', t);
-    if (row !== -1) {
-      var sesi = rowToObject_('Session_Token', row);
-      updateRowByCol_('Session_Token', row, { Status: 'LOGOUT', Invalidated_At: nowStr_() });
-      logAudit_(sesi.Employee_code, sesi.Username, sesi.Role, 'LOGOUT', 'USER', sesi.Employee_code, '');
-    }
-    return { ok: true };
-  });
-}
-
-/**
- * Batalkan sesi aktif.
- * @param {string} employeeCode kosong ('') = SELURUH user
- * @param {string=} kecualiToken token yang dipertahankan
- */
-function cabutSemuaSesi_(employeeCode, kecualiToken) {
-  var semua = sheetToObjects_('Session_Token');
-  var n = 0;
-  var semuaUser = !employeeCode;
-  semua.forEach(function (s) {
-    if (!semuaUser && String(s.Employee_code) !== String(employeeCode)) return;
-    if (kecualiToken && String(s.Token) === String(kecualiToken)) return;
-    if (String(s.Status).toUpperCase() !== 'ACTIVE') return;
-    try { updateRowByCol_('Session_Token', s.__row, { Status: 'REVOKED', Invalidated_At: nowStr_() }); n++; } catch (e) { }
-  });
-  return n;
-}
-
-// ---------- ganti username & password ----------
-
-function apiChangeUsername(token, usernameBaru, passwordSaatIni) {
-  return apiGuard_(function () {
-    var auth = requireAuth_(token);
-    var baru = slugUsername_(usernameBaru);
-    if (!baru || baru.length < 3) throw new Error('Username minimal 3 karakter (huruf, angka, titik, garis bawah).');
-    if (baru.length > 40) throw new Error('Username maksimal 40 karakter.');
-    if (!verifyPassword_(passwordSaatIni, auth.user.Password)) throw new Error('Password saat ini salah.');
-
-    var dipakai = cariUserByUsername_(baru);
-    if (dipakai && String(dipakai.Employee_code) !== String(auth.employee_code)) {
-      throw new Error('Username "' + baru + '" sudah dipakai. Pilih yang lain.');
-    }
-
-    var lama = String(auth.user.Username || '');
-    updateRowByCol_('Master_User', auth.user.__row, { Username: baru, Updated_At: nowStr_() });
-    // sesi aktif tetap dipakai, hanya perbarui nama username di sesi
-    try {
-      if (auth.sesi && auth.sesi.__row) updateRowByCol_('Session_Token', auth.sesi.__row, { Username: baru });
-    } catch (e) { }
-    logAudit_(auth.employee_code, baru, auth.role, 'GANTI_USERNAME', 'USER', auth.employee_code, lama + ' -> ' + baru);
-
-    var u = cariUser_(auth.employee_code);
-    return { user: userPublic_(u), username_lama: lama, username_baru: baru };
-  });
-}
-
-function apiChangePassword(token, passwordLama, passwordBaru, konfirmasi) {
-  return apiGuard_(function () {
-    var auth = requireAuth_(token);
-    var baru = String(passwordBaru || '');
-    if (!baru || baru.length < 6) throw new Error('Password baru minimal 6 karakter.');
-    if (baru !== String(konfirmasi || '')) throw new Error('Konfirmasi password tidak sama.');
-    if (!verifyPassword_(passwordLama, auth.user.Password)) throw new Error('Password saat ini salah.');
-    if (baru === String(passwordLama)) throw new Error('Password baru tidak boleh sama dengan password lama.');
-
-    updateRowByCol_('Master_User', auth.user.__row, {
-      Password: hashPassword_(baru),
-      Must_Change_Password: 'FALSE',
-      Updated_At: nowStr_()
-    });
-
-    var dicabut = cabutSemuaSesi_(auth.employee_code, token);
-    logAudit_(auth.employee_code, auth.username, auth.role, 'GANTI_PASSWORD', 'USER', auth.employee_code,
-      'sesi lain dicabut: ' + dicabut);
-    return { ok: true, sesi_lain_dicabut: dicabut };
-  });
-}
-
-/** Update data profil sendiri (kolom yang boleh diubah karyawan). */
 function apiUpdateMyProfile(token, data) {
   return apiGuard_(function () {
     var auth = requireAuth_(token);
@@ -623,7 +333,8 @@ function apiSaveUser(token, data) {
     if (['ACTIVE', 'INACTIVE'].indexOf(obj.Status) === -1) obj.Status = 'ACTIVE';
 
     if (isBaru) {
-      obj.Password = hashPassword_(code); // password awal = Employee Code
+      // Password = Employee Code PENUH (disalin apa adanya, tanpa hash)
+      obj.Password = passwordAwal_(code);
       obj.Must_Change_Password = String(getConfigBool_('password_wajib_ganti_default', false)).toUpperCase();
       obj.Login_Terakhir = '';
       obj.Gagal_Login = 0;
@@ -631,15 +342,16 @@ function apiSaveUser(token, data) {
       obj.Created_At = nowStr_();
       obj.Created_By = auth.employee_code;
       appendObject_('Master_User', obj);
-      logAudit_(auth.employee_code, auth.username, auth.role, 'TAMBAH_USER', 'USER', code, obj);
-      return { mode: 'insert', employee_code: code, username: username, password_awal: code };
+      logAudit_(auth.employee_code, auth.username, auth.role, 'TAMBAH_USER', 'USER', code, tanpaPassword_(obj));
+      return { mode: 'insert', employee_code: code, username: username,
+        password_awal: passwordAwal_(code) };
     }
 
     // password opsional saat update
     var passBaru = String(d.password || '');
-    if (passBaru) obj.Password = hashPassword_(passBaru);
+    if (passBaru) obj.Password = passBaru;   // disimpan apa adanya (plaintext)
     updateRowByCol_('Master_User', row, obj);
-    logAudit_(auth.employee_code, auth.username, auth.role, 'UBAH_USER', 'USER', code, obj);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'UBAH_USER', 'USER', code, tanpaPassword_(obj));
     return { mode: 'update', employee_code: code, username: username };
   });
 }
@@ -679,15 +391,15 @@ function apiResetPassword(token, employeeCode) {
     if (String(u.Role) === 'SA' && auth.role !== 'SA') throw new Error('Hanya Super Admin yang boleh reset password Super Admin.');
 
     updateRowByCol_('Master_User', u.__row, {
-      Password: hashPassword_(code),
-      Must_Change_Password: 'TRUE',
+      Password: passwordAwal_(code),    // dikembalikan ke Employee Code penuh
+      Must_Change_Password: 'FALSE',
       Gagal_Login: 0,
       Terkunci_Sampai: '',
       Updated_At: nowStr_()
     });
     cabutSemuaSesi_(code, null);
     logAudit_(auth.employee_code, auth.username, auth.role, 'RESET_PASSWORD', 'USER', code, 'di-reset ke Employee Code');
-    return { employee_code: code, password_awal: code };
+    return { employee_code: code, password_awal: passwordAwal_(code), password_direset: true };
   });
 }
 
@@ -719,7 +431,7 @@ function syncUsersFromFiles_(actorCode) {
         Employee_code: kode,
         Nama_Lengkap: nama,
         Username: username,
-        Password: hashPassword_(kode),
+        Password: passwordAwal_(kode),   // password = Employee Code penuh
         Role: 'EMP',
         Email_Perusahaan: '',
         Email_Pribadi: '',
@@ -855,8 +567,8 @@ function simpanUserInternal_(auth, data) {
   if (['ACTIVE', 'INACTIVE'].indexOf(obj.Status) === -1) obj.Status = 'ACTIVE';
 
   if (row === -1) {
-    obj.Password = hashPassword_(code);
-    obj.Must_Change_Password = 'TRUE';
+    obj.Password = passwordAwal_(code);  // password = Employee Code penuh
+    obj.Must_Change_Password = 'FALSE';
     obj.Login_Terakhir = '';
     obj.Gagal_Login = 0;
     obj.Terkunci_Sampai = '';
@@ -2014,12 +1726,31 @@ function catatEmailLog_(docId, employeeCode, level, periodeKey, penerima, cc, su
   } catch (e) { Logger.log('catatEmailLog_: ' + errMsg_(e)); }
 }
 
+/**
+ * Kirim email. `from` hanya dipakai bila alamatnya memang boleh dipakai;
+ * kalau ditolak (alias belum diverifikasi / beda domain), otomatis diulang
+ * tanpa `from` + memakai replyTo supaya reminder tidak gagal terkirim.
+ */
 function kirimEmail_(ke, cc, subjek, html) {
-  var opsi = { htmlBody: html, name: APP_NAME };
+  var teks = stripHtml_(html);
   var pengirim = String(getConfig_('email_pengirim') || EMAIL_PENGIRIM || '').trim();
-  if (pengirim && isEmail_(pengirim)) opsi.from = pengirim;
-  if (cc && cc.length) opsi.cc = cc.join(',');
-  MailApp.sendEmail(ke.join(','), subjek, stripHtml_(html), opsi);
+  var dasar = { htmlBody: html, name: APP_NAME };
+  if (cc && cc.length) dasar.cc = cc.join(',');
+
+  if (pengirim && isEmail_(pengirim)) {
+    var coba = { htmlBody: html, name: APP_NAME, from: pengirim };
+    if (cc && cc.length) coba.cc = cc.join(',');
+    try {
+      MailApp.sendEmail(ke.join(','), subjek, teks, coba);
+      return 'from';
+    } catch (e) {
+      Logger.log('kirimEmail_ dengan from gagal (' + errMsg_(e) + '), dicoba tanpa from.');
+    }
+    dasar.replyTo = pengirim;
+  }
+
+  MailApp.sendEmail(ke.join(','), subjek, teks, dasar);
+  return 'biasa';
 }
 
 function stripHtml_(html) {
@@ -2697,33 +2428,62 @@ function apiRecalcStatus(token) {
 // 11. HELPER INTERNAL LAIN
 // ============================================================================
 
-/** Ringkasan singkat untuk header halaman (dipakai beberapa view). */
-function apiGetRingkasanCepat(token) {
+/**
+ * Satu panggilan untuk SEMUA angka pada header/sidebar.
+ * Digabung supaya perpindahan halaman hanya memerlukan satu perjalanan ke
+ * server (sebelumnya 2-3 panggilan terpisah sehingga terasa "loncat-loncat").
+ * @return {Object} { notif_belum_dibaca, kadaluarsa, mendesak, perlu_verifikasi,
+ *                    total_sertifikasi, badge_mendesak }
+ */
+function apiGetRingkasanHeader(token) {
   return apiGuard_(function () {
     var auth = requireAuth_(token);
     var peta = petaUser_();
-    var rows = sheetToObjects_('Master_File').map(function (x) { return fileDto_(x, peta); });
-    if (auth.role === 'EMP') rows = rows.filter(function (r) { return r.employee_id === auth.employee_code; });
+    var out = {
+      notif_belum_dibaca: 0,
+      kadaluarsa: 0,
+      mendesak: 0,
+      perlu_verifikasi: 0,
+      total_sertifikasi: 0,
+      badge_mendesak: 0
+    };
 
-    var out = { kadaluarsa: 0, mendesak: 0, perlu_verifikasi: 0 };
+    // --- notifikasi belum dibaca ---
+    try {
+      sheetToObjects_('T_Notifikasi').forEach(function (n) {
+        if (String(n.Is_Read).toUpperCase() === 'TRUE') return;
+        if (auth.role === 'EMP' && String(n.Employee_code) !== auth.employee_code) return;
+        out.notif_belum_dibaca++;
+      });
+    } catch (e) { }
+
+    // --- hitungan sertifikasi ---
+    var rows = sheetToObjects_('Master_File').map(function (x) { return fileDto_(x, peta); });
+    if (auth.role === 'EMP') {
+      rows = rows.filter(function (r) { return r.employee_id === auth.employee_code; });
+    }
+    out.total_sertifikasi = rows.length;
     rows.forEach(function (r) {
       if (r.status === 'KADALUARSA') out.kadaluarsa++;
-      if (r.status === 'KADALUARSA' || r.status === 'MENDEKATI_KADALUARSA' || r.status === 'SEGERA_PERPANJANG') out.mendesak++;
+      if (r.status === 'KADALUARSA' || r.status === 'MENDEKATI_KADALUARSA'
+        || r.status === 'SEGERA_PERPANJANG') out.mendesak++;
       if (r.status_verifikasi === 'PENDING') out.perlu_verifikasi++;
     });
+    out.badge_mendesak = out.mendesak + out.perlu_verifikasi;
     return out;
   });
 }
 
+
 /**
  * PEMULIHAN DARURAT — jalankan dari editor Apps Script, bukan dari web.
- * Mengembalikan password SELURUH user ke Employee Code masing-masing
- * (atau ke `passwordBaru` bila diisi) dan mewajibkan ganti saat login.
  * Dipakai bila HC & Super Admin sama-sama tidak bisa masuk.
  *
- *   repairPasswords_()                  -> semua password = Employee Code
- *   repairPasswords_('Patuha2026#')      -> semua password = nilai tersebut
+ *   repairPasswords_()                  -> SEMUA password = Employee Code
+ *                                          masing-masing
+ *   repairPasswords_('Patuha2026#')      -> semua password disamakan ke nilai itu
  *
+ * Tidak ada hashing: nilai disimpan apa adanya (plaintext).
  * @param {string=} passwordBaru
  */
 function repairPasswords_(passwordBaru) {
@@ -2733,12 +2493,12 @@ function repairPasswords_(passwordBaru) {
   var rows = sheetToObjects_('Master_User');
   var diubah = 0;
   rows.forEach(function (u) {
-    var sandi = passwordBaru ? String(passwordBaru) : String(u.Employee_code || '');
-    if (!sandi) return;
+    var sandi = (passwordBaru === undefined || passwordBaru === null || passwordBaru === '')
+      ? String(u.Employee_code || '') : String(passwordBaru);
     try {
       updateRowByCol_('Master_User', u.__row, {
-        Password: hashPassword_(sandi),
-        Must_Change_Password: 'TRUE',
+        Password: sandi,                  // default = Employee Code penuh
+        Must_Change_Password: 'FALSE',
         Gagal_Login: 0,
         Terkunci_Sampai: '',
         Updated_At: nowStr_()
@@ -2755,8 +2515,8 @@ function repairPasswords_(passwordBaru) {
   var hasil = {
     ok: true,
     diubah: diubah,
-    mode: passwordBaru ? 'password seragam' : 'Employee Code',
-    catatan: 'Semua sesi lama dicabut. Setiap user wajib mengganti password saat login berikutnya.'
+    mode: passwordBaru ? 'password seragam (plaintext)' : 'password = Employee Code masing-masing',
+    catatan: 'Semua sesi lama dicabut.'
   };
   alertOrLog_('repairPasswords_ selesai.\nUser diubah: ' + diubah
     + '\nPassword: ' + hasil.mode + '\n\n' + hasil.catatan);

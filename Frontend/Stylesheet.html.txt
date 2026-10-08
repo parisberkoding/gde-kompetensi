@@ -1169,6 +1169,45 @@ img, svg, video { max-width: 100%; height: auto; vertical-align: middle; }
 .siaga-user-chip__nama { display: block; color: #fff; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .siaga-user-chip__role { display: block; color: rgba(255,255,255,.55); font-size: .62rem; text-transform: uppercase; letter-spacing: .06em; }
 
+/* ---------- 4b. PENCARIAN-PILIH (combobox, pengganti dropdown) ---------- */
+.siaga-cb { position: relative; }
+.siaga-cb input[type="text"] { padding-right: 2.4rem; }
+.siaga-cb__icon {
+  position: absolute; right: .8rem; top: 50%; transform: translateY(-50%);
+  color: var(--gde-muted-2); pointer-events: none; font-size: .95rem;
+}
+.siaga-cb__panel {
+  position: absolute; z-index: var(--gde-z-dropdown); left: 0; right: 0;
+  top: calc(100% + 4px); max-height: 320px; overflow-y: auto;
+  background: #fff; border: 1px solid var(--gde-line); border-radius: var(--gde-r-md);
+  box-shadow: var(--gde-sh-2); padding: var(--gde-sp-1); display: none;
+}
+.siaga-cb.is-open .siaga-cb__panel { display: block; animation: gde-fade-in var(--gde-t-base); }
+.siaga-cb__item {
+  display: flex; align-items: center; gap: var(--gde-sp-3);
+  padding: .5rem .65rem; border-radius: var(--gde-r-sm); cursor: pointer;
+  transition: background var(--gde-t-fast);
+}
+.siaga-cb__item:hover, .siaga-cb__item.is-active { background: var(--gde-blue-l); }
+.siaga-cb__item.is-dipilih { background: var(--gde-green-l); }
+.siaga-cb__meta { min-width: 0; flex: 1; }
+.siaga-cb__nama {
+  display: block; font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold);
+  color: var(--gde-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.siaga-cb__sub {
+  display: block; font-size: var(--gde-fs-xs); color: var(--gde-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.siaga-cb__info {
+  padding: var(--gde-sp-3) var(--gde-sp-4); text-align: center;
+  font-size: var(--gde-fs-sm); color: var(--gde-muted);
+}
+.siaga-cb__hitung {
+  padding: .35rem .65rem; font-size: var(--gde-fs-xs); color: var(--gde-muted-2);
+  border-bottom: 1px solid var(--gde-line-2); margin-bottom: var(--gde-sp-1);
+}
+
 /* ---------- 5. KARTU PROFIL DUA KOLOM (kiri profil, kanan lampiran) ---------- */
 .siaga-2col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--gde-sp-5); align-items: start; }
 .siaga-2col--wide-right { grid-template-columns: minmax(0, 380px) minmax(0, 1fr); }

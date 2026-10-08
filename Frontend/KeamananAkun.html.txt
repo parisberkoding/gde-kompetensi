@@ -93,13 +93,13 @@ function akKartuPassword() {
     + '<div class="gde-card">'
     + '  <div class="siaga-panel-head">'
     + '    <i class="bi bi-shield-lock" style="color:var(--gde-blue)"></i>'
-    + '    <div><h3>Ubah Password</h3>'
-    + '    <div class="siaga-panel-head__sub">Ganti password secara berkala</div></div>'
+    + '    <div><h3>Password (Opsional)</h3>'
+    + '    <div class="siaga-panel-head__sub">Login utama memakai Employee Code</div></div>'
     + '  </div>'
     + '  <div class="gde-card__body">'
     + '    <form id="akFormPassword" autocomplete="off" novalidate>'
     + '      <div style="margin-bottom:1rem">'
-    + '        <label class="gde-label" for="akPasswordLama">Password saat ini <span class="gde-req">*</span></label>'
+    + '        <label class="gde-label" for="akPasswordLama">Password saat ini <span class="gde-hint" id="akLabelLama">(bila sudah ada)</span></label>'
     + '        <div class="siaga-pass">'
     + '          <input class="gde-input" type="password" id="akPasswordLama" name="password_lama" '
     + 'autocomplete="current-password" placeholder="Password lama">'
@@ -108,16 +108,16 @@ function akKartuPassword() {
     + '        </div>'
     + '      </div>'
     + '      <div style="margin-bottom:1rem">'
-    + '        <label class="gde-label" for="akPasswordBaru">Password baru <span class="gde-req">*</span></label>'
+    + '        <label class="gde-label" for="akPasswordBaru">Password baru</label>'
     + '        <div class="siaga-pass">'
     + '          <input class="gde-input" type="password" id="akPasswordBaru" name="password_baru" '
-    + 'autocomplete="new-password" placeholder="Minimal 6 karakter">'
+    + 'autocomplete="new-password" placeholder="Minimal 6 karakter, atau biarkan kosong">'
     + '          <button class="siaga-pass__toggle" type="button" data-ak-mata="akPasswordBaru" '
     + 'aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>'
     + '        </div>'
     + '      </div>'
     + '      <div style="margin-bottom:1rem">'
-    + '        <label class="gde-label" for="akKonfirmasi">Ulangi password baru <span class="gde-req">*</span></label>'
+    + '        <label class="gde-label" for="akKonfirmasi">Ulangi password baru</label>'
     + '        <div class="siaga-pass">'
     + '          <input class="gde-input" type="password" id="akKonfirmasi" name="konfirmasi_password" '
     + 'autocomplete="new-password" placeholder="Ketik ulang password baru">'
@@ -132,9 +132,14 @@ function akKartuPassword() {
     + '        </div>'
     + '        <div class="gde-progress" id="akKuatWrap">'
     + '          <span class="gde-progress__bar" id="akKuatBar" style="width:0%"></span></div>'
-    + '        <div class="gde-hint">Minimal 6 karakter. Kombinasikan huruf besar, huruf kecil, '
-    + 'angka, dan simbol agar lebih kuat.</div>'
+    + '        <div class="gde-hint">Minimal 6 karakter. <b>Kosongkan</b> kolom password baru lalu simpan '
+    + 'untuk <b>menghapus password</b> — setelah itu masuk cukup dengan Employee Code.</div>'
     + '      </div>'
+    + '      <div class="gde-alert gde-alert--info" style="margin-top:1rem">'
+    + '        <i class="bi bi-info-circle gde-alert__icon"></i>'
+    + '        <div class="gde-alert__body"><strong>Login memakai Employee Code</strong>'
+    + '        Password tidak diwajibkan dan tidak di-hash — cukup dicocokkan langsung. '
+    + '        Isi password hanya bila Anda ingin lapisan pengaman tambahan.</div></div>'
     + '      <button class="gde-btn gde-btn--primary gde-btn--block siaga-mt-4" type="submit" id="akSubmitPassword">'
     + '        <i class="bi bi-key"></i> Simpan password</button>'
     + '    </form>'
@@ -201,7 +206,9 @@ function akSimpanUsername(e) {
     SIAGA.tandaiInvalid(input, 'Username minimal 3 karakter (huruf, angka, titik, garis bawah).');
     return;
   }
-  if (!String(pass.value || '')) {
+  // Password hanya diwajibkan bila akun ini memang sudah punya password.
+  var punyaPassword = !!(SIAGA.pengguna() && SIAGA.pengguna().punya_password);
+  if (punyaPassword && !String(pass.value || '')) {
     SIAGA.tandaiInvalid(pass, 'Password saat ini wajib diisi.');
     return;
   }
@@ -268,10 +275,17 @@ function akSimpanPassword(e) {
   var iBaru = SIAGA.el('akPasswordBaru');
   var iKonfirmasi = SIAGA.el('akKonfirmasi');
 
-  if (!lama) { SIAGA.tandaiInvalid(iLama, 'Password saat ini wajib diisi.'); return; }
-  if (baru.length < 6) { SIAGA.tandaiInvalid(iBaru, 'Password baru minimal 6 karakter.'); return; }
-  if (baru === lama) { SIAGA.tandaiInvalid(iBaru, 'Password baru tidak boleh sama dengan password lama.'); return; }
-  if (baru !== konfirmasi) { SIAGA.tandaiInvalid(iKonfirmasi, 'Konfirmasi password tidak sama.'); return; }
+  var punyaPassword = !!(SIAGA.pengguna() && SIAGA.pengguna().punya_password);
+
+  // Password baru dikosongkan = HAPUS password (login kembali cukup Employee Code)
+  if (!baru) {
+    if (punyaPassword && !lama) { SIAGA.tandaiInvalid(iLama, 'Password saat ini wajib diisi.'); return; }
+  } else {
+    if (baru.length < 6) { SIAGA.tandaiInvalid(iBaru, 'Password baru minimal 6 karakter.'); return; }
+    if (baru === lama) { SIAGA.tandaiInvalid(iBaru, 'Password baru tidak boleh sama dengan password lama.'); return; }
+    if (baru !== konfirmasi) { SIAGA.tandaiInvalid(iKonfirmasi, 'Konfirmasi password tidak sama.'); return; }
+    if (punyaPassword && !lama) { SIAGA.tandaiInvalid(iLama, 'Password saat ini wajib diisi.'); return; }
+  }
 
   var tombol = SIAGA.el('akSubmitPassword');
   SIAGA.tombolSibuk(tombol, true, 'Menyimpan...');
@@ -280,7 +294,11 @@ function akSimpanPassword(e) {
     SIAGA.tombolSibuk(tombol, false);
     var dicabut = SIAGA.num(r && r.sesi_lain_dicabut, 0);
 
-    SIAGA.sukses('Password diubah. ' + dicabut + ' sesi lain dicabut.', 'Berhasil');
+    if (r && r.dihapus) {
+      SIAGA.sukses('Password dihapus. Sekarang masuk cukup memakai Employee Code.', 'Berhasil');
+    } else {
+      SIAGA.sukses('Password disimpan. ' + dicabut + ' sesi lain dicabut.', 'Berhasil');
+    }
 
     /* Tandai password awal sudah diganti agar peringatan tidak muncul lagi. */
     if (SIAGA.state.user) {

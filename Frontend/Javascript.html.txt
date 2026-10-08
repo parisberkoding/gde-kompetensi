@@ -31,7 +31,10 @@ var SIAGA = (function () {
     user: null,
     meta: null,
     view: '',
+    param: '',
     views: {},
+    viewCache: {},          // cache HTML view (statis) -> pindah halaman tanpa kedipan
+    autoLoginInfo: '',
     lastError: ''
   };
 
@@ -311,16 +314,28 @@ var SIAGA = (function () {
   }
 
   var perluLoginUlang = false;
+  /**
+   * Sesi berakhir. TIDAK memuat ulang halaman (dulu location.reload() membuat
+   * tampilan "loncat"); cukup tampilkan kembali halaman masuk di tempat.
+   */
   function tanganiSesiHabis_(msg) {
     if (perluLoginUlang) return;
     perluLoginUlang = true;
-    gagal(msg || 'Sesi berakhir. Silakan login kembali.', 'Sesi berakhir');
+    gagal(msg || 'Sesi berakhir. Silakan masuk kembali.', 'Sesi berakhir');
     hapusSesi();
-    setTimeout(function () { location.reload(); }, 1400);
+    tampilkanLogin(msg || '');
   }
 
   /* ========================================================================
-     6. SESI
+     6. SESI  (penyimpanan BERLAPIS agar tidak mudah hilang)
+     ------------------------------------------------------------------------
+     Aplikasi Apps Script tampil di dalam iframe pada domain googleusercontent,
+     sehingga localStorage dapat diblokir browser dan parameter URL hilang saat
+     halaman di-refresh. Karena itu token disimpan berlapis:
+       1. login otomatis lewat email akun Google (paling andal, tanpa storage)
+       2. localStorage
+       3. parameter pada hash URL   (#/view!t=TOKEN)
+       4. memori saja (selama tab terbuka)
      ======================================================================== */
   function simpanSesi(token, user) {
     state.token = token;
@@ -328,17 +343,45 @@ var SIAGA = (function () {
     try {
       localStorage.setItem(TOKEN_KEY, token);
       localStorage.setItem(USER_KEY, JSON.stringify(user || {}));
-    } catch (e) { }
+    } catch (e) { /* diblokir: lapis lain tetap jalan */ }
+    perbaruiTokenDiHash();
   }
 
   function hapusSesi() {
     state.token = '';
     state.user = null;
     try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch (e) { }
+    perbaruiTokenDiHash();
   }
 
   function tokenTersimpan() {
-    try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+    // lapis 2: localStorage
+    try {
+      var t = localStorage.getItem(TOKEN_KEY) || '';
+      if (t) return t;
+    } catch (e) { }
+    // lapis 3: hash URL
+    return tokenDariHash();
+  }
+
+  /** Token yang tertulis pada hash URL: #/dashboard!t=XXXX */
+  function tokenDariHash() {
+    try {
+      var m = String(location.hash || '').match(/!t=([A-Za-z0-9_-]+)/);
+      return m ? m[1] : '';
+    } catch (e) { return ''; }
+  }
+
+  /** Tulis ulang hash tanpa mengubah halaman yang sedang dibuka. */
+  function perbaruiTokenDiHash() {
+    try {
+      var hash = String(location.hash || '');
+      hash = hash.replace(/!t=[A-Za-z0-9_-]+/g, '');
+      if (state.token) {
+        hash = (hash || ('#/' + (state.view || 'dashboard'))) + '!t=' + state.token;
+      }
+      if (hash !== location.hash) location.hash = hash;
+    } catch (e) { }
   }
 
   function pengguna() { return state.user || {}; }
@@ -347,8 +390,14 @@ var SIAGA = (function () {
   function isSa() { return role() === 'SA'; }
   function namaSaya() { return (state.user && state.user.nama_lengkap) || ''; }
 
-  function login(username, password) {
-    return api('apiLogin', [username, password], { token: false }).then(function (data) {
+  /**
+   * Masuk dengan Employee Code.
+   * Bila server menjawab `butuh_password`, hasilnya diteruskan apa adanya
+   * supaya halaman login bisa menampilkan kolom password.
+   */
+  function login(identitas, password) {
+    return api('apiLogin', [identitas, password], { token: false }).then(function (data) {
+      if (data && data.butuh_password) return data;   // perlu satu langkah lagi
       simpanSesi(data.token, data.user);
       perluLoginUlang = false;
       return data;
@@ -359,27 +408,54 @@ var SIAGA = (function () {
     var t = state.token;
     var lanjut = function () {
       hapusSesi();
-      location.reload();
+      perluLoginUlang = false;
+      tampilkanLogin('');
     };
     if (!t) { lanjut(); return Promise.resolve(); }
-    return api('apiLogout', [t], { token: false, silent: true })
-      .then(lanjut, lanjut);
+    // logoutToken: pakai token eksplisit walau state sudah dibersihkan
+    return gsr('apiLogout', t).then(lanjut, lanjut);
   }
 
-  /** Muat sesi dari token tersimpan. */
+  /**
+   * Muat sesi saat aplikasi dibuka. Urutan percobaan:
+   *   token tersimpan -> validasi -> kalau gagal, coba login otomatis via email.
+   * @return {Promise<boolean>} true bila berhasil masuk
+   */
   function bootSesi() {
     var t = tokenTersimpan();
-    if (!t) return Promise.resolve(false);
+    if (!t) return bootSesiOtomatis();
+
     state.token = t;
     return api('apiGetSession', []).then(function (data) {
       state.user = data.user;
       try { localStorage.setItem(USER_KEY, JSON.stringify(data.user)); } catch (e) { }
+      perbaruiTokenDiHash();
       return true;
     }).catch(function () {
-      hapusSesi();
+      state.token = '';
+      try { localStorage.removeItem(TOKEN_KEY); } catch (e) { }
+      return bootSesiOtomatis();
+    });
+  }
+
+  /** Lapis 1: login otomatis lewat email akun Google. */
+  function bootSesiOtomatis() {
+    return api('apiGetSessionAuto', [], { token: false, silent: true }).then(function (d) {
+      if (!d || !d.auto) {
+        state.autoLoginInfo = (d && d.alasan) ? d.alasan : '';
+        return false;
+      }
+      simpanSesi(d.token, d.user);
+      perluLoginUlang = false;
+      state.autoLoginInfo = 'Masuk otomatis sebagai ' + (d.email || '') + '.';
+      return true;
+    }).catch(function () {
       return false;
     });
   }
+
+  /** Coba lagi login otomatis (dipakai halaman login). */
+  function cobaLoginOtomatis() { return bootSesiOtomatis(); }
 
   /** Ambil metadata (status, ambang, opsi dropdown). Di-cache per sesi. */
   function muatMeta(paksa) {
@@ -401,6 +477,7 @@ var SIAGA = (function () {
     pekerja: { file: 'ProfilPekerja', init: 'initProfilPekerja', judul: 'Profil Pekerja', sub: 'Identitas dan seluruh sertifikasi pekerja', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-person-vcard' },
     notifikasi: { file: 'Notifikasi', init: 'initNotifikasi', judul: 'Notifikasi', sub: 'Pengingat masa berlaku sertifikasi', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-bell' },
     masteruser: { file: 'MasterUser', init: 'initMasterUser', judul: 'Master User', sub: 'Kelola akun, role, dan data pekerja', roles: ['SA', 'HC'], ikon: 'bi-people' },
+    impor: { file: 'Import', init: 'initImport', judul: 'Impor Data', sub: 'Impor data lama & buat akun otomatis', roles: ['SA', 'HC'], ikon: 'bi-box-arrow-in-down' },
     mastersertifikasi: { file: 'MasterSertifikasi', init: 'initMasterSertifikasi', judul: 'Jenis Sertifikasi', sub: 'Master jenis sertifikasi & masa berlaku', roles: ['SA', 'HC'], ikon: 'bi-award' },
     profil: { file: 'ProfilUser', init: 'initProfilUser', judul: 'Profil Saya', sub: 'Data diri dan kontak notifikasi', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-person-circle' },
     keamanan: { file: 'KeamananAkun', init: 'initKeamananAkun', judul: 'Username & Password', sub: 'Ubah kredensial masuk Anda', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-shield-lock' },
@@ -425,11 +502,16 @@ var SIAGA = (function () {
     if (!v) { gagal('Halaman "' + namaView + '" tidak dikenal.'); return; }
     if (!bolehAkses(namaView)) { gagal('Anda tidak punya akses ke halaman ini.'); return; }
     var o = opsi || {};
-    if (o.hash !== false) {
-      try { location.hash = '#/' + namaView + (o.param ? '?' + o.param : ''); } catch (e) { }
-    }
     state.view = namaView;
     state.param = o.param || '';
+    if (o.hash !== false) {
+      // token tetap dibawa pada hash supaya tidak hilang saat berpindah halaman
+      try {
+        var h = '#/' + namaView + (o.param ? '?' + o.param : '');
+        if (state.token) h += '!t=' + state.token;
+        if (location.hash !== h) location.hash = h;
+      } catch (e) { }
+    }
     muatView(namaView);
   }
 
@@ -438,7 +520,6 @@ var SIAGA = (function () {
     if (!v) return;
     var konten = el('siagaContent');
     if (!konten) return;
-    konten.innerHTML = pemuatHtml('Memuat ' + v.judul + '...');
 
     // tandai menu aktif
     qsa('[data-view]').forEach(function (a) {
@@ -451,23 +532,38 @@ var SIAGA = (function () {
     var js = el('siagaPageSub');
     if (js) js.textContent = v.sub || '';
 
+    // tampilkan isi segera; kalau HTML halaman sudah pernah diambil, pakai
+    // cache supaya perpindahan halaman terasa mulus (tanpa kedipan).
+    terapkanView_(konten, namaView, v, state.viewCache[namaView] || '');
+
+    if (state.viewCache[namaView]) return;
+
+    konten.innerHTML = pemuatHtml('Memuat ' + v.judul + '...');
     gsr('getView', v.file).then(function (html) {
       if (!html) throw new Error('Halaman ' + v.file + ' tidak ditemukan.');
-      konten.innerHTML = html;
-      jalankanSkrip(konten);          // aktifkan <script> milik view
-      var fn = window[v.init];
-      if (typeof fn === 'function') {
-        try { fn(state.param); } catch (e) {
-          konten.innerHTML = galatHtml(e.message || String(e));
-        }
-      } else {
-        konten.innerHTML = galatHtml('Fungsi ' + v.init + '() belum tersedia.');
-      }
-      perbaruiBadgeNotifikasi();
-      perbaruiBadgeMendesak();
+      state.viewCache[namaView] = html;      // cache: view bersifat statis
+      terapkanView_(konten, namaView, v, html);
     }).catch(function (err) {
       konten.innerHTML = galatHtml(err.message || String(err));
     });
+  }
+
+  /** Pasang HTML view + jalankan initXxx() milik view tersebut. */
+  function terapkanView_(konten, namaView, v, html) {
+    if (!html) return;
+    konten.innerHTML = html;
+    jalankanSkrip(konten);          // aktifkan <script> milik view
+    var fn = window[v.init];
+    if (typeof fn === 'function') {
+      try {
+        fn(state.param);
+      } catch (e) {
+        konten.innerHTML = galatHtml(e.message || String(e));
+      }
+    } else {
+      konten.innerHTML = galatHtml('Fungsi ' + v.init + '() belum tersedia.');
+    }
+    perbaruiBadgeHeader();
   }
 
   function pemuatHtml(teks) {
@@ -507,29 +603,195 @@ var SIAGA = (function () {
     });
   }
 
-  /** Jumlah sertifikasi yang perlu ditindaklanjuti (badge menu Data Sertifikasi). */
-  function perbaruiBadgeMendesak() {
+  /**
+   * Perbarui SEMUA angka pada sidebar/topbar dengan SATU panggilan server.
+   * (Sebelumnya dua panggilan terpisah setiap kali pindah halaman, sehingga
+   *  terasa berat dan "loncat-loncat".)
+   */
+  function perbaruiBadgeHeader() {
     if (!state.token) return;
-    api('apiGetRingkasanCepat', []).then(function (r) {
-      var n = num(r.mendesak) + num(r.perlu_verifikasi);
+    api('apiGetRingkasanHeader', [], { silent: true }).then(function (r) {
+      var notif = num(r.notif_belum_dibaca);
+      qsa('[data-notif-badge]').forEach(function (b) {
+        b.textContent = notif > 99 ? '99+' : String(notif);
+        b.style.display = notif > 0 ? '' : 'none';
+      });
+      var mb = el('siagaTopbarNotifCount');
+      if (mb) {
+        mb.textContent = notif > 0 ? String(notif) : '';
+        mb.style.display = notif > 0 ? '' : 'none';
+      }
+
+      var n = num(r.badge_mendesak);
       qsa('[data-urgent-badge]').forEach(function (b) {
         b.textContent = n > 99 ? '99+' : String(n);
         b.style.display = n > 0 ? '' : 'none';
-        b.title = num(r.kadaluarsa) + ' kadaluarsa · ' + num(r.perlu_verifikasi) + ' menunggu verifikasi';
+        b.title = num(r.kadaluarsa) + ' kadaluarsa · ' + num(r.perlu_verifikasi)
+          + ' menunggu verifikasi';
       });
     }).catch(function () { });
   }
 
-  function perbaruiBadgeNotifikasi() {    if (!state.token) return;
-    api('apiListNotifications', [{ limit: 1 }]).then(function (d) {
-      var n = num(d.belum_dibaca);
-      qsa('[data-notif-badge]').forEach(function (b) {
-        b.textContent = n > 99 ? '99+' : String(n);
-        b.style.display = n > 0 ? '' : 'none';
+  /** Kompatibilitas: sebagian view memanggil nama lama. */
+  function perbaruiBadgeNotifikasi() { perbaruiBadgeHeader(); }
+  function perbaruiBadgeMendesak() { perbaruiBadgeHeader(); }
+
+  /* ========================================================================
+     7b. PENCARIAN-PILIH (COMBOBOX) — pengganti dropdown yang panjang
+     ------------------------------------------------------------------------
+     Pemakaian:
+       var cb = SIAGA.combobox({
+         input: elInput, panel: elPanel, items: [...], nilai: 'SA0001',
+         placeholder: 'Cari nama atau Employee Code...',
+         onPilih: function (item) { ... }
+       });
+       cb.setItems(daftarBaru);   // ganti isi
+       cb.setNilai('SA0001');     // pilih dari kode
+       cb.nilai();                // kode terpilih ('')
+       cb.item();                 // objek terpilih (null)
+     Setiap item: { value, label, sub, tone } (sub & tone opsional)
+     ======================================================================== */
+  function combobox(opsi) {
+    var o = opsi || {};
+    var input = o.input;
+    var panel = o.panel;
+    if (!input || !panel) return null;
+
+    var wrap = input.closest('.siaga-cb') || input.parentNode;
+    var items = o.items || [];
+    var tersaring = items.slice();
+    var aktif = -1;
+    var terpilih = null;
+    var onPilih = o.onPilih || function () { };
+
+    input.setAttribute('autocomplete', 'off');
+    if (o.placeholder) input.setAttribute('placeholder', o.placeholder);
+    if (!document.getElementById(panel.id + '_ikon')) {
+      var ikon = document.createElement('i');
+      ikon.className = 'bi bi-search siaga-cb__icon';
+      ikon.id = panel.id + '_ikon';
+      wrap.appendChild(ikon);
+    }
+
+    function buka() { if (wrap) wrap.classList.add('is-open'); }
+    function tutup() { if (wrap) wrap.classList.remove('is-open'); aktif = -1; }
+
+    function labelItem(it) {
+      var tone = it.tone ? (' gde-status--' + it.tone) : '';
+      return '<div class="siaga-cb__item' + (terpilih && terpilih.value === it.value ? ' is-dipilih' : '')
+        + '" data-cb-val="' + esc(it.value) + '">'
+        + '<div class="siaga-cb__meta">'
+        + '<span class="siaga-cb__nama">' + esc(it.label || it.value) + '</span>'
+        + (it.sub ? '<span class="siaga-cb__sub">' + esc(it.sub) + '</span>' : '')
+        + '</div>'
+        + (it.badge ? '<span class="gde-status' + tone + '">' + esc(it.badge) + '</span>' : '')
+        + '</div>';
+    }
+
+    function render() {
+      var q = String(input.value || '').trim().toLowerCase();
+      tersaring = items.filter(function (it) {
+        if (!q) return true;
+        var gab = [it.label, it.sub, it.value].join(' ').toLowerCase();
+        return gab.indexOf(q) !== -1;
       });
-      var mb = el('siagaTopbarNotifCount');
-      if (mb) { mb.textContent = n > 0 ? String(n) : ''; mb.style.display = n > 0 ? '' : 'none'; }
-    }).catch(function () { });
+      if (!tersaring.length) {
+        panel.innerHTML = '<div class="siaga-cb__info">Tidak ada yang cocok dengan "' + esc(q) + '".</div>';
+        return;
+      }
+      var potong = tersaring.slice(0, 60);
+      var kepala = q ? ('<div class="siaga-cb__hitung">' + potong.length + ' dari ' + tersaring.length + ' hasil</div>') : '';
+      panel.innerHTML = kepala + potong.map(labelItem).join('')
+        + (tersaring.length > potong.length
+          ? '<div class="siaga-cb__info">Persempit pencarian untuk melihat sisanya.</div>' : '');
+    }
+
+    function sorot(idx) {
+      var nodes = qsa('.siaga-cb__item', panel);
+      if (!nodes.length) return;
+      if (idx < 0) idx = 0;
+      if (idx >= nodes.length) idx = nodes.length - 1;
+      nodes.forEach(function (n) { n.classList.remove('is-active'); });
+      nodes[idx].classList.add('is-active');
+      aktif = idx;
+      try { nodes[idx].scrollIntoView({ block: 'nearest' }); } catch (e) { }
+    }
+
+    function pilih(it) {
+      if (!it) return;
+      terpilih = it;
+      input.value = it.label || it.value;
+      tutup();
+      try { onPilih(it); } catch (e) { }
+    }
+
+    function pilihDariKode(v) {
+      var target = String(v || '');
+      for (var i = 0; i < items.length; i++) {
+        if (String(items[i].value) === target) {
+          terpilih = items[i];
+          input.value = items[i].label || items[i].value;
+          return items[i];
+        }
+      }
+      if (!target) { terpilih = null; input.value = ''; }
+      return null;
+    }
+
+    input.addEventListener('focus', function () { render(); buka(); });
+    input.addEventListener('input', function () {
+      terpilih = null;
+      render();
+      buka();
+    });
+    input.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); if (!wrap.classList.contains('is-open')) { render(); buka(); } sorot(aktif + 1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); sorot(aktif - 1); return; }
+      if (e.key === 'Enter') {
+        var nodes = qsa('.siaga-cb__item', panel);
+        if (wrap.classList.contains('is-open') && nodes.length) {
+          e.preventDefault();
+          e.stopPropagation();
+          var idx = aktif >= 0 ? aktif : 0;
+          var val = nodes[idx] ? nodes[idx].getAttribute('data-cb-val') : '';
+          var it = null;
+          for (var i = 0; i < items.length; i++) { if (String(items[i].value) === String(val)) { it = items[i]; break; } }
+          pilih(it);
+        }
+        return;
+      }
+      if (e.key === 'Escape') { tutup(); input.blur(); }
+    });
+
+    panel.addEventListener('mousedown', function (e) {
+      var t = e.target.closest('[data-cb-val]');
+      if (!t) return;
+      e.preventDefault();
+      var val = t.getAttribute('data-cb-val');
+      var it = null;
+      for (var i = 0; i < items.length; i++) { if (String(items[i].value) === String(val)) { it = items[i]; break; } }
+      pilih(it);
+    });
+
+    document.addEventListener('click', function (e) {
+      if (!wrap.contains(e.target)) tutup();
+    });
+
+    if (o.nilai) pilihDariKode(o.nilai);
+
+    return {
+      setItems: function (arr) {
+        items = arr || [];
+        render();
+        return items.length;
+      },
+      setNilai: function (v) { return pilihDariKode(v); },
+      nilai: function () { return terpilih ? String(terpilih.value) : ''; },
+      item: function () { return terpilih; },
+      fokus: function () { try { input.focus(); } catch (e) { } },
+      bersihkan: function () { terpilih = null; input.value = ''; },
+      tutup: tutup
+    };
   }
 
   /* ========================================================================
@@ -670,6 +932,7 @@ var SIAGA = (function () {
     ];
     var menuAdmin = [
       { key: 'masteruser', label: 'Master User', ikon: 'bi-people' },
+      { key: 'impor', label: 'Impor Data', ikon: 'bi-box-arrow-in-down' },
       { key: 'mastersertifikasi', label: 'Jenis Sertifikasi', ikon: 'bi-award' },
       { key: 'pengaturan', label: 'Pengaturan', ikon: 'bi-sliders' }
     ];
@@ -841,7 +1104,8 @@ var SIAGA = (function () {
   }
 
   function viewAwal() {
-    var hash = String(location.hash || '').replace(/^#\/?/, '');
+    // buang penanda token (!t=...) sebelum membaca view & parameter
+    var hash = String(location.hash || '').replace(/!t=[A-Za-z0-9_-]+/g, '').replace(/^#\/?/, '');
     var nama = hash.split('?')[0];
     if (nama && VIEWS[nama] && bolehAkses(nama)) return { view: nama, param: hash.split('?')[1] || '' };
     if (bolehAkses('dashboard')) return { view: 'dashboard', param: '' };
@@ -866,6 +1130,8 @@ var SIAGA = (function () {
      ======================================================================== */
   function tampilkanLogin(pesanAwal) {
     var wadah = el('siagaApp');
+    if (typeof window.tutupSemuaModal === 'function') { try { window.tutupSemuaModal(); } catch (e) { } }
+    modalTutupSemua();
     wadah.innerHTML = pemuatHtml('Menyiapkan halaman masuk...');
     gsr('getView', 'Login').then(function (html) {
       wadah.innerHTML = html;
@@ -889,17 +1155,29 @@ var SIAGA = (function () {
     }
     bootSesi().then(function (masuk) {
       if (!masuk) { tampilkanLogin(); return; }
-      return muatMeta().then(function () {
-        renderShell();
-        mulaiRouter();
-        perbaruiBadgeNotifikasi();
-        perbaruiBadgeMendesak();
-        if (pengguna().must_change_password) {
-          ingat('Password Anda masih password awal. Segera ganti di menu Username & Password.', 'Perhatian keamanan');
-        }
-      });
+      return masukKeAplikasi_();
     }).catch(function (err) {
       tampilkanLogin(err.message || '');
+    });
+  }
+
+  /** Dipakai setelah login berhasil (dari halaman Login maupun login otomatis). */
+  function masukKeAplikasi_() {
+    return muatMeta().then(function () {
+      perluLoginUlang = false;
+      renderShell();
+      mulaiRouter();
+      perbaruiBadgeHeader();
+      var u = pengguna();
+      if (u.must_change_password) {
+        ingat('Akun Anda masih memakai pengaturan awal. Periksa menu Username & Password.',
+          'Perhatian keamanan');
+      }
+      if (state.autoLoginInfo && !state._autoInfoShown) {
+        state._autoInfoShown = true;
+        info(state.autoLoginInfo, 'Masuk otomatis');
+      }
+      return true;
     });
   }
 
@@ -933,7 +1211,10 @@ var SIAGA = (function () {
     // api & sesi
     gsr: gsr, api: api, login: login, logout: logout, bootSesi: bootSesi, muatMeta: muatMeta,
     pengguna: pengguna, role: role, isHc: isHc, isSa: isSa, namaSaya: namaSaya,
-    simpanSesi: simpanSesi, hapusSesi: hapusSesi, perbaruiBadgeNotifikasi: perbaruiBadgeNotifikasi,
+    simpanSesi: simpanSesi, hapusSesi: hapusSesi,
+    cobaLoginOtomatis: cobaLoginOtomatis, masukKeAplikasi: masukKeAplikasi_,
+    perbaruiBadgeHeader: perbaruiBadgeHeader,
+    perbaruiBadgeNotifikasi: perbaruiBadgeNotifikasi,
     perbaruiBadgeMendesak: perbaruiBadgeMendesak,
 
     // router
@@ -941,7 +1222,7 @@ var SIAGA = (function () {
     mulaiRouter: mulaiRouter,
 
     // form & berkas
-    nilaiForm: nilaiForm, isiForm: isiForm, resetForm: resetForm,
+    nilaiForm: nilaiForm, isiForm: isiForm, resetForm: resetForm, combobox: combobox,
     tandaiInvalid: tandaiInvalid, bersihkanInvalid: bersihkanInvalid, tombolSibuk: tombolSibuk,
     validasiBerkas: validasiBerkas, bacaBerkas: bacaBerkas, pratinjauUrl: pratinjauUrl,
     ikonBerkas: ikonBerkas, extDari: extDari,

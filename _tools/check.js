@@ -62,9 +62,10 @@ const wajibFE = [
   'Dashboard.html.txt', 'DataSertifikasi.html.txt', 'Register.html.txt',
   'ProfilPekerja.html.txt', 'ProfilUser.html.txt', 'KeamananAkun.html.txt',
   'Notifikasi.html.txt', 'MasterUser.html.txt', 'MasterSertifikasi.html.txt',
+  'Import.html.txt',
   'Pengaturan.html.txt'
 ];
-const wajibBE = ['Kode.gs.txt', 'subprocess.gs.txt'];
+const wajibBE = ['Kode.gs.txt', 'Session.gs.txt', 'Importer.gs.txt', 'subprocess.gs.txt'];
 
 const adaFE = htmlFiles.map((f) => f.nama);
 const adaBE = gsFiles.map((f) => f.nama);
@@ -91,6 +92,31 @@ Object.keys(fnMap).sort().forEach((n) => {
   if (pemilik.length > 1) { dup++; fail(`function ${n}() didefinisikan di: ${pemilik.join(', ')}`); }
 });
 if (!dup) ok(`tidak ada duplikasi (${Object.keys(fnMap).length} fungsi unik)`);
+
+/* --------------------------- 2b. panggilan ke helper yang tidak terdefinisi */
+head('[2b] Helper ber-akhiran "_" yang dipanggil tetapi tidak terdefinisi');
+/*
+ * Menangkap kasus "satu berkas diperbarui, berkas lain belum" — gejalanya di
+ * Apps Script berupa error seperti "verifyPassword_ is not defined".
+ * Komentar dibuang lebih dulu supaya kalimat dokumentasi tidak ikut terbaca.
+ */
+const beTanpaKomentar = gsFiles.map((f) => f.teks
+  .replace(/\/\*[\s\S]*?\*\//g, ' ')
+  .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+).join('\n');
+
+const definedFns = new Set(Object.keys(fnMap));
+const dipanggil = new Set();
+const reCall = /\b([A-Za-z][A-Za-z0-9_$]*_)\s*\(/g;
+let mc;
+while ((mc = reCall.exec(beTanpaKomentar)) !== null) dipanggil.add(mc[1]);
+
+const yatim = [...dipanggil].filter((n) => !definedFns.has(n)).sort();
+if (yatim.length) {
+  yatim.forEach((n) => fail(`${n}() dipanggil tetapi tidak ada definisinya di Backend (berkas belum sinkron?)`));
+} else {
+  ok(`semua ${dipanggil.size} helper ber-akhiran "_" terdefinisi`);
+}
 
 /* ------------------------------------------------------ 3. panggilan apiXxx */
 head('[3] Panggilan SIAGA.api() di Frontend vs implementasi Backend');
@@ -252,6 +278,52 @@ if (kodeGs) {
   ok('enam tingkat status lengkap');
 
   if (!/function\s+apiGuard_\s*\(/.test(backendTeks)) fail('apiGuard_() tidak ditemukan di Backend');
+
+  /* ----- kebijakan password: plaintext, pencocokan langsung ----- */
+  // Literal string & penjaga `typeof X` dibuang dulu, karena keduanya memang
+  // menyebut nama fungsi lama secara sah (mis. di berkasBackendHilang_()).
+  const beBersih = backendTeks
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+    .replace(/typeof\s+[A-Za-z0-9_$]+/g, 'typeof _');
+
+  const sisaHash = ['hashPassword_', 'verifyPassword_', 'isHashed_', 'password_salt', 'computeDigest']
+    .filter((n) => beBersih.indexOf(n) !== -1);
+  if (sisaHash.length) {
+    fail(`kebijakan password dilanggar — masih ada: ${sisaHash.join(', ')} (password harus plaintext + pencocokan langsung)`);
+  } else if (!/function\s+passwordCocok_\s*\(/.test(backendTeks)) {
+    fail('passwordCocok_() tidak ditemukan (pencocokan password langsung)');
+  } else {
+    ok('password tanpa hash + pencocokan langsung (passwordCocok_)');
+  }
+
+  /* ----- login berbasis Employee Code ----- */
+  if (!/function\s+apiLogin\s*\(\s*identitas/.test(backendTeks)) {
+    warn('apiLogin() tidak memakai parameter pertama bernama "identitas" (Employee Code)');
+  } else {
+    ok('login memakai Employee Code (apiLogin("identitas", password opsional))');
+  }
+  if (!/function\s+apiGetSessionAuto\s*\(/.test(backendTeks)) {
+    fail('apiGetSessionAuto() tidak ada — sesi akan mudah hilang saat refresh');
+  } else {
+    ok('login otomatis via email Google tersedia (apiGetSessionAuto)');
+  }
+
+  /* ----- penanda berkas backend ----- */
+  ['MARKER_KODE_', 'MARKER_SESSION_', 'MARKER_IMPORT_', 'MARKER_SUBPROCESS_'].forEach((m) => {
+    if (backendTeks.indexOf('var ' + m) === -1) fail(`penanda berkas ${m} tidak ditemukan`);
+  });
+  if (backendTeks.indexOf('function berkasBackendHilang_') === -1) {
+    fail('berkasBackendHilang_() tidak ada — aplikasi tidak bisa mendeteksi berkas yang belum sinkron');
+  } else {
+    ok('penanda versi tiap berkas + deteksi berkas belum sinkron tersedia');
+  }
+
+  if (backendTeks.indexOf('tanpaPassword_') === -1) {
+    warn('tanpaPassword_() belum dipakai — pastikan password tidak masuk T_Audit_Trail');
+  } else {
+    ok('password tidak ditulis ke audit trail (tanpaPassword_)');
+  }
 }
 
 /* ------------------------------------------------------------- 9. kolom DB */

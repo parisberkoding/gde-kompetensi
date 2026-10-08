@@ -1,0 +1,670 @@
+/**
+ * ============================================================================
+ * SIAGA SERTIFIKASI — Session.gs  (AUTENTIKASI & SESI)
+ * PT Geo Dipa Energi (Persero) — Unit Patuha
+ * ============================================================================
+ *
+ * Berkas ini KHUSUS menangani masuk (login), sesi, dan kredensial.
+ * Dipisah dari subprocess.gs supaya sesi mudah dirawat dan tidak tercampur
+ * dengan logika data sertifikasi.
+ *
+ * ---------------------------------------------------------------------------
+ * CARA MASUK (Authentication)
+ * ---------------------------------------------------------------------------
+ * Cukup memakai EMPLOYEE CODE. Tidak ada hashing, tidak ada salt, tidak ada
+ * algoritma kriptografi — password hanya dicocokkan langsung (string compare)
+ * bila memang diaktifkan.
+ *
+ *   1. Pengguna mengetik Employee Code (contoh: 4122196-C).
+ *   2. Sistem mencari baris Master_User dengan Employee_code tersebut.
+ *      (Username / nama depan juga masih diterima sebagai alternatif.)
+ *   3. Bila Config `login_wajib_password` = FALSE dan kolom Password karyawan
+ *      KOSONG  -> langsung masuk, tanpa password.
+ *      Bila password diperlukan -> permintaan password dikirim balik ke
+ *      frontend (butuh_password: true) dan dicocokkan langsung.
+ *
+ * Pengaturan terkait (sheet Config):
+ *   login_wajib_password  TRUE/FALSE  (default FALSE = cukup Employee Code)
+ *   auto_login_email      TRUE/FALSE  (default TRUE)
+ *   auto_login_email_pribadi TRUE/FALSE (default FALSE)
+ *   auth_session_jam      masa berlaku sesi (default 10 jam, diperpanjang
+ *                         otomatis selama dipakai)
+ *   login_max_percobaan / login_lock_menit
+ *
+ * ---------------------------------------------------------------------------
+ * MENGAPA SESI SEBELUMNYA "LONCAT-LONCAT"
+ * ---------------------------------------------------------------------------
+ * Aplikasi Apps Script dirender di dalam iframe pada domain
+ * *.googleusercontent.com. Akibatnya:
+ *   - localStorage / sessionStorage / cookie berada pada konteks PIHAK KETIGA
+ *     dan dapat diblokir browser -> token hilang -> dipaksa login berulang;
+ *   - saat halaman di-refresh (F5), isi iframe dibuat ulang sehingga parameter
+ *     pada URL ikut hilang.
+ *
+ * Solusinya berlapis, dari yang paling andal:
+ *   LAPIS 1 (utama)  : LOGIN OTOMATIS lewat email akun Google pengguna
+ *                      (Session.getActiveUser().getEmail()) yang dicocokkan
+ *                      dengan Email_Perusahaan pada Master_User. Tidak
+ *                      memerlukan penyimpanan apa pun di browser, sehingga
+ *                      tetap bertahan setelah refresh, ganti halaman, maupun
+ *                      ganti perangkat.
+ *   LAPIS 2          : localStorage (dipakai bila tersedia).
+ *   LAPIS 3          : parameter pada URL (hash) — bertahan saat berpindah
+ *                      halaman, hilang saat refresh penuh.
+ *   LAPIS 4          : penyimpanan di memori saja (selama tab masih terbuka).
+ *
+ * Sesi juga DIPERPANJANG OTOMATIS (sliding expiration): setiap panggilan yang
+ * sah akan memperpanjang masa berlaku, sehingga pengguna tidak terlempar keluar
+ * di tengah pekerjaan.
+ *
+ * PENTING: lapis 1 sengaja HANYA memakai Session.getActiveUser() — TIDAK
+ * memakai Session.getEffectiveUser(), karena pada deployment
+ * "Execute as: Me" effective user adalah PEMILIK DEPLOYMENT dan semua orang
+ * akan ikut masuk sebagai dia.
+ * ============================================================================
+ */
+
+var MARKER_SESSION_ = 'v1.2.0';
+var SESSION_BUILD_ = 'Session.gs v1.2.0 — login Employee Code + sesi berlapis';
+
+// ============================================================================
+// 1. PENCARIAN USER
+// ============================================================================
+
+/** Cari user berdasarkan Employee Code (tepat, abaikan spasi & huruf besar/kecil). */
+function cariUser_(employeeCode) {
+  var kode = String(employeeCode === null || employeeCode === undefined ? '' : employeeCode).trim();
+  if (!kode) return null;
+  var row = findRowByCol_('Master_User', 'Employee_code', kode);
+  if (row === -1) return null;
+  return rowToObject_('Master_User', row);
+}
+
+function cariUserByUsername_(username) {
+  var target = String(username || '').trim().toLowerCase();
+  if (!target) return null;
+  var semua = sheetToObjects_('Master_User');
+  for (var i = 0; i < semua.length; i++) {
+    if (String(semua[i].Username || '').trim().toLowerCase() === target) return semua[i];
+    // kompatibilitas: sebagian data lama memakai email sebagai username
+    if (String(semua[i].Email_Perusahaan || '').trim().toLowerCase() === target) return semua[i];
+  }
+  return null;
+}
+
+/**
+ * Pencarian serbaguna untuk halaman login: Employee Code lebih diutamakan,
+ * lalu Username, terakhir Email_Perusahaan.
+ */
+function cariUserByLogin_(identitas) {
+  var id = String(identitas === null || identitas === undefined ? '' : identitas).trim();
+  if (!id) return null;
+
+  var u = cariUser_(id);
+  if (u) return u;
+
+  u = cariUserByUsername_(id);
+  if (u) return u;
+
+  var email = id.toLowerCase();
+  if (isEmail_(email)) {
+    var semua = sheetToObjects_('Master_User');
+    for (var i = 0; i < semua.length; i++) {
+      if (String(semua[i].Email_Perusahaan || '').trim().toLowerCase() === email) return semua[i];
+      if (String(semua[i].Email_Pribadi || '').trim().toLowerCase() === email) return semua[i];
+    }
+  }
+  return null;
+}
+
+function userExists_(employeeCode) { return cariUser_ != null && cariUser_(employeeCode) !== null; }
+
+function findUserByUsername_(username) { return cariUserByUsername_(username); }
+
+/** Email akun Google yang sedang membuka aplikasi (boleh kosong). */
+function emailAktifGoogle_() {
+  var e = '';
+  try { e = Session.getActiveUser().getEmail() || ''; } catch (err) { e = ''; }
+  return String(e).trim().toLowerCase();
+}
+
+/**
+ * Cari user berdasarkan email akun Google.
+ * Email_Pribadi hanya ikut dicocokkan bila Config
+ * `auto_login_email_pribadi` = TRUE (default FALSE, lebih aman).
+ */
+function cariUserByEmail_(email) {
+  var t = String(email || '').trim().toLowerCase();
+  if (!t || !isEmail_(t)) return null;
+  var pakaiPribadi = getConfigBool_('auto_login_email_pribadi', false);
+
+  var semua = sheetToObjects_('Master_User');
+  for (var i = 0; i < semua.length; i++) {
+    if (String(semua[i].Email_Perusahaan || '').trim().toLowerCase() === t) return semua[i];
+  }
+  if (pakaiPribadi) {
+    for (var j = 0; j < semua.length; j++) {
+      if (String(semua[j].Email_Pribadi || '').trim().toLowerCase() === t) return semua[j];
+    }
+  }
+  return null;
+}
+
+/** Bentuk data user yang aman dikirim ke frontend (tanpa kolom Password). */
+function userPublic_(u) {
+  if (!u) return null;
+  return {
+    employee_code: String(u.Employee_code || ''),
+    nama_lengkap: String(u.Nama_Lengkap || ''),
+    username: String(u.Username || ''),
+    role: String(u.Role || 'EMP'),
+    role_label: ROLE_LABEL_[String(u.Role || 'EMP')] || 'Employee',
+    email_perusahaan: String(u.Email_Perusahaan || ''),
+    email_pribadi: String(u.Email_Pribadi || ''),
+    nama_depan: String(u.Nama_Depan || ''),
+    divisi: String(u.Divisi || ''),
+    jabatan: String(u.Jabatan || ''),
+    lokasi_kerja: String(u.Lokasi_Kerja || ''),
+    no_hp: String(u.No_HP || ''),
+    email_atasan: String(u.Email_Atasan || ''),
+    status: String(u.Status || 'ACTIVE'),
+    punya_password: String(u.Password || '').trim() !== '',
+    must_change_password: String(u.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE',
+    login_terakhir: u.Login_Terakhir ? String(u.Login_Terakhir) : '',
+    created_at: u.Created_At ? String(u.Created_At) : '',
+    inisial: inisial_(u.Nama_Lengkap)
+  };
+}
+
+function inisial_(nama) {
+  var bagian = String(nama || '').trim().split(/\s+/).filter(function (x) { return x; });
+  if (!bagian.length) return '?';
+  if (bagian.length === 1) return bagian[0].substring(0, 2).toUpperCase();
+  return (bagian[0].charAt(0) + bagian[1].charAt(0)).toUpperCase();
+}
+
+// ============================================================================
+// 2. LOGIN
+// ============================================================================
+
+/**
+ * Masuk ke aplikasi.
+ * @param {string} identitas Employee Code (utama), atau username/email
+ * @param {string=} password hanya diperlukan bila diwajibkan
+ * @return {Object} { token, valid_until, user } atau { butuh_password:true }
+ */
+function apiLogin(identitas, password) {
+  return apiGuard_(function () {
+    var id = String(identitas === null || identitas === undefined ? '' : identitas).trim();
+    var pass = String(password === null || password === undefined ? '' : password);
+    if (!id) throw new Error('Employee Code wajib diisi.');
+
+    var u = cariUserByLogin_(id);
+    if (!u) {
+      throw new Error('Employee Code "' + id + '" tidak terdaftar. '
+        + 'Periksa kembali atau hubungi Human Capital.');
+    }
+
+    // ---------- kunci sementara ----------
+    var terkunci = toDateTime_(u.Terkunci_Sampai);
+    if (terkunci && terkunci.getTime() > Date.now()) {
+      throw new Error('Akun terkunci sementara sampai ' + fmtDate_(terkunci, 'dd MMM yyyy HH:mm')
+        + ' karena percobaan masuk gagal berulang.');
+    }
+
+    if (String(u.Status || 'ACTIVE').toUpperCase() !== 'ACTIVE') {
+      throw new Error('Akun Anda tidak aktif. Hubungi Human Capital.');
+    }
+
+    // ---------- apakah password diperlukan? ----------
+    var wajibPassword = getConfigBool_('login_wajib_password', false);
+    var punyaPassword = String(u.Password || '').trim() !== '';
+    var perluPassword = (wajibPassword || punyaPassword);
+
+    if (perluPassword && !pass) {
+      // Minta password ke frontend — bukan error, cukup satu langkah lagi.
+      return {
+        butuh_password: true,
+        employee_code: String(u.Employee_code || ''),
+        nama_lengkap: String(u.Nama_Lengkap || ''),
+        pesan: 'Akun ini memerlukan password. Masukkan Employee Code beserta password Anda.'
+      };
+    }
+
+    if (perluPassword && !passwordCocok_(pass, u.Password)) {
+      catatGagalLogin_(u, 'password salah');
+      throw new Error('Password salah.');
+    }
+
+    // ---------- berhasil ----------
+    updateRowByCol_('Master_User', u.__row, {
+      Gagal_Login: 0,
+      Terkunci_Sampai: '',
+      Login_Terakhir: nowStr_()
+    });
+
+    var sesi = ambilAtauBuatSesi_(u, 'LOGIN');
+    logAudit_(u.Employee_code, u.Username, u.Role, 'LOGIN', 'USER', u.Employee_code, 'berhasil');
+
+    return {
+      butuh_password: false,
+      token: sesi.Token,
+      valid_until: sesi.Valid_Until,
+      user: userPublic_(u),
+      must_change_password: String(u.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE'
+    };
+  });
+}
+
+/**
+ * LOGIN OTOMATIS lewat email akun Google.
+ * Dipanggil frontend saat tidak menemukan token tersimpan. Tidak memerlukan
+ * penyimpanan apa pun di browser sehingga tahan terhadap refresh.
+ * @param {string=} hintEmail email dari sisi klien (cadangan bila server kosong)
+ */
+function apiGetSessionAuto(hintEmail) {
+  return apiGuard_(function () {
+    var email = emailAktifGoogle_();
+    var sumber = 'server';
+
+    if (!email && hintEmail && isEmail_(hintEmail)) {
+      email = String(hintEmail).trim().toLowerCase();
+      sumber = 'klien';
+    }
+    if (!email) {
+      return { auto: false, alasan: 'Email akun Google tidak tersedia. Silakan masukkan Employee Code.' };
+    }
+    if (!getConfigBool_('auto_login_email', true)) {
+      return { auto: false, alasan: 'Login otomatis dinonaktifkan (Config auto_login_email = FALSE).' };
+    }
+
+    var u = cariUserByEmail_(email);
+    if (!u) {
+      return {
+        auto: false, email: email,
+        alasan: 'Email ' + email + ' belum terdaftar pada Master User. Silakan masukkan Employee Code.'
+      };
+    }
+    if (String(u.Status || 'ACTIVE').toUpperCase() !== 'ACTIVE') {
+      return { auto: false, email: email, alasan: 'Akun dengan email tersebut tidak aktif.' };
+    }
+
+    updateRowByCol_('Master_User', u.__row, { Login_Terakhir: nowStr_() });
+    var sesi = ambilAtauBuatSesi_(u, 'LOGIN_OTOMATIS', email);
+    logAudit_(u.Employee_code, u.Username, u.Role, 'LOGIN_OTOMATIS', 'USER', u.Employee_code,
+      'email ' + email + ' (' + sumber + ')');
+
+    return {
+      auto: true,
+      email: email,
+      sumber: sumber,
+      token: sesi.Token,
+      valid_until: sesi.Valid_Until,
+      user: userPublic_(u),
+      must_change_password: String(u.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE'
+    };
+  });
+}
+
+function catatGagalLogin_(u, sebab) {
+  var gagal = (Number(u.Gagal_Login) || 0) + 1;
+  var patch = { Gagal_Login: gagal };
+  var maxGagal = getConfigNum_('login_max_percobaan', 5);
+  if (maxGagal > 0 && gagal >= maxGagal) {
+    patch.Terkunci_Sampai = fmtDate_(new Date(Date.now() + getConfigNum_('login_lock_menit', 15) * 60000),
+      'yyyy-MM-dd HH:mm:ss');
+    patch.Gagal_Login = 0;
+  }
+  try { updateRowByCol_('Master_User', u.__row, patch); } catch (e) { }
+  try {
+    logAudit_(u.Employee_code, u.Username, u.Role, 'LOGIN_GAGAL', 'USER', u.Employee_code, sebab);
+  } catch (e) { }
+}
+
+// ============================================================================
+// 3. SESI
+// ============================================================================
+
+/**
+ * Ambil sesi ACTIVE milik user yang masih berlaku; kalau tidak ada, buat baru.
+ * Sesi dipakai ulang supaya sheet Session_Token tidak membengkak karena
+ * login otomatis yang terjadi setiap refresh.
+ */
+function ambilAtauBuatSesi_(u, aksi, email) {
+  var kode = String(u.Employee_code || '');
+  var jam = getConfigNum_('auth_session_jam', 10);
+  var batasBaru = new Date(Date.now() + jam * 3600000);
+
+  var semua = [];
+  try { semua = sheetToObjects_('Session_Token'); } catch (e) { semua = []; }
+
+  var kandidat = null;
+  for (var i = 0; i < semua.length; i++) {
+    var s = semua[i];
+    if (String(s.Employee_code) !== kode) continue;
+    if (String(s.Status).toUpperCase() !== 'ACTIVE') continue;
+    var valid = toDateTime_(s.Valid_Until);
+    if (valid && valid.getTime() < Date.now()) continue;
+    if (!kandidat || String(s.Created_At) > String(kandidat.Created_At)) kandidat = s;
+  }
+
+  if (kandidat) {
+    try {
+      updateRowByCol_('Session_Token', kandidat.__row, {
+        Valid_Until: fmtDate_(batasBaru, 'yyyy-MM-dd HH:mm:ss'),
+        Username: String(u.Username || ''),
+        Role: String(u.Role || 'EMP'),
+        Email_Google: email ? String(email) : String(kandidat.Email_Google || '')
+      });
+    } catch (e) { }
+    return {
+      Token: String(kandidat.Token),
+      Valid_Until: fmtDate_(batasBaru, 'yyyy-MM-dd HH:mm:ss'),
+      dipakai_ulang: true,
+      aksi: aksi || ''
+    };
+  }
+
+  var token = Utilities.getUuid().replace(/-/g, '') + uuid6_();
+  appendObject_('Session_Token', {
+    Token: token,
+    Employee_code: kode,
+    Username: String(u.Username || ''),
+    Role: String(u.Role || 'EMP'),
+    Valid_Until: fmtDate_(batasBaru, 'yyyy-MM-dd HH:mm:ss'),
+    Status: 'ACTIVE',
+    User_Agent: '',
+    Email_Google: email ? String(email) : emailAktifGoogle_(),
+    Created_At: nowStr_(),
+    Invalidated_At: ''
+  });
+  return {
+    Token: token,
+    Valid_Until: fmtDate_(batasBaru, 'yyyy-MM-dd HH:mm:ss'),
+    dipakai_ulang: false,
+    aksi: aksi || ''
+  };
+}
+
+/** Perpanjang masa berlaku sesi (sliding expiration) — maksimal 1x / 10 menit. */
+function perpanjangSesi_(sesi) {
+  try {
+    var jam = getConfigNum_('auth_session_jam', 10);
+    var target = Date.now() + jam * 3600000;
+    var sekarang = toDateTime_(sesi.Valid_Until);
+    if (!sekarang) return false;
+    if (sekarang.getTime() - Date.now() > (jam * 3600000) - (10 * 60000)) return false;
+    var baru = fmtDate_(new Date(target), 'yyyy-MM-dd HH:mm:ss');
+    updateRowByCol_('Session_Token', sesi.__row, { Valid_Until: baru });
+    sesi.Valid_Until = baru;
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Validasi token dan kembalikan konteks autentikasi.
+ * @return {Object} { employee_code, username, role, nama, email, user, sesi }
+ */
+function requireAuth_(token) {
+  var t = String(token || '').trim();
+  if (!t) throw authError_('Anda belum masuk. Silakan masukkan Employee Code.');
+
+  var sesi = null;
+  try {
+    var row = findRowByCol_('Session_Token', 'Token', t);
+    if (row !== -1) sesi = rowToObject_('Session_Token', row);
+  } catch (e) { sesi = null; }
+
+  if (!sesi) throw authError_('Sesi tidak ditemukan. Silakan masuk kembali.');
+  if (String(sesi.Status || '').toUpperCase() !== 'ACTIVE') {
+    throw authError_('Sesi sudah berakhir. Silakan masuk kembali.');
+  }
+
+  var valid = toDateTime_(sesi.Valid_Until);
+  if (valid && valid.getTime() < Date.now()) {
+    try { updateRowByCol_('Session_Token', sesi.__row, { Status: 'EXPIRED' }); } catch (e) { }
+    throw authError_('Sesi sudah kedaluwarsa. Silakan masuk kembali.');
+  }
+
+  var u = cariUser_(sesi.Employee_code);
+  if (!u) throw authError_('Akun tidak ditemukan. Hubungi Human Capital.');
+  if (String(u.Status || 'ACTIVE').toUpperCase() !== 'ACTIVE') throw authError_('Akun Anda tidak aktif.');
+
+  // perpanjang otomatis selama dipakai
+  perpanjangSesi_(sesi);
+
+  return {
+    employee_code: String(u.Employee_code || ''),
+    username: String(u.Username || ''),
+    role: String(u.Role || 'EMP'),
+    nama: String(u.Nama_Lengkap || ''),
+    email: String(u.Email_Perusahaan || ''),
+    user: u,
+    sesi: sesi
+  };
+}
+
+function authError_(msg) {
+  var e = new Error(msg || 'Sesi tidak valid. Silakan masuk kembali.');
+  e.code = 'AUTH';
+  return e;
+}
+
+/** Validasi token + batasi role. */
+function requireRole_(token, roles) {
+  var auth = requireAuth_(token);
+  if (roles && roles.length && roles.indexOf(auth.role) === -1) {
+    var e = new Error('Anda tidak punya hak akses untuk tindakan ini.');
+    e.code = 'FORBIDDEN';
+    throw e;
+  }
+  return auth;
+}
+
+/** HC & Super Admin. */
+function requireHc_(token) { return requireRole_(token, ['HC', 'SA']); }
+
+function apiGetSession(token) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    return {
+      user: userPublic_(auth.user),
+      role: auth.role,
+      valid_until: auth.sesi.Valid_Until,
+      must_change_password: String(auth.user.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE'
+    };
+  });
+}
+
+function apiLogout(token) {
+  return apiGuard_(function () {
+    var t = String(token || '').trim();
+    if (!t) return { ok: true, dihentikan: 0 };
+    var row = findRowByCol_('Session_Token', 'Token', t);
+    if (row === -1) return { ok: true, dihentikan: 0 };
+    var sesi = rowToObject_('Session_Token', row);
+    var n = cabutSemuaSesi_(String(sesi.Employee_code), null);
+    logAudit_(sesi.Employee_code, sesi.Username, sesi.Role, 'LOGOUT', 'USER', sesi.Employee_code,
+      'sesi dihentikan: ' + n);
+    return { ok: true, dihentikan: n };
+  });
+}
+
+/**
+ * Batalkan sesi aktif.
+ * @param {string} employeeCode kosong ('') = SELURUH user
+ * @param {string=} kecualiToken token yang dipertahankan
+ * @return {number} jumlah sesi yang dihentikan
+ */
+function cabutSemuaSesi_(employeeCode, kecualiToken) {
+  var semua = [];
+  try { semua = sheetToObjects_('Session_Token'); } catch (e) { return 0; }
+  var n = 0;
+  var semuaUser = !employeeCode;
+  semua.forEach(function (s) {
+    if (!semuaUser && String(s.Employee_code) !== String(employeeCode)) return;
+    if (kecualiToken && String(s.Token) === String(kecualiToken)) return;
+    if (String(s.Status).toUpperCase() !== 'ACTIVE') return;
+    try { updateRowByCol_('Session_Token', s.__row, { Status: 'REVOKED', Invalidated_At: nowStr_() }); n++; } catch (e) { }
+  });
+  return n;
+}
+
+/**
+ * Rapikan sheet Session_Token: tandai yang kedaluwarsa dan hapus baris yang
+ * sudah lama tidak dipakai. Dipanggil kickstarter + menu spreadsheet.
+ */
+function bersihkanSesiLama_() {
+  var sh = getSheet_('Session_Token');
+  if (!sh || sh.getLastRow() < 2) return { ok: true, kedaluwarsa: 0, dihapus: 0 };
+
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  var iStatus = header.indexOf('Status');
+  var iValid = header.indexOf('Valid_Until');
+  var iCreated = header.indexOf('Created_At');
+  if (iStatus === -1 || iValid === -1) return { ok: true, kedaluwarsa: 0, dihapus: 0 };
+
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  var kedaluwarsa = 0;
+  var simpan = [];
+  var batasHapus = Date.now() - (30 * 86400000); // 30 hari
+
+  for (var r = 0; r < vals.length; r++) {
+    var status = String(vals[r][iStatus] || '').toUpperCase();
+    var valid = toDateTime_(vals[r][iValid]);
+    var dibuat = toDateTime_(vals[r][iCreated]);
+
+    if (status === 'ACTIVE' && valid && valid.getTime() < Date.now()) {
+      vals[r][iStatus] = 'EXPIRED';
+      status = 'EXPIRED';
+      kedaluwarsa++;
+    }
+    if (status !== 'ACTIVE' && dibuat && dibuat.getTime() < batasHapus) continue; // dibuang
+    simpan.push(vals[r]);
+  }
+
+  var dihapus = vals.length - simpan.length;
+  if (simpan.length !== vals.length) {
+    sh.getRange(2, 1, vals.length, vals[0].length).clearContent();
+    if (simpan.length) sh.getRange(2, 1, simpan.length, simpan[0].length).setValues(simpan);
+  } else if (kedaluwarsa) {
+    sh.getRange(2, 1, vals.length, vals[0].length).setValues(vals);
+  }
+  return { ok: true, kedaluwarsa: kedaluwarsa, dihapus: dihapus };
+}
+
+// ============================================================================
+// 4. USERNAME & PASSWORD
+// ============================================================================
+
+function apiChangeUsername(token, usernameBaru, passwordSaatIni) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var baru = slugUsername_(usernameBaru);
+    if (!baru || baru.length < 3) throw new Error('Username minimal 3 karakter (huruf, angka, titik, garis bawah).');
+    if (baru.length > 40) throw new Error('Username maksimal 40 karakter.');
+
+    // Password hanya diperiksa bila user memang memilikinya.
+    if (String(auth.user.Password || '').trim() !== '') {
+      if (!passwordCocok_(passwordSaatIni, auth.user.Password)) throw new Error('Password saat ini salah.');
+    }
+
+    var dipakai = cariUserByUsername_(baru);
+    if (dipakai && String(dipakai.Employee_code) !== String(auth.employee_code)) {
+      throw new Error('Username "' + baru + '" sudah dipakai. Pilih yang lain.');
+    }
+
+    var lama = String(auth.user.Username || '');
+    updateRowByCol_('Master_User', auth.user.__row, { Username: baru, Updated_At: nowStr_() });
+    try {
+      if (auth.sesi && auth.sesi.__row) updateRowByCol_('Session_Token', auth.sesi.__row, { Username: baru });
+    } catch (e) { }
+    logAudit_(auth.employee_code, baru, auth.role, 'GANTI_USERNAME', 'USER', auth.employee_code,
+      lama + ' -> ' + baru);
+
+    return { user: userPublic_(cariUser_(auth.employee_code)), username_lama: lama, username_baru: baru };
+  });
+}
+
+/**
+ * Atur / ubah / hapus password.
+ * Password SIFATNYA OPSIONAL: bila dikosongkan, login cukup dengan Employee Code.
+ * @param {string} passwordLama password sekarang (wajib bila sudah ada)
+ * @param {string} passwordBaru kosong = hapus password (login cukup Employee Code)
+ * @param {string} konfirmasi
+ */
+function apiChangePassword(token, passwordLama, passwordBaru, konfirmasi) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var baru = String(passwordBaru === null || passwordBaru === undefined ? '' : passwordBaru);
+
+    if (String(auth.user.Password || '').trim() !== '') {
+      if (!passwordCocok_(passwordLama, auth.user.Password)) throw new Error('Password saat ini salah.');
+    }
+
+    // kosong = hapus password
+    if (!baru) {
+      updateRowByCol_('Master_User', auth.user.__row, {
+        Password: '',
+        Must_Change_Password: 'FALSE',
+        Updated_At: nowStr_()
+      });
+      logAudit_(auth.employee_code, auth.username, auth.role, 'HAPUS_PASSWORD', 'USER', auth.employee_code,
+        'login kembali cukup dengan Employee Code');
+      return { ok: true, dihapus: true, sesi_lain_dicabut: 0 };
+    }
+
+    if (baru.length < 6) throw new Error('Password minimal 6 karakter.');
+    if (baru !== String(konfirmasi === null || konfirmasi === undefined ? '' : konfirmasi)) {
+      throw new Error('Konfirmasi password tidak sama.');
+    }
+    if (baru === String(passwordLama || '')) throw new Error('Password baru tidak boleh sama dengan password lama.');
+
+    updateRowByCol_('Master_User', auth.user.__row, {
+      Password: baru,               // disimpan apa adanya (plaintext, tanpa hash)
+      Must_Change_Password: 'FALSE',
+      Updated_At: nowStr_()
+    });
+
+    var dicabut = cabutSemuaSesi_(auth.employee_code, token);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'GANTI_PASSWORD', 'USER', auth.employee_code,
+      'sesi lain dicabut: ' + dicabut);
+    return { ok: true, dihapus: false, sesi_lain_dicabut: dicabut };
+  });
+}
+
+// ============================================================================
+// 5. PEMELIHARAAN SESI
+// ============================================================================
+
+/** Ringkasan sesi untuk halaman diagnosa / pengaturan. */
+function ringkasanSesi_() {
+  var out = { aktif: 0, kedaluwarsa: 0, dicabut: 0, keluar: 0 };
+  try {
+    sheetToObjects_('Session_Token').forEach(function (s) {
+      var st = String(s.Status || '').toUpperCase();
+      if (st === 'ACTIVE') out.aktif++;
+      else if (st === 'EXPIRED') out.kedaluwarsa++;
+      else if (st === 'REVOKED') out.dicabut++;
+      else if (st === 'LOGOUT') out.keluar++;
+    });
+  } catch (e) { }
+  out.login_otomatis = getConfigBool_('auto_login_email', true);
+  out.email_google_terdeteksi = emailAktifGoogle_() || '(tidak tersedia)';
+  out.masa_sesi_jam = getConfigNum_('auth_session_jam', 10);
+  out.wajib_password = getConfigBool_('login_wajib_password', false);
+  return out;
+}
+
+/** Hapus seluruh baris Session_Token (paksa semua orang login ulang). */
+function resetSemuaSesi_() {
+  var sh = getSheet_('Session_Token');
+  if (!sh) return { ok: false, msg: 'Sheet Session_Token tidak ditemukan' };
+  var n = Math.max(sh.getLastRow() - 1, 0);
+  if (n > 0) sh.getRange(2, 1, n, sh.getLastColumn()).clearContent();
+  alertOrLog_('Seluruh sesi dihapus (' + n + ' baris). Semua pengguna harus masuk kembali.');
+  return { ok: true, dihapus: n };
+}

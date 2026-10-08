@@ -2,7 +2,14 @@
   ============================================================================
   SIAGA SERTIFIKASI — Login.html
   Halaman masuk. Dimuat oleh SIAGA.tampilkanLogin() lewat getView('Login').
-  Kredensial: Username = nama depan, Password = Employee Code.
+
+  CARA MASUK: cukup EMPLOYEE CODE (contoh: 4122196-C).
+  Tidak ada hashing dan tidak ada salt — bila password memang diwajibkan
+  (Config login_wajib_password = TRUE atau user mengisi passwordnya), server
+  akan meminta password pada langkah kedua dan mencocokkannya langsung.
+
+  Login otomatis: bila email akun Google pengguna sudah terdaftar pada
+  Master_User, aplikasi langsung masuk tanpa halaman ini.
   ============================================================================
 -->
 <div class="siaga-login">
@@ -55,35 +62,52 @@
         <div class="gde-card__body" style="padding:2rem">
 
           <h2>Masuk ke akun Anda</h2>
-          <p>Gunakan username dan password yang diberikan Human Capital.</p>
+          <p>Cukup masukkan <b>Employee Code</b> Anda.</p>
+
+          <!-- notifikasi login otomatis (kalau ada) -->
+          <div id="siagaLoginAuto" class="gde-alert gde-alert--info gde-u-hide" style="margin-bottom:1rem">
+            <i class="bi bi-stars gde-alert__icon"></i>
+            <div class="gde-alert__body">
+              <strong>Masuk otomatis</strong>
+              <span id="siagaLoginAutoMsg"></span>
+            </div>
+          </div>
 
           <div id="siagaLoginAlert" class="gde-alert gde-alert--danger gde-u-hide" style="margin-bottom:1rem">
             <i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>
-            <div class="gde-alert__body"><strong>Gagal masuk</strong><span id="siagaLoginAlertMsg"></span></div>
+            <div class="gde-alert__body"><strong>Tidak dapat masuk</strong><span id="siagaLoginAlertMsg"></span></div>
           </div>
 
           <form id="siagaLoginForm" autocomplete="on" novalidate>
+
+            <!-- ================= LANGKAH 1: EMPLOYEE CODE ================= -->
             <div style="margin-bottom:1rem">
-              <label class="gde-label" for="siagaLoginUsername">
-                Username <span class="gde-req">*</span>
+              <label class="gde-label" for="siagaLoginKode">
+                Employee Code <span class="gde-req">*</span>
               </label>
-              <input class="gde-input" type="text" id="siagaLoginUsername" name="username"
-                     placeholder="contoh: adiasa" autocomplete="username"
-                     autocapitalize="none" spellcheck="false" required>
-              <div class="gde-hint">Username adalah <b>nama depan</b> Anda (huruf kecil).</div>
+              <input class="gde-input" type="text" id="siagaLoginKode" name="kode"
+                     placeholder="contoh: 4122196-C" autocomplete="username"
+                     autocapitalize="characters" spellcheck="false" required
+                     style="font-size:1.05rem;font-weight:600;letter-spacing:.02em">
+              <div class="gde-hint">
+                Ada pada kartu karyawan Anda. Username (nama depan) dan email kantor juga diterima.
+              </div>
             </div>
 
-            <div style="margin-bottom:1.25rem">
+            <!-- ============ LANGKAH 2: PASSWORD (hanya bila diminta) ============ -->
+            <div id="siagaLoginPassWrap" class="gde-u-hide" style="margin-bottom:1rem">
               <label class="gde-label" for="siagaLoginPassword">
                 Password <span class="gde-req">*</span>
               </label>
               <div class="siaga-pass">
                 <input class="gde-input" type="password" id="siagaLoginPassword" name="password"
-                       placeholder="Employee Code" autocomplete="current-password" required>
+                       placeholder="Password Anda" autocomplete="current-password">
                 <button class="siaga-pass__toggle" type="button" id="siagaLoginTogglePass"
                         aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>
               </div>
-              <div class="gde-hint">Password awal Anda adalah <b>Employee Code</b> (contoh: 4122196-C).</div>
+              <div class="gde-hint" id="siagaLoginPassHint">
+                Akun ini memerlukan password. Lupa password? Minta Human Capital melakukan reset.
+              </div>
             </div>
 
             <button class="gde-btn gde-btn--primary gde-btn--block gde-btn--lg" type="submit" id="siagaLoginSubmit">
@@ -91,9 +115,15 @@
             </button>
           </form>
 
+          <div style="margin-top:.9rem;text-align:center">
+            <button class="gde-btn gde-btn--link gde-btn--sm" type="button" id="siagaLoginCobaAuto">
+              <i class="bi bi-arrow-repeat"></i> Coba masuk otomatis lewat akun Google
+            </button>
+          </div>
+
           <div class="siaga-login__hint">
-            <b>Lupa password?</b> Hubungi Human Capital Unit Patuha untuk melakukan reset.
-            Password akan dikembalikan ke Employee Code Anda dan wajib diganti saat login berikutnya.
+            <b>Tidak bisa masuk?</b> Pastikan Employee Code sudah benar. Bila akun terkunci karena
+            percobaan gagal berulang, tunggu 15 menit atau minta Human Capital mereset akun Anda.
           </div>
 
         </div>
@@ -114,31 +144,45 @@ function initLogin(pesanAwal) {
   'use strict';
 
   var form = SIAGA.el('siagaLoginForm');
-  var inputUser = SIAGA.el('siagaLoginUsername');
+  var inputKode = SIAGA.el('siagaLoginKode');
+  var wrapPass = SIAGA.el('siagaLoginPassWrap');
   var inputPass = SIAGA.el('siagaLoginPassword');
   var tombol = SIAGA.el('siagaLoginSubmit');
   var toggle = SIAGA.el('siagaLoginTogglePass');
   var kotakAlert = SIAGA.el('siagaLoginAlert');
   var alertMsg = SIAGA.el('siagaLoginAlertMsg');
+  var kotakAuto = SIAGA.el('siagaLoginAuto');
+  var autoMsg = SIAGA.el('siagaLoginAutoMsg');
+  var tombolAuto = SIAGA.el('siagaLoginCobaAuto');
+  var passDiminta = false;
+  var sedangProses = false;
 
   var tahun = SIAGA.el('siagaLoginTahun');
   if (tahun) tahun.textContent = new Date().getFullYear();
   var versi = SIAGA.el('siagaLoginVersi');
   if (versi) versi.textContent = SIAGA.APP.version;
 
+  /* ---------------- pesan ---------------- */
   function tampilkanGalat(pesan) {
     if (!kotakAlert) { SIAGA.gagal(pesan); return; }
     alertMsg.textContent = pesan;
     kotakAlert.classList.remove('gde-u-hide');
   }
-
   function sembunyikanGalat() {
     if (kotakAlert) kotakAlert.classList.add('gde-u-hide');
   }
+  function tampilkanInfoAuto(pesan) {
+    if (!kotakAuto || !pesan) return;
+    autoMsg.textContent = pesan;
+    kotakAuto.classList.remove('gde-u-hide');
+  }
 
   if (pesanAwal) tampilkanGalat(pesanAwal);
-  setTimeout(function () { try { inputUser.focus(); } catch (e) { } }, 120);
+  if (SIAGA.state.autoLoginInfo) tampilkanInfoAuto(SIAGA.state.autoLoginInfo);
 
+  setTimeout(function () { try { inputKode.focus(); } catch (e) { } }, 120);
+
+  /* ---------------- tombol mata ---------------- */
   if (toggle) {
     toggle.addEventListener('click', function () {
       var lihat = inputPass.type === 'password';
@@ -148,46 +192,93 @@ function initLogin(pesanAwal) {
     });
   }
 
-  if (form) {
-    form.addEventListener('submit', function (e) {
-      e.preventDefault();
-      sembunyikanGalat();
-      SIAGA.bersihkanInvalid(form);
+  /* ---------------- tampilkan kolom password ---------------- */
+  function mintaPassword(pesan) {
+    passDiminta = true;
+    wrapPass.classList.remove('gde-u-hide');
+    if (pesan) {
+      var hint = SIAGA.el('siagaLoginPassHint');
+      if (hint) hint.textContent = pesan;
+    }
+    try { inputPass.focus(); } catch (e) { }
+  }
 
-      var username = String(inputUser.value || '').trim();
-      var password = String(inputPass.value || '');
+  /* ---------------- proses masuk ---------------- */
+  function kirim() {
+    sembunyikanGalat();
+    SIAGA.bersihkanInvalid(form);
 
-      if (!username) { SIAGA.tandaiInvalid(inputUser, 'Username wajib diisi.'); return; }
-      if (!password) { SIAGA.tandaiInvalid(inputPass, 'Password wajib diisi.'); return; }
+    var kode = String(inputKode.value || '').trim();
+    var pass = passDiminta ? String(inputPass.value || '') : '';
 
-      SIAGA.tombolSibuk(tombol, true, 'Memeriksa...');
-      SIAGA.login(username, password).then(function (data) {
+    if (!kode) { SIAGA.tandaiInvalid(inputKode, 'Employee Code wajib diisi.'); return; }
+    if (passDiminta && !pass) { SIAGA.tandaiInvalid(inputPass, 'Password wajib diisi.'); return; }
+    if (sedangProses) return;
+    sedangProses = true;
+
+    SIAGA.tombolSibuk(tombol, true, 'Memeriksa...');
+    SIAGA.login(kode, pass).then(function (data) {
+      // ---- server meminta password (langkah kedua) ----
+      if (data && data.butuh_password) {
+        sedangProses = false;
         SIAGA.tombolSibuk(tombol, false);
-        SIAGA.sukses('Selamat datang, ' + ((data.user && data.user.nama_lengkap) || username) + '.', 'Berhasil masuk');
-        return SIAGA.muatMeta().then(function () {
-          SIAGA.renderShell();
-          SIAGA.mulaiRouter();          // mulai router + muat halaman awal
-          SIAGA.perbaruiBadgeNotifikasi();
-          SIAGA.perbaruiBadgeMendesak();
-          if (data.user && data.user.must_change_password) {
-            SIAGA.ingat('Password Anda masih password awal. Segera ganti di menu Username & Password.',
-              'Perhatian keamanan');
-          }
-        });
-      }).catch(function (err) {
-        SIAGA.tombolSibuk(tombol, false);
-        var msg = (err && err.message) ? err.message : 'Tidak dapat masuk. Coba lagi.';
-        tampilkanGalat(msg);
+        mintaPassword((data.pesan || '') + ' — ' + (data.nama_lengkap || kode));
+        return null;
+      }
+
+      // ---- berhasil ----
+      SIAGA.sukses('Selamat datang, ' + ((data.user && data.user.nama_lengkap) || kode) + '.',
+        'Berhasil masuk');
+      return SIAGA.masukKeAplikasi();
+    }).catch(function (err) {
+      sedangProses = false;
+      SIAGA.tombolSibuk(tombol, false);
+      var msg = (err && err.message) ? err.message : 'Tidak dapat masuk. Coba lagi.';
+      tampilkanGalat(msg);
+      if (passDiminta) {
         inputPass.value = '';
         try { inputPass.focus(); } catch (e2) { }
-      });
+      } else {
+        try { inputKode.select(); } catch (e3) { }
+      }
     });
   }
 
-  /* Enter di kolom username pindah ke password */
-  if (inputUser) {
-    inputUser.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter') { e.preventDefault(); try { inputPass.focus(); } catch (x) { } }
+  if (form) {
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      kirim();
+    });
+  }
+
+  /* Enter di kolom kode */
+  if (inputKode) {
+    inputKode.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (passDiminta) { try { inputPass.focus(); } catch (x) { } }
+      else kirim();
+    });
+  }
+
+  /* ---------------- masuk otomatis ---------------- */
+  if (tombolAuto) {
+    tombolAuto.addEventListener('click', function () {
+      sembunyikanGalat();
+      SIAGA.tombolSibuk(tombolAuto, true, 'Memeriksa akun Google...');
+      SIAGA.cobaLoginOtomatis().then(function (berhasil) {
+        SIAGA.tombolSibuk(tombolAuto, false);
+        if (!berhasil) {
+          tampilkanInfoAuto(SIAGA.state.autoLoginInfo
+            || 'Email akun Google Anda belum terdaftar pada Master User. Masukkan Employee Code secara manual.');
+          return;
+        }
+        SIAGA.sukses('Berhasil masuk otomatis.', 'Masuk otomatis');
+        SIAGA.masukKeAplikasi();
+      }).catch(function (e) {
+        SIAGA.tombolSibuk(tombolAuto, false);
+        tampilkanGalat(e.message || 'Login otomatis gagal.');
+      });
     });
   }
 }

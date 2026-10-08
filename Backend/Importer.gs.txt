@@ -1,0 +1,936 @@
+/**
+ * ============================================================================
+ * SIAGA SERTIFIKASI — Importer.gs  (IMPOR DATA & PEMBUAT MASTER USER)
+ * PT Geo Dipa Energi (Persero) — Unit Patuha
+ * ============================================================================
+ *
+ * Berkas ini menyiapkan dua hal:
+ *
+ *   A. IMPOR DATA LAMA  (dari sheet mentah hasil tempel Excel)
+ *      Tempel isi "Rekap Sertifikasi dan Masa Berlaku Patuha.xlsx" ke sebuah
+ *      sheet (default: IMPORT_DATA), lalu jalankan importer. Sekali jalan
+ *      importer akan:
+ *        1. membuat / memperbarui Master_User  -> username = nama depan,
+ *                                                 password = Employee Code penuh
+ *        2. membuat baris Master_File          -> data sertifikasi + Expired_at
+ *        3. menghitung sisa masa berlaku & status
+ *      Kolom header yang dikenali (tidak peka huruf besar/kecil, boleh
+ *      berbeda urutannya):
+ *        Employee No.   / Employee_code  / NIK
+ *        Employee Name  / Nama_Lengkap   / Nama
+ *        Employee Position / Jabatan
+ *        Organization Unit / Divisi
+ *        Work Location  / Lokasi_Kerja
+ *        Sertifikasi    / Nama_Sertifikasi
+ *        Pelaksanaan    / Start_pelaksanaan
+ *        Batas Waktu Perpanjangan / Expired_at
+ *        Penerbit, No. Sertifikat  (opsional)
+ *
+ *   B. PEMBUAT MASTER USER SAJA  (dari Master_File)
+ *      Kalau data sertifikasi sudah terlanjur masuk ke sheet Master_File,
+ *      importer tetap dapat membuatkan akun untuk setiap Employee_id yang
+ *      belum punya akun. Nama diambil dari sheet mentah bila tersedia;
+ *      kalau tidak, nama sementara = Employee Code (dilengkapi HC menyusul).
+ *
+ * ATURAN USERNAME & PASSWORD (sesuai permintaan HC)
+ *   Username = potongan NAMA DEPAN (huruf kecil).
+ *              "Adiasa Dewa Pradipta"  ->  adiasa
+ *              Bila sudah dipakai karyawan lain -> adiasa2, adiasa3, ...
+ *   Password = EMPLOYEE CODE PENUH, disalin apa adanya.
+ *              "4122196-C"             ->  4122196-C
+ *   Tidak ada hash, tidak ada salt. Password hanya dicocokkan langsung.
+ *
+ * IDEMPOTEN: aman dijalankan berulang. Baris yang sudah ada tidak digandakan.
+ * ============================================================================
+ */
+
+var MARKER_IMPORT_ = 'v1.3.0';
+var IMPORT_BUILD_ = 'Importer.gs v1.3.0 — impor data + pembuat Master User';
+
+/** Nama sheet mentah yang diharapkan (bisa diganti saat menjalankan). */
+var IMPORT_SHEET_DEFAULT_ = 'IMPORT_DATA';
+
+/** Gelar/awalan yang dilewati saat mengambil nama depan. */
+var GELAR_DILEWATI_ = [
+  'ir', 'dr', 'drg', 'drs', 'dra', 'h', 'hj', 'prof', 'ust', 'kh',
+  'st', 'se', 'sh', 'mm', 'mt', 'msi', 'mba', 'ssi', 'mkom', 'meng', 'spsi',
+  'a', 'a.md', 'amd', 'ns', 'bd'
+];
+
+/** Nama bulan (Indonesia + Inggris) untuk membaca teks pelaksanaan. */
+var BULAN_PETA_ = {
+  jan: 1, januari: 1, january: 1,
+  feb: 2, peb: 2, februari: 2, february: 2,
+  mar: 3, maret: 3, march: 3,
+  apr: 4, april: 4,
+  mei: 5, may: 5,
+  jun: 6, juni: 6, june: 6,
+  jul: 7, juli: 7, july: 7,
+  agu: 8, agt: 8, agustus: 8, aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  okt: 10, oktob: 10, oktober: 10, oct: 10, october: 10,
+  nov: 11, november: 11,
+  des: 12, des: 12, desember: 12, dec: 12, december: 12
+};
+
+// ============================================================================
+// 1. USERNAME DARI NAMA DEPAN
+// ============================================================================
+
+/**
+ * Buang gelar di depan nama, lalu ambil kata pertama.
+ * @param {string} nama
+ * @return {string} potongan nama depan (huruf kecil, tanpa tanda baca)
+ */
+function namaDepanBersih_(nama) {
+  var s = String(nama === null || nama === undefined ? '' : nama).trim();
+  if (!s) return '';
+
+  // hilangkan gelar di belakang koma: "Budi Santoso, S.T." -> "Budi Santoso"
+  s = s.split(',')[0];
+  // hilangkan tanda baca & gelar dalam kurung
+  s = s.replace(/\([^)]*\)/g, ' ');
+  s = s.replace(/[^A-Za-zÀ-ÿ' ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+  var bagian = s.split(' ').filter(function (x) { return x.length > 0; });
+  while (bagian.length > 1) {
+    var kandidat = bagian[0].toLowerCase().replace(/\./g, '');
+    if (GELAR_DILEWATI_.indexOf(kandidat) === -1) break;
+    bagian.shift();
+  }
+  var depan = bagian.length ? bagian[0] : '';
+  depan = depan.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (depan.length < 2 && bagian.length > 1) depan = (depan + bagian[1].toLowerCase()).replace(/[^a-z0-9]/g, '');
+  return depan;
+}
+
+/**
+ * Buat username unik dari nama depan.
+ * @param {string} nama
+ * @param {Object} terpakai peta username(lowercase) -> employee_code
+ * @param {string} employeeCode
+ * @return {string} username yang belum dipakai
+ */
+function usernameUnik_(nama, terpakai, employeeCode) {
+  var dasar = namaDepanBersih_(nama);
+  if (!dasar || dasar.length < 3) dasar = slugUsername_(employeeCode) || ('user' + String(employeeCode || '').toLowerCase().replace(/[^a-z0-9]/g, ''));
+  if (dasar.length < 3) dasar = 'user';
+
+  var kode = String(employeeCode || '').trim().toLowerCase();
+  var kandidat = dasar;
+  var n = 1;
+  while (terpakai[kandidat] && String(terpakai[kandidat]).toLowerCase() !== kode) {
+    n++;
+    kandidat = dasar + n;
+  }
+  terpakai[kandidat] = employeeCode;
+  return kandidat;
+}
+
+/** Peta username yang sudah dipakai pada Master_User. */
+function petaUsernameTerpakai_() {
+  var peta = {};
+  try {
+    sheetToObjects_('Master_User').forEach(function (u) {
+      var un = String(u.Username || '').trim().toLowerCase();
+      if (un) peta[un] = String(u.Employee_code || '');
+    });
+  } catch (e) { }
+  return peta;
+}
+
+// ============================================================================
+// 2. MEMBACA SHEET MENTAH
+// ============================================================================
+
+/** Daftar sheet pada spreadsheet database (untuk pilihan di halaman impor). */
+function daftarSheet_() {
+  var db = getDb_();
+  return db.getSheets().map(function (s) { return s.getName(); });
+}
+
+/** Cari indeks kolom dari beberapa kemungkinan nama header. */
+function cariKolom_(header, kemungkinan) {
+  for (var k = 0; k < kemungkinan.length; k++) {
+    var cari = String(kemungkinan[k]).toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (var i = 0; i < header.length; i++) {
+      var h = String(header[i]).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (h === cari) return i;
+    }
+  }
+  // pencocokan longgar (mengandung)
+  for (var k2 = 0; k2 < kemungkinan.length; k2++) {
+    var cari2 = String(kemungkinan[k2]).toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (cari2.length < 4) continue;
+    for (var j = 0; j < header.length; j++) {
+      var h2 = String(header[j]).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (h2 && h2.indexOf(cari2) !== -1) return j;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Baca sheet mentah dan ubah menjadi baris terstruktur.
+ * @param {string} namaSheet
+ * @return {Object} { ok, header, kolom, rows, error }
+ */
+function bacaSheetImpor_(namaSheet) {
+  var nama = String(namaSheet || IMPORT_SHEET_DEFAULT_).trim();
+  var sh = getSheet_(nama);
+  if (!sh) {
+    throw new Error('Sheet "' + nama + '" tidak ditemukan. Tempel data Excel ke sheet tersebut lebih dulu, '
+      + 'atau pilih sheet lain.');
+  }
+  if (sh.getLastRow() < 2) {
+    throw new Error('Sheet "' + nama + '" masih kosong.');
+  }
+
+  var values = sh.getRange(1, 1, sh.getLastRow(), Math.max(sh.getLastColumn(), 1)).getValues();
+
+  // cari baris header (kadang ada baris judul di atas)
+  var barisHeader = -1;
+  for (var r = 0; r < Math.min(values.length, 10); r++) {
+    var teks = values[r].join(' ').toLowerCase();
+    if (/employee\s*no|employee\s*code|nama|sertifikasi|nik/.test(teks) && teks.replace(/\s/g, '').length > 8) {
+      barisHeader = r;
+      break;
+    }
+  }
+  if (barisHeader === -1) barisHeader = 0;
+
+  var header = values[barisHeader].map(function (h) { return String(h).trim(); });
+  var kolom = {
+    kode: cariKolom_(header, ['Employee No.', 'Employee No', 'Employee_code', 'Employee Code', 'NIK', 'Emp No']),
+    nama: cariKolom_(header, ['Employee Name', 'Nama_Lengkap', 'Nama Lengkap', 'Nama']),
+    jabatan: cariKolom_(header, ['Employee Position', 'Jabatan', 'Posisi']),
+    divisi: cariKolom_(header, ['Organization Unit', 'Divisi', 'Unit', 'Departemen']),
+    lokasi: cariKolom_(header, ['Work Location', 'Lokasi_Kerja', 'Lokasi Kerja', 'Lokasi']),
+    sertifikasi: cariKolom_(header, ['Sertifikasi', 'Nama_Sertifikasi', 'Nama Sertifikasi']),
+    pelaksanaan: cariKolom_(header, ['Pelaksanaan', 'Start_pelaksanaan', 'Tanggal Pelaksanaan']),
+    expired: cariKolom_(header, ['Batas Waktu Perpanjangan', 'Expired_at', 'Berlaku Sampai', 'Kedaluwarsa']),
+    penerbit: cariKolom_(header, ['Penerbit']),
+    noSertifikat: cariKolom_(header, ['No. Sertifikat', 'No Sertifikat', 'Nomor Sertifikat'])
+  };
+
+  if (kolom.kode === -1) {
+    throw new Error('Kolom Employee No. tidak ditemukan pada sheet "' + nama + '". '
+      + 'Pastikan baris header berisi "Employee No." atau "Employee_code".');
+  }
+
+  var rows = [];
+  for (var i = barisHeader + 1; i < values.length; i++) {
+    var v = values[i];
+    var kode = String(v[kolom.kode] === null || v[kolom.kode] === undefined ? '' : v[kolom.kode]).trim();
+    var nama = kolom.nama === -1 ? '' : String(v[kolom.nama] || '').trim();
+    if (!kode && !nama) continue;
+    rows.push({
+      baris: i + 1,
+      employee_code: kode,
+      nama_lengkap: nama,
+      jabatan: kolom.jabatan === -1 ? '' : String(v[kolom.jabatan] || '').trim(),
+      divisi: kolom.divisi === -1 ? '' : String(v[kolom.divisi] || '').trim(),
+      lokasi: kolom.lokasi === -1 ? '' : String(v[kolom.lokasi] || '').trim(),
+      sertifikasi: kolom.sertifikasi === -1 ? '' : String(v[kolom.sertifikasi] || '').trim(),
+      pelaksanaan_raw: kolom.pelaksanaan === -1 ? '' : v[kolom.pelaksanaan],
+      expired_raw: kolom.expired === -1 ? '' : v[kolom.expired],
+      penerbit: kolom.penerbit === -1 ? '' : String(v[kolom.penerbit] || '').trim(),
+      no_sertifikat: kolom.noSertifikat === -1 ? '' : String(v[kolom.noSertifikat] || '').trim()
+    });
+  }
+
+  return { ok: true, sheet: nama, baris_header: barisHeader + 1, kolom: kolom, rows: rows };
+}
+
+// ============================================================================
+// 3. MEMBACA TEKS PELAKSANAAN
+// ============================================================================
+
+/**
+ * Tebak tanggal mulai & selesai dari teks bebas kolom Pelaksanaan.
+ * Contoh yang ditangani: "20 - 21, 24 Februari 2023", "Sept'13", "Mei 2015",
+ * "28 Sept–3 Okt'15", "'5-8 November 2018", "7-19, 21-23 Maret", Date object.
+ * @return {Object} { mulai, selesai, tahun }
+ */
+function parsePelaksanaan_(nilai) {
+  var kosong = { mulai: null, selesai: null, tahun: null };
+  if (nilai === null || nilai === undefined || nilai === '') return kosong;
+  if (nilai instanceof Date) {
+    var d = toDate_(nilai);
+    return { mulai: d, selesai: d, tahun: d ? d.getFullYear() : null };
+  }
+
+  var s = String(nilai);
+  s = s.replace(/pelaksanaan/ig, ' ')
+    .replace(/[\u2013\u2014\u2012\u2015]/g, '-')   // en/em dash -> minus
+    .replace(/[’‘`]/g, "'")
+    .replace(/^[\s'"]+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!s) return kosong;
+
+  // ---------- tahun ----------
+  var tahun = null;
+  var m4 = s.match(/(19|20)\d{2}/);
+  if (m4) tahun = parseInt(m4[0], 10);
+  else {
+    var m2 = s.match(/'(\d{2})\b/);
+    if (m2) tahun = 2000 + parseInt(m2[1], 10);
+  }
+
+  // ---------- bulan ----------
+  var bulan = null;
+  var kata = s.toLowerCase().split(/[^a-z]+/);
+  for (var i = 0; i < kata.length; i++) {
+    var k = kata[i];
+    if (!k || k.length < 3) continue;
+    if (BULAN_PETA_[k]) { bulan = BULAN_PETA_[k]; break; }
+    // cocokkan awalan 3-4 huruf (mis. "agust" -> agustus, "sept" -> september)
+    var potong = k.substring(0, 4);
+    if (BULAN_PETA_[potong]) { bulan = BULAN_PETA_[potong]; break; }
+    var potong3 = k.substring(0, 3);
+    if (BULAN_PETA_[potong3]) { bulan = BULAN_PETA_[potong3]; break; }
+  }
+
+  // ---------- hari ----------
+  var hariArr = [];
+  var reHari = /(?:^|[^\d])(\d{1,2})(?![\d])/g;
+  var mh;
+  var batas = tahun ? String(tahun) : '';
+  while ((mh = reHari.exec(s)) !== null) {
+    var angka = mh[1];
+    if (batas && (batas === angka || batas.indexOf(angka) === 0)) continue;   // jangan ambil bagian tahun
+    var n = parseInt(angka, 10);
+    if (n >= 1 && n <= 31) hariArr.push(n);
+  }
+
+  if (!bulan || hariArr.length === 0) {
+    // paling tidak kita tahu tahunnya + bulan
+    if (tahun && bulan) {
+      var awal = new Date(tahun, bulan - 1, 1);
+      var akhir = new Date(tahun, bulan, 0);
+      return { mulai: awal, selesai: akhir, tahun: tahun };
+    }
+    if (tahun) {
+      var a2 = new Date(tahun, 0, 1);
+      var a3 = new Date(tahun, 11, 31);
+      return { mulai: a2, selesai: a3, tahun: tahun };
+    }
+    return { mulai: null, selesai: null, tahun: tahun };
+  }
+
+  var tahunPakai = tahun || new Date().getFullYear();
+  var hariMin = Math.min.apply(null, hariArr);
+  var hariMax = Math.max.apply(null, hariArr);
+
+  function buatTanggal(y, m, d) {
+    var hariTerakhir = new Date(y, m, 0).getDate();
+    return new Date(y, m - 1, Math.min(d, hariTerakhir));
+  }
+
+  return {
+    mulai: buatTanggal(tahunPakai, bulan, hariMin),
+    selesai: buatTanggal(tahunPakai, bulan, hariMax),
+    tahun: tahunPakai
+  };
+}
+
+// ============================================================================
+// 4. PRATINJAU IMPOR (tanpa mengubah apa pun)
+// ============================================================================
+
+/**
+ * Ringkas apa yang AKAN terjadi bila impor dijalankan.
+ * @param {string} namaSheet
+ * @return {Object} ringkasan
+ */
+function pratinjauImporDariSheet_(namaSheet) {
+  var baca = bacaSheetImpor_(namaSheet);
+  var rows = baca.rows;
+
+  var petaUser = {};
+  sheetToObjects_('Master_User').forEach(function (u) {
+    var k = String(u.Employee_code || '').trim().toLowerCase();
+    if (k) petaUser[k] = u;
+  });
+
+  var terpakai = petaUsernameTerpakai_();
+  var pekerja = {};
+  var tanpaKode = [];
+  var duplikat = 0;
+  var sertifikat = 0;
+  var kodeSertifikat = {};
+
+  // data sertifikasi yang sudah ada -> deteksi duplikat
+  sheetToObjects_('Master_File').forEach(function (f) {
+    var kunci = String(f.Employee_id || '').trim().toLowerCase() + '|'
+      + String(f.Nama_Sertifikasi || '').trim().toLowerCase() + '|'
+      + fmtDate_(f.Expired_at, 'yyyy-MM-dd');
+    kodeSertifikat[kunci] = true;
+  });
+
+  var contoh = [];
+
+  rows.forEach(function (r) {
+    if (!r.employee_code) {
+      if (tanpaKode.length < 10) tanpaKode.push('baris ' + r.baris + ' (' + (r.nama_lengkap || 'tanpa nama') + ')');
+      return;
+    }
+    var kodeLower = r.employee_code.toLowerCase();
+
+    if (!pekerja[kodeLower]) {
+      var u = petaUser[kodeLower];
+      pekerja[kodeLower] = {
+        employee_code: r.employee_code,
+        nama_lengkap: r.nama_lengkap || (u ? String(u.Nama_Lengkap || '') : ''),
+        jabatan: r.jabatan || (u ? String(u.Jabatan || '') : ''),
+        divisi: r.divisi || (u ? String(u.Divisi || '') : ''),
+        lokasi: r.lokasi || (u ? String(u.Lokasi_Kerja || '') : ''),
+        sudah_ada: !!u,
+        username: u ? String(u.Username || '') : '',
+        username_baru: ''
+      };
+    } else {
+      var p = pekerja[kodeLower];
+      if (!p.nama_lengkap && r.nama_lengkap) p.nama_lengkap = r.nama_lengkap;
+      if (!p.jabatan && r.jabatan) p.jabatan = r.jabatan;
+      if (!p.divisi && r.divisi) p.divisi = r.divisi;
+      if (!p.lokasi && r.lokasi) p.lokasi = r.lokasi;
+    }
+
+    if (!r.sertifikasi) return;
+    var kunci = kodeLower + '|' + r.sertifikasi.toLowerCase() + '|' + fmtDate_(r.expired_raw, 'yyyy-MM-dd');
+    if (kodeSertifikat[kunci]) { duplikat++; return; }
+    kodeSertifikat[kunci] = true;
+    sertifikat++;
+    if (contoh.length < 8) {
+      contoh.push({
+        employee_code: r.employee_code,
+        nama_lengkap: r.nama_lengkap,
+        sertifikasi: r.sertifikasi,
+        expired_at: fmtDate_(r.expired_raw, 'yyyy-MM-dd'),
+        pelaksanaan: String(r.pelaksanaan_raw || '')
+      });
+    }
+  });
+
+  // usulkan username (deterministik: urut Employee Code)
+  var kodeUrut = Object.keys(pekerja).sort();
+  var pekerjaBaru = 0, pekerjaUpdate = 0;
+  var contohUser = [];
+  kodeUrut.forEach(function (k) {
+    var p = pekerja[k];
+    if (p.sudah_ada) {
+      pekerjaUpdate++;
+      p.username_baru = p.username;
+    } else {
+      pekerjaBaru++;
+      p.username_baru = usernameUnik_(p.nama_lengkap || p.employee_code, terpakai, p.employee_code);
+    }
+    if (contohUser.length < 8 && !p.sudah_ada) {
+      contohUser.push({
+        employee_code: p.employee_code,
+        nama_lengkap: p.nama_lengkap || p.employee_code,
+        username: p.username_baru,
+        password: p.employee_code
+      });
+    }
+  });
+
+  return {
+    sheet: baca.sheet,
+    baris_header: baca.baris_header,
+    total_baris: rows.length,
+    kolom_terdeteksi: baca.kolom,
+    pekerja_total: kodeUrut.length,
+    pekerja_baru: pekerjaBaru,
+    pekerja_update: pekerjaUpdate,
+    sertifikasi_baru: sertifikat,
+    sertifikasi_duplikat: duplikat,
+    tanpa_employee_code: tanpaKode,
+    contoh_sertifikasi: contoh,
+    contoh_user: contohUser,
+    catatan: [
+      'Username = potongan nama depan (huruf kecil), Password = Employee Code penuh.',
+      'Baris yang sudah ada tidak digandakan (aman dijalankan berulang).',
+      'Karyawan tanpa Employee Code dilewati — lengkapi dulu di sheet sumber.'
+    ]
+  };
+}
+
+// ============================================================================
+// 5. JALANKAN IMPOR
+// ============================================================================
+
+/**
+ * Jalankan impor: buat/perbarui Master_User + Master_File.
+ * @param {string} namaSheet nama sheet mentah
+ * @param {Object=} opsi { hanya_user:boolean, perbarui_nama:boolean, maks:number }
+ * @return {Object} hasil
+ */
+function jalankanImporDariSheet_(namaSheet, opsi) {
+  var t0 = new Date();
+  var o = opsi || {};
+  var hanyaUser = !!o.hanya_user;
+  var perbaruiNama = o.perbarui_nama !== false;
+  var maks = Number(o.maks) || 5000;
+
+  var baca = bacaSheetImpor_(namaSheet);
+  var rows = baca.rows.slice(0, maks);
+
+  var hasil = {
+    ok: true,
+    sheet: baca.sheet,
+    total_baris: rows.length,
+    user_baru: 0,
+    user_diperbarui: 0,
+    sertifikasi_baru: 0,
+    sertifikasi_duplikat: 0,
+    dilewati_tanpa_kode: 0,
+    errors: [],
+    contoh_user: [],
+    durasi_ms: 0
+  };
+
+  // ---------- siapkan peta data yang sudah ada ----------
+  var petaUser = {};
+  sheetToObjects_('Master_User').forEach(function (u) {
+    var k = String(u.Employee_code || '').trim().toLowerCase();
+    if (k) petaUser[k] = u;
+  });
+  var terpakai = petaUsernameTerpakai_();
+
+  var kunciFile = {};
+  if (!hanyaUser) {
+    sheetToObjects_('Master_File').forEach(function (f) {
+      kunciFile[String(f.Employee_id || '').trim().toLowerCase() + '|'
+        + String(f.Nama_Sertifikasi || '').trim().toLowerCase() + '|'
+        + fmtDate_(f.Expired_at, 'yyyy-MM-dd')] = true;
+    });
+  }
+
+  // ---------- kelompokkan per karyawan (urut supaya username deterministik) ----------
+  var perKaryawan = {};
+  var urutan = [];
+  rows.forEach(function (r) {
+    var kode = String(r.employee_code || '').trim();
+    if (!kode) {
+      hasil.dilewati_tanpa_kode++;
+      return;
+    }
+    var k = kode.toLowerCase();
+    if (!perKaryawan[k]) {
+      perKaryawan[k] = { kode: kode, nama: '', jabatan: '', divisi: '', lokasi: '', baris: [] };
+      urutan.push(k);
+    }
+    var p = perKaryawan[k];
+    if (!p.nama && r.nama_lengkap) p.nama = r.nama_lengkap;
+    if (!p.jabatan && r.jabatan) p.jabatan = r.jabatan;
+    if (!p.divisi && r.divisi) p.divisi = r.divisi;
+    if (!p.lokasi && r.lokasi) p.lokasi = r.lokasi;
+    p.baris.push(r);
+  });
+  urutan.sort();
+
+  var userBaruId = [];
+
+  // ---------- 1. MASTER USER ----------
+  urutan.forEach(function (k) {
+    var p = perKaryawan[k];
+    var ada = petaUser[k];
+    try {
+      if (!ada) {
+        var username = usernameUnik_(p.nama || p.kode, terpakai, p.kode);
+        appendObject_('Master_User', {
+          Employee_code: p.kode,
+          Nama_Lengkap: p.nama || p.kode,
+          Username: username,
+          Password: p.kode,              // password = Employee Code PENUH (plaintext)
+          Role: 'EMP',
+          Email_Perusahaan: '',
+          Email_Pribadi: '',
+          Nama_Depan: namaDepanBersih_(p.nama || ''),
+          Divisi: p.divisi || '',
+          Jabatan: p.jabatan || '',
+          Lokasi_Kerja: p.lokasi || getConfig_('unit_default') || 'Patuha',
+          No_HP: '',
+          Email_Atasan: '',
+          Status: 'ACTIVE',
+          Must_Change_Password: 'FALSE',
+          Login_Terakhir: '',
+          Gagal_Login: 0,
+          Terkunci_Sampai: '',
+          Created_At: nowStr_(),
+          Updated_At: nowStr_(),
+          Created_By: 'IMPORTER'
+        });
+        hasil.user_baru++;
+        userBaruId.push(p.kode);
+        if (hasil.contoh_user.length < 10) {
+          hasil.contoh_user.push({
+            employee_code: p.kode, nama_lengkap: p.nama || p.kode,
+            username: username, password: p.kode
+          });
+        }
+      } else if (perbaruiNama) {
+        var patch = {};
+        if (p.nama && String(ada.Nama_Lengkap || '').trim() !== p.nama) patch.Nama_Lengkap = p.nama;
+        if (p.jabatan && String(ada.Jabatan || '').trim() !== p.jabatan) patch.Jabatan = p.jabatan;
+        if (p.divisi && String(ada.Divisi || '').trim() !== p.divisi) patch.Divisi = p.divisi;
+        if (p.lokasi && String(ada.Lokasi_Kerja || '').trim() !== p.lokasi) patch.Lokasi_Kerja = p.lokasi;
+        if (patch.Nama_Lengkap) patch.Nama_Depan = namaDepanBersih_(p.nama);
+        // lengkapi password bila masih kosong supaya aturannya seragam
+        if (String(ada.Password || '').trim() === '') patch.Password = p.kode;
+        if (Object.keys(patch).length) {
+          patch.Updated_At = nowStr_();
+          updateRowByCol_('Master_User', ada.__row, patch);
+          hasil.user_diperbarui++;
+        }
+      }
+    } catch (e) {
+      hasil.errors.push('User ' + p.kode + ': ' + errMsg_(e));
+    }
+  });
+
+  // ---------- 2. MASTER FILE ----------
+  if (!hanyaUser) {
+    var sekarang = todayDate_();
+    urutan.forEach(function (k) {
+      var p = perKaryawan[k];
+      p.baris.forEach(function (r) {
+        if (!r.sertifikasi) return;
+        try {
+          var kunci = k.toLowerCase() + '|' + r.sertifikasi.toLowerCase() + '|'
+            + fmtDate_(r.expired_raw, 'yyyy-MM-dd');
+          if (kunciFile[kunci]) { hasil.sertifikasi_duplikat++; return; }
+
+          var pel = parsePelaksanaan_(r.pelaksanaan_raw);
+          var expired = toDate_(r.expired_raw);
+          if (!expired && pel.selesai) {
+            expired = deriveExpiredAt_(pel.selesai, masaBerlakuDariNama_(r.sertifikasi));
+          }
+          if (!expired) {
+            hasil.errors.push('Baris ' + r.baris + ' (' + r.sertifikasi + '): tanggal kedaluwarsa tidak terbaca — dilewati.');
+            return;
+          }
+
+          var akhir = pel.selesai || toDate_(r.expired_raw) || sekarang;
+          var mulai = pel.mulai || akhir;
+          var masa = 0;
+          if (akhir && expired) {
+            masa = Math.round(diffDays_(expired, akhir) / 30);
+          }
+          if (!masa || masa < 1) masa = masaBerlakuDariNama_(r.sertifikasi);
+
+          var hit = hitungMasaBerlaku_(expired, sekarang);
+
+          appendObject_('Master_File', {
+            Doc_id: buatDocId_(),
+            Employee_id: p.kode,
+            Nama_Sertifikasi: r.sertifikasi,
+            Start_pelaksanaan: fmtDate_(mulai, 'yyyy-MM-dd'),
+            End_pelaksanaan: fmtDate_(akhir, 'yyyy-MM-dd'),
+            Tanggal_sertifikasi: '',
+            Tanggal_waktu_perpanjangan: '',
+            Expired_at: fmtDate_(expired, 'yyyy-MM-dd'),
+            Sisa_masa_berlaku_day: hit.sisa_hari,
+            Sisa_masa_berlaku_by_month: hit.sisa_bulan,
+            Status: hit.status,
+            Link_file: '',
+            File_id: '',
+            File_name: '',
+            Mime_type: '',
+            Ukuran_file: 0,
+            Masa_berlaku_bulan: masa,
+            Kategori: kategoriDariNama_(r.sertifikasi),
+            Penerbit: r.penerbit || '',
+            No_sertifikat: r.no_sertifikat || '',
+            Status_Verifikasi: 'VERIFIED',
+            Catatan: 'Diimpor dari sheet ' + baca.sheet + ' baris ' + r.baris,
+            Verified_By: 'IMPORTER',
+            Verified_At: nowStr_(),
+            Created_At: nowStr_(),
+            Updated_At: nowStr_(),
+            Created_By: 'IMPORTER'
+          });
+          kunciFile[kunci] = true;
+          hasil.sertifikasi_baru++;
+        } catch (e2) {
+          hasil.errors.push('Baris ' + r.baris + ': ' + errMsg_(e2));
+        }
+      });
+    });
+
+    try { updateJumlahPemegang_(); } catch (e3) { }
+  }
+
+  hasil.durasi_ms = (new Date()).getTime() - t0.getTime();
+  hasil.ok = hasil.errors.length === 0;
+
+  logAudit_('IMPORTER', 'importer', 'SA', 'IMPOR_DATA', 'IMPORT', baca.sheet,
+    'user baru ' + hasil.user_baru + ', user diperbarui ' + hasil.user_diperbarui
+    + ', sertifikasi baru ' + hasil.sertifikasi_baru
+    + ', duplikat ' + hasil.sertifikasi_duplikat
+    + ', tanpa kode ' + hasil.dilewati_tanpa_kode
+    + ', error ' + hasil.errors.length);
+
+  return hasil;
+}
+
+// ============================================================================
+// 6. PEMBUAT MASTER USER DARI MASTER_FILE
+// ============================================================================
+
+/**
+ * Buat akun untuk setiap Employee_id pada Master_File yang belum punya akun.
+ * Nama diambil dari sheet mentah bila disediakan (opsional), kalau tidak
+ * nama sementara = Employee Code sampai HC melengkapinya.
+ * @param {Object=} opsi { sheet_nama:string, perbarui_nama:boolean }
+ */
+function buatMasterUserDariSertifikasi_(opsi) {
+  var o = opsi || {};
+  var hasil = {
+    ok: true, dibuat: 0, dilewati: 0, dilengkapi: 0,
+    daftar: [], errors: []
+  };
+
+  // ---------- peta nama dari sheet mentah (bila ada) ----------
+  var petaNama = {};
+  var namaSheet = String(o.sheet_nama || IMPORT_SHEET_DEFAULT_).trim();
+  try {
+    if (getSheet_(namaSheet)) {
+      bacaSheetImpor_(namaSheet).rows.forEach(function (r) {
+        var k = String(r.employee_code || '').trim().toLowerCase();
+        if (!k) return;
+        if (!petaNama[k] || (!petaNama[k].nama && r.nama_lengkap)) {
+          petaNama[k] = {
+            nama: r.nama_lengkap || (petaNama[k] ? petaNama[k].nama : ''),
+            jabatan: r.jabatan || (petaNama[k] ? petaNama[k].jabatan : ''),
+            divisi: r.divisi || (petaNama[k] ? petaNama[k].divisi : ''),
+            lokasi: r.lokasi || (petaNama[k] ? petaNama[k].lokasi : '')
+          };
+        }
+      });
+    }
+  } catch (e) { /* sheet mentah tidak ada: lanjut tanpa nama */ }
+
+  var adaUser = {};
+  sheetToObjects_('Master_User').forEach(function (u) {
+    adaUser[String(u.Employee_code || '').trim().toLowerCase()] = u;
+  });
+  var terpakai = petaUsernameTerpakai_();
+
+  var kodeUnik = uniq_(sheetToObjects_('Master_File').map(function (f) {
+    return String(f.Employee_id || '').trim();
+  }).filter(function (x) { return x; })).sort();
+
+  kodeUnik.forEach(function (kode) {
+    var k = kode.toLowerCase();
+    var info = petaNama[k] || {};
+    var nama = info.nama || kode;
+
+    try {
+      if (adaUser[k]) {
+        // lengkapi nama bila masih sama dengan Employee Code
+        var u = adaUser[k];
+        if (o.perbarui_nama !== false && info.nama && String(u.Nama_Lengkap || '').trim() !== info.nama) {
+          var patch = { Nama_Lengkap: info.nama, Nama_Depan: namaDepanBersih_(info.nama), Updated_At: nowStr_() };
+          if (info.jabatan) patch.Jabatan = info.jabatan;
+          if (info.divisi) patch.Divisi = info.divisi;
+          if (info.lokasi) patch.Lokasi_Kerja = info.lokasi;
+          updateRowByCol_('Master_User', u.__row, patch);
+          hasil.dilengkapi++;
+        } else {
+          hasil.dilewati++;
+        }
+        return;
+      }
+
+      var username = usernameUnik_(nama, terpakai, kode);
+      appendObject_('Master_User', {
+        Employee_code: kode,
+        Nama_Lengkap: nama,
+        Username: username,
+        Password: kode,               // password = Employee Code PENUH
+        Role: 'EMP',
+        Email_Perusahaan: '',
+        Email_Pribadi: '',
+        Nama_Depan: namaDepanBersih_(nama),
+        Divisi: info.divisi || '',
+        Jabatan: info.jabatan || '',
+        Lokasi_Kerja: info.lokasi || getConfig_('unit_default') || 'Patuha',
+        No_HP: '',
+        Email_Atasan: '',
+        Status: 'ACTIVE',
+        Must_Change_Password: 'FALSE',
+        Login_Terakhir: '',
+        Gagal_Login: 0,
+        Terkunci_Sampai: '',
+        Created_At: nowStr_(),
+        Updated_At: nowStr_(),
+        Created_By: 'IMPORTER'
+      });
+      adaUser[k] = { Employee_code: kode };
+      hasil.dibuat++;
+      hasil.daftar.push(kode + ' -> ' + username + ' / ' + kode);
+    } catch (e) {
+      hasil.errors.push(kode + ': ' + errMsg_(e));
+    }
+  });
+
+  hasil.ok = hasil.errors.length === 0;
+  logAudit_('IMPORTER', 'importer', 'SA', 'BUAT_USER_DARI_SERTIFIKASI', 'USER', '-',
+    'dibuat ' + hasil.dibuat + ', dilewati ' + hasil.dilewati + ', dilengkapi ' + hasil.dilengkapi);
+  return hasil;
+}
+
+/**
+ * Perbaiki Username & Password SELURUH user agar mengikuti aturan:
+ * username = nama depan, password = Employee Code penuh.
+ * @param {Object=} opsi { paksa_username:boolean }
+ */
+function rapikanUsernamePassword_(opsi) {
+  var o = opsi || {};
+  var paksa = !!o.paksa_username;
+  var rows = sheetToObjects_('Master_User');
+  var terpakai = {};
+  var diubahUser = 0, diubahPass = 0;
+
+  // urutkan supaya penomoran username deterministik
+  rows.sort(function (a, b) {
+    return String(a.Employee_code || '').localeCompare(String(b.Employee_code || ''));
+  });
+
+  rows.forEach(function (u) {
+    var kode = String(u.Employee_code || '').trim();
+    if (!kode) return;
+    var patch = {};
+    var usernameSekarang = String(u.Username || '').trim().toLowerCase();
+    var usulan = namaDepanBersih_(u.Nama_Lengkap || '') || slugUsername_(kode);
+
+    // kalau username sudah dipakai baris lain, biarkan (akan dinomori)
+    var bentrok = terpakai[usernameSekarang] && String(terpakai[usernameSekarang]) !== kode;
+    if (paksa || !usernameSekarang || bentrok || String(u.Role) === 'EMP') {
+      var baru = usernameUnik_(u.Nama_Lengkap || kode, terpakai, kode);
+      // pertahankan username buatan sendiri hanya bila tidak dipaksa dan bukan bawaan
+      if (paksa || !usernameSekarang || bentrok) {
+        if (baru !== usernameSekarang) { patch.Username = baru; diubahUser++; }
+      } else {
+        terpakai[usernameSekarang] = kode;   // tandai terpakai
+      }
+    } else {
+      terpakai[usernameSekarang] = kode;
+    }
+
+    if (String(u.Password || '').trim() !== kode) {
+      patch.Password = kode;
+      diubahPass++;
+    }
+
+    if (Object.keys(patch).length) {
+      patch.Updated_At = nowStr_();
+      try { updateRowByCol_('Master_User', u.__row, patch); } catch (e) { }
+    }
+  });
+
+  logAudit_('IMPORTER', 'importer', 'SA', 'RAPIKAN_USERNAME_PASSWORD', 'USER', '-',
+    'username diubah ' + diubahUser + ', password diubah ' + diubahPass);
+  return { ok: true, username_diubah: diubahUser, password_diubah: diubahPass, total: rows.length };
+}
+
+// ============================================================================
+// 7. API UNTUK FRONTEND
+// ============================================================================
+
+function apiDaftarSheet(token) {
+  return apiGuard_(function () {
+    requireHc_(token);
+    return { sheets: daftarSheet_(), sheet_disarankan: IMPORT_SHEET_DEFAULT_ };
+  });
+}
+
+function apiPratinjauImpor(token, namaSheet) {
+  return apiGuard_(function () {
+    requireHc_(token);
+    return pratinjauImporDariSheet_(namaSheet);
+  });
+}
+
+function apiJalankanImpor(token, namaSheet, opsi) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var r = jalankanImporDariSheet_(namaSheet, opsi);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'IMPOR_DATA_MASSAL', 'IMPORT', namaSheet, r);
+    return r;
+  });
+}
+
+function apiBuatUserDariSertifikasi(token, opsi) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var r = buatMasterUserDariSertifikasi_(opsi);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'BUAT_USER_MASSAL', 'USER', '-', r);
+    return r;
+  });
+}
+
+function apiRapikanUsernamePassword(token, opsi) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var r = rapikanUsernamePassword_(opsi);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'RAPIKAN_AKUN', 'USER', '-', r);
+    return r;
+  });
+}
+
+// ============================================================================
+// 8. MENU SPREADSHEET
+// ============================================================================
+
+function menuPratinjauImpor_() {
+  var r = pratinjauImporDariSheet_(IMPORT_SHEET_DEFAULT_);
+  alertOrLog_('PRATINJAU IMPOR — sheet ' + r.sheet + '\n'
+    + 'Baris terbaca     : ' + r.total_baris + '\n'
+    + 'Pekerja total     : ' + r.pekerja_total
+    + ' (baru ' + r.pekerja_baru + ', sudah ada ' + r.pekerja_update + ')\n'
+    + 'Sertifikasi baru  : ' + r.sertifikasi_baru + '\n'
+    + 'Duplikat dilewati : ' + r.sertifikasi_duplikat + '\n'
+    + 'Tanpa Employee Code: ' + r.tanpa_employee_code.length + '\n\n'
+    + 'Contoh akun yang akan dibuat:\n'
+    + r.contoh_user.map(function (u) {
+      return '  ' + u.employee_code + ' -> ' + u.username + ' / ' + u.password;
+    }).join('\n'));
+  return r;
+}
+
+function menuJalankanImpor_() {
+  var r = jalankanImporDariSheet_(IMPORT_SHEET_DEFAULT_, {});
+  alertOrLog_('IMPOR SELESAI dalam ' + r.durasi_ms + ' ms\n'
+    + 'Akun baru         : ' + r.user_baru + '\n'
+    + 'Akun diperbarui   : ' + r.user_diperbarui + '\n'
+    + 'Sertifikasi baru  : ' + r.sertifikasi_baru + '\n'
+    + 'Duplikat dilewati : ' + r.sertifikasi_duplikat + '\n'
+    + 'Tanpa kode        : ' + r.dilewati_tanpa_kode + '\n'
+    + 'Error             : ' + r.errors.length
+    + (r.errors.length ? '\n\n' + r.errors.slice(0, 10).join('\n') : ''));
+  return r;
+}
+
+function menuBuatUserDariSertifikasi_() {
+  var r = buatMasterUserDariSertifikasi_({});
+  alertOrLog_('Pembuatan akun dari Master_File selesai.\n'
+    + 'Akun baru       : ' + r.dibuat + '\n'
+    + 'Sudah ada       : ' + r.dilewati + '\n'
+    + 'Nama dilengkapi : ' + r.dilengkapi + '\n'
+    + 'Error           : ' + r.errors.length);
+  return r;
+}
+
+function menuRapikanAkun_() {
+  var r = rapikanUsernamePassword_({});
+  alertOrLog_('Username & password dirapikan.\n'
+    + 'Username diubah : ' + r.username_diubah + '\n'
+    + 'Password diubah : ' + r.password_diubah + '\n'
+    + 'Total user      : ' + r.total);
+  return r;
+}

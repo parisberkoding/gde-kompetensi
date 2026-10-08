@@ -1,0 +1,509 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — Import.html
+  Halaman Impor Data & Pembuat Master User (role HC / SA).
+
+  Alur:
+    1. Pilih sheet sumber  (default: IMPORT_DATA — tempat menempel Excel lama)
+    2. Pratinjau           (tidak mengubah apa pun)
+    3. Jalankan impor      (buat/perbarui Master_User + Master_File)
+
+  Aturan akun yang dibuat otomatis:
+    Username = potongan NAMA DEPAN (huruf kecil)
+    Password = EMPLOYEE CODE PENUH
+
+  KONTRAK API: apiDaftarSheet, apiPratinjauImpor, apiJalankanImpor,
+               apiBuatUserDariSertifikasi, apiRapikanUsernamePassword
+  ============================================================================
+-->
+<div id="impRoot">
+  <div class="siaga-loader"><div class="siaga-loader__ring"></div><p>Memuat halaman impor...</p></div>
+</div>
+
+<script>
+/* ==========================================================================
+   KONTROLER HALAMAN IMPOR
+   ========================================================================== */
+var ImpState = {
+  sheet: 'IMPORT_DATA',
+  daftarSheet: [],
+  pratinjau: null,
+  opsi: { hanya_user: false, perbarui_nama: true }
+};
+
+function initImport(param) {
+  'use strict';
+  if (!SIAGA.isHc()) {
+    SIAGA.el('impRoot').innerHTML = SIAGA.kosongHtml('bi-shield-lock', 'Akses ditolak',
+      'Halaman impor hanya untuk Human Capital dan Super Admin.');
+    SIAGA.gagal('Anda tidak punya akses ke halaman impor.');
+    return;
+  }
+  renderImpKerangka();
+  muatDaftarSheet();
+}
+
+/* -------------------------------------------------------------- kerangka -- */
+function renderImpKerangka() {
+  SIAGA.el('impRoot').innerHTML = ''
+    + '<div class="gde-page-head">'
+    + '  <div>'
+    + '    <div class="gde-u-eyebrow">Administrasi</div>'
+    + '    <h1>Impor Data &amp; Pembuat Akun</h1>'
+    + '    <p>Tempel data Excel lama ke sebuah sheet, lalu importer akan membuat akun karyawan '
+    + 'sekaligus memindahkan data sertifikasinya.</p>'
+    + '  </div>'
+    + '  <div class="gde-page-actions">'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="impSegarkan">'
+    + '      <i class="bi bi-arrow-clockwise"></i> Segarkan</button>'
+    + '  </div>'
+    + '</div>'
+
+    /* ---- langkah 1: pilih sumber ---- */
+    + '<div class="gde-card siaga-mb-4">'
+    + '  <div class="siaga-panel-head">'
+    + '    <span class="siaga-rank__no" style="background:var(--gde-blue);color:#fff">1</span>'
+    + '    <div><h3>Pilih sheet sumber</h3>'
+    + '    <div class="siaga-panel-head__sub">Sheet berisi data mentah hasil tempel Excel</div></div>'
+    + '  </div>'
+    + '  <div class="gde-card__body">'
+    + '    <div class="gde-alert gde-alert--info siaga-mb-4">'
+    + '      <i class="bi bi-info-circle gde-alert__icon"></i>'
+    + '      <div class="gde-alert__body"><strong>Cara menyiapkan data</strong>'
+    + '      Buka spreadsheet <b>DATABASE_HC_KOMPETENSI</b>, buat sheet baru bernama '
+    + '      <code>IMPORT_DATA</code>, lalu tempel isi file <i>Rekap Sertifikasi dan Masa Berlaku '
+    + '      Patuha.xlsx</i> termasuk baris header-nya. Kolom yang dikenali: '
+    + '      Employee No., Employee Name, Employee Position, Organization Unit, Work Location, '
+    + '      Sertifikasi, Pelaksanaan, Batas Waktu Perpanjangan.</div></div>'
+
+    + '    <div class="siaga-formgrid">'
+    + '      <div>'
+    + '        <label class="gde-label" for="impSheet">Sheet sumber <span class="gde-req">*</span></label>'
+    + '        <select class="gde-select" id="impSheet"></select>'
+    + '        <div class="gde-hint">Default <code>IMPORT_DATA</code>. Sheet database sistem '
+    + '        (Master_User, Master_File, dst.) tidak boleh dipakai sebagai sumber.</div>'
+    + '      </div>'
+    + '      <div class="gde-u-flex gde-u-items-center" style="align-items:flex-end">'
+    + '        <button class="gde-btn gde-btn--outline-primary" type="button" id="impPratinjau">'
+    + '          <i class="bi bi-search"></i> Pratinjau</button>'
+    + '      </div>'
+    + '    </div>'
+    + '  </div>'
+    + '</div>'
+
+    /* ---- langkah 2: hasil pratinjau ---- */
+    + '<div id="impHasil" class="gde-u-hide"></div>'
+
+    /* ---- alat tambahan ---- */
+    + '<div class="gde-card siaga-mt-4">'
+    + '  <div class="siaga-panel-head">'
+    + '    <i class="bi bi-tools" style="color:var(--gde-blue)"></i>'
+    + '    <div><h3>Alat Bantu Akun</h3>'
+    + '    <div class="siaga-panel-head__sub">Untuk data yang sudah terlanjur masuk ke database</div></div>'
+    + '  </div>'
+    + '  <div class="gde-card__body">'
+    + '    <div class="gde-alert gde-alert--warning siaga-mb-4">'
+    + '      <i class="bi bi-exclamation-triangle gde-alert__icon"></i>'
+    + '      <div class="gde-alert__body"><strong>Bila data sertifikasi sudah ada di Master_File</strong>'
+    + '      Pakai tombol "Buat akun dari Master_File" untuk membuatkan akun bagi setiap Employee Code '
+    + '      yang belum terdaftar. Nama diambil dari sheet sumber bila tersedia; kalau tidak, '
+    + '      nama sementara memakai Employee Code sampai HC melengkapinya.</div></div>'
+    + '    <div class="gde-u-flex gde-u-flex-wrap siaga-gap-2">'
+    + '      <button class="gde-btn gde-btn--outline" type="button" id="impBuatUser">'
+    + '        <i class="bi bi-person-plus"></i> Buat akun dari Master_File</button>'
+    + '      <button class="gde-btn gde-btn--outline" type="button" id="impRapikan">'
+    + '        <i class="bi bi-magic"></i> Rapikan username &amp; password semua akun</button>'
+    + '    </div>'
+    + '  </div>'
+    + '</div>';
+
+  var sel = SIAGA.el('impSheet');
+  if (sel) sel.addEventListener('change', function () { ImpState.sheet = sel.value; });
+
+  var pratinjau = SIAGA.el('impPratinjau');
+  if (pratinjau) pratinjau.addEventListener('click', jalankanPratinjau);
+
+  var segar = SIAGA.el('impSegarkan');
+  if (segar) segar.addEventListener('click', function () { muatDaftarSheet(true); });
+
+  var buat = SIAGA.el('impBuatUser');
+  if (buat) buat.addEventListener('click', buatUserDariMasterFile);
+
+  var rapikan = SIAGA.el('impRapikan');
+  if (rapikan) rapikan.addEventListener('click', rapikanAkun);
+}
+
+/* --------------------------------------------------------------- muat -- */
+function muatDaftarSheet(paksa) {
+  SIAGA.api('apiDaftarSheet', []).then(function (d) {
+    ImpState.daftarSheet = d.sheets || [];
+    var sel = SIAGA.el('impSheet');
+    if (!sel) return;
+    var disarankan = d.sheet_disarankan || 'IMPORT_DATA';
+    var sistem = ['Config', 'Master_User', 'Master_File', 'Master_Sertifikasi',
+      'Session_Token', 'T_Notifikasi', 'T_Email_Log', 'T_Audit_Trail'];
+    var opsi = ImpState.daftarSheet.filter(function (n) { return sistem.indexOf(n) === -1; });
+    if (opsi.indexOf(disarankan) === -1) opsi.unshift(disarankan);
+
+    sel.innerHTML = opsi.map(function (n) {
+      var ada = ImpState.daftarSheet.indexOf(n) !== -1;
+      return '<option value="' + SIAGA.attr(n) + '">' + SIAGA.esc(n)
+        + (ada ? '' : '  (belum ada — akan dibuat saat menempel data)') + '</option>';
+    }).join('');
+    sel.value = ImpState.sheet || disarankan;
+    ImpState.sheet = sel.value;
+
+    if (paksa) SIAGA.info('Daftar sheet dimuat ulang.', 'Segar');
+  }).catch(function (e) { SIAGA.gagal(e.message); });
+}
+
+/* ----------------------------------------------------------- pratinjau -- */
+function jalankanPratinjau() {
+  var tombol = SIAGA.el('impPratinjau');
+  var sheet = ImpState.sheet;
+  if (!sheet) { SIAGA.gagal('Pilih sheet sumber lebih dulu.'); return; }
+
+  SIAGA.tombolSibuk(tombol, true, 'Membaca...');
+  SIAGA.el('impHasil').innerHTML = SIAGA.pemuatHtml('Membaca sheet ' + sheet + '...');
+
+  SIAGA.api('apiPratinjauImpor', [sheet]).then(function (p) {
+    SIAGA.tombolSibuk(tombol, false);
+    ImpState.pratinjau = p;
+    renderPratinjau(p);
+  }).catch(function (e) {
+    SIAGA.tombolSibuk(tombol, false);
+    SIAGA.el('impHasil').classList.remove('gde-u-hide');
+    SIAGA.el('impHasil').innerHTML = SIAGA.galatHtml(e.message);
+  });
+}
+
+function renderPratinjau(p) {
+  var wadah = SIAGA.el('impHasil');
+  wadah.classList.remove('gde-u-hide');
+
+  var kolom = p.kolom_terdeteksi || {};
+  var namaKolom = {
+    kode: 'Employee No.', nama: 'Employee Name', jabatan: 'Jabatan', divisi: 'Divisi',
+    lokasi: 'Lokasi', sertifikasi: 'Sertifikasi', pelaksanaan: 'Pelaksanaan',
+    expired: 'Batas Waktu Perpanjangan', penerbit: 'Penerbit', noSertifikat: 'No. Sertifikat'
+  };
+  var kolomHtml = Object.keys(namaKolom).map(function (k) {
+    var ada = kolom[k] !== -1 && kolom[k] !== undefined;
+    return '<span class="gde-badge ' + (ada ? '' : 'gde-badge--gray') + '" '
+      + 'title="' + (ada ? ('kolom ke-' + (kolom[k] + 1)) : 'tidak ditemukan') + '">'
+      + (ada ? '<i class="bi bi-check2"></i> ' : '<i class="bi bi-dash"></i> ')
+      + SIAGA.esc(namaKolom[k]) + '</span>';
+  }).join(' ');
+
+  var html = ''
+    + '<div class="gde-card">'
+    + '  <div class="siaga-panel-head">'
+    + '    <span class="siaga-rank__no" style="background:var(--gde-blue);color:#fff">2</span>'
+    + '    <div><h3>Hasil pratinjau — sheet ' + SIAGA.esc(p.sheet) + '</h3>'
+    + '    <div class="siaga-panel-head__sub">Belum ada perubahan apa pun pada database</div></div>'
+    + '  </div>'
+    + '  <div class="gde-card__body">'
+
+    + '    <div class="gde-grid gde-grid--4 siaga-mb-4">'
+    + miniImp('Baris terbaca', p.total_baris, 'bi-file-text', 'blue')
+    + miniImp('Akun baru', p.pekerja_baru, 'bi-person-plus', 'green')
+    + miniImp('Akun sudah ada', p.pekerja_update, 'bi-person-check', 'yellow')
+    + miniImp('Sertifikasi baru', p.sertifikasi_baru, 'bi-award', 'blue')
+    + '    </div>'
+
+    + '    <div class="siaga-formgrid siaga-mb-4">'
+    + '      <div><div class="gde-u-eyebrow siaga-mb-4">Kolom terdeteksi</div>' + kolomHtml + '</div>'
+    + '      <div><div class="gde-u-eyebrow siaga-mb-4">Catatan</div>'
+    + '        <ul class="gde-list" style="font-size:.8rem">'
+    + (p.catatan || []).map(function (c) {
+      return '<li><i class="bi bi-dot"></i><span>' + SIAGA.esc(c) + '</span></li>';
+    }).join('')
+    + '          <li><i class="bi bi-dot"></i><span>Duplikat dilewati: <b>'
+    + SIAGA.angka(p.sertifikasi_duplikat) + '</b></span></li>'
+    + '        </ul>'
+    + (p.tanpa_employee_code && p.tanpa_employee_code.length
+      ? ('<div class="gde-alert gde-alert--warning siaga-mt-3">'
+        + '<i class="bi bi-exclamation-triangle gde-alert__icon"></i>'
+        + '<div class="gde-alert__body"><strong>Baris tanpa Employee Code: '
+        + p.tanpa_employee_code.length + '</strong>'
+        + SIAGA.esc(p.tanpa_employee_code.slice(0, 5).join(', ')) + '</div></div>') : '')
+    + '      </div>'
+    + '    </div>'
+    + '  </div>'
+    + '</div>';
+
+  /* contoh akun */
+  if (p.contoh_user && p.contoh_user.length) {
+    html += '<div class="gde-card siaga-mt-4">'
+      + '<div class="siaga-panel-head">'
+      + '<i class="bi bi-person-badge" style="color:var(--gde-green-d)"></i>'
+      + '<div><h3>Contoh akun yang akan dibuat</h3>'
+      + '<div class="siaga-panel-head__sub">Username = nama depan · Password = Employee Code penuh</div></div>'
+      + '</div>'
+      + '<div class="gde-table-wrap"><table class="gde-table gde-table--compact">'
+      + '<thead><tr><th>Employee Code</th><th>Nama</th><th>Username</th><th>Password</th></tr></thead>'
+      + '<tbody>' + p.contoh_user.map(function (u) {
+        return '<tr><td><b>' + SIAGA.esc(u.employee_code) + '</b></td>'
+          + '<td>' + SIAGA.esc(u.nama_lengkap) + '</td>'
+          + '<td><span class="gde-badge gde-badge--blue">' + SIAGA.esc(u.username) + '</span></td>'
+          + '<td class="gde-u-mono">' + SIAGA.esc(u.password) + '</td></tr>';
+      }).join('') + '</tbody></table></div></div>';
+  }
+
+  /* contoh sertifikasi */
+  if (p.contoh_sertifikasi && p.contoh_sertifikasi.length) {
+    html += '<div class="gde-card siaga-mt-4">'
+      + '<div class="siaga-panel-head">'
+      + '<i class="bi bi-card-checklist" style="color:var(--gde-blue)"></i>'
+      + '<div><h3>Contoh baris sertifikasi</h3>'
+      + '<div class="siaga-panel-head__sub">Tanggal pelaksanaan dibaca otomatis dari teks bebas</div></div>'
+      + '</div>'
+      + '<div class="gde-table-wrap"><table class="gde-table gde-table--compact">'
+      + '<thead><tr><th>Pemegang</th><th>Sertifikasi</th><th>Teks pelaksanaan</th>'
+      + '<th class="gde-ctr">Berlaku sampai</th></tr></thead><tbody>'
+      + p.contoh_sertifikasi.map(function (c) {
+        return '<tr><td class="siaga-td-nama"><strong>' + SIAGA.esc(c.nama_lengkap || '-') + '</strong>'
+          + '<span>' + SIAGA.esc(c.employee_code) + '</span></td>'
+          + '<td>' + SIAGA.esc(c.sertifikasi) + '</td>'
+          + '<td><span class="siaga-inline-note">' + SIAGA.esc(c.pelaksanaan || '-') + '</span></td>'
+          + '<td class="gde-ctr">' + SIAGA.esc(SIAGA.tglSingkat(c.expired_at)) + '</td></tr>';
+      }).join('') + '</tbody></table></div></div>';
+  }
+
+  /* langkah 3: jalankan */
+  html += '<div class="gde-card siaga-mt-4">'
+    + '  <div class="siaga-panel-head">'
+    + '    <span class="siaga-rank__no" style="background:var(--gde-green-d);color:#fff">3</span>'
+    + '    <div><h3>Jalankan impor</h3>'
+    + '    <div class="siaga-panel-head__sub">Sekali jalan: akun + data sertifikasi</div></div>'
+    + '  </div>'
+    + '  <div class="gde-card__body">'
+    + '    <div class="siaga-formgrid siaga-mb-4">'
+    + '      <label class="gde-check"><input type="checkbox" id="impHanyaUser">'
+    + '        Hanya buat akun (lewati data sertifikasi)</label>'
+    + '      <label class="gde-check"><input type="checkbox" id="impPerbaruiNama" checked>'
+    + '        Perbarui nama/jabatan/divisi akun yang sudah ada</label>'
+    + '    </div>'
+    + '    <div class="gde-alert gde-alert--warning siaga-mb-4">'
+    + '      <i class="bi bi-shield-exclamation gde-alert__icon"></i>'
+    + '      <div class="gde-alert__body"><strong>Sebelum menjalankan</strong>'
+    + '      Pastikan sheet sumber sudah benar. Proses ini akan menulis ke Master_User dan '
+    + '      Master_File. Aman dijalankan berulang — baris yang sudah ada tidak digandakan. '
+    + '      Disarankan membuat salinan spreadsheet lebih dulu.</div></div>'
+    + '    <button class="gde-btn gde-btn--primary gde-btn--lg" type="button" id="impJalankan">'
+    + '      <i class="bi bi-play-fill"></i> Jalankan impor sekarang</button>'
+    + '    <span class="siaga-inline-note" style="margin-left:.75rem">'
+    + '      ' + SIAGA.angka(p.pekerja_baru) + ' akun baru · '
+    + SIAGA.angka(p.sertifikasi_baru) + ' sertifikasi baru</span>'
+    + '  </div>'
+    + '</div>';
+
+  wadah.innerHTML = html;
+
+  var jalankan = SIAGA.el('impJalankan');
+  if (jalankan) jalankan.addEventListener('click', konfirmasiJalankanImpor);
+}
+
+function miniImp(label, nilai, ikon, tone) {
+  return '<div class="siaga-mini siaga-mini--' + tone + '">'
+    + '<div class="siaga-mini__icon"><i class="bi ' + ikon + '"></i></div>'
+    + '<div style="min-width:0"><div class="siaga-mini__label">' + SIAGA.esc(label) + '</div>'
+    + '<div class="siaga-mini__value">' + SIAGA.angka(nilai) + '</div></div></div>';
+}
+
+/* ------------------------------------------------------------- jalankan -- */
+function konfirmasiJalankanImpor() {
+  var p = ImpState.pratinjau || {};
+  var hanyaUser = !!(SIAGA.el('impHanyaUser') && SIAGA.el('impHanyaUser').checked);
+  var perbaruiNama = !(SIAGA.el('impPerbaruiNama') && !SIAGA.el('impPerbaruiNama').checked);
+
+  SIAGA.konfirmasi({
+    judul: 'Jalankan impor data',
+    pesanHtml: 'Akan dibuat/diperbarui:<br>'
+      + '• <b>' + SIAGA.angka(p.pekerja_baru) + '</b> akun baru (username = nama depan, '
+      + 'password = Employee Code)<br>'
+      + '• <b>' + SIAGA.angka(p.pekerja_update) + '</b> akun sudah ada<br>'
+      + (hanyaUser ? '' : ('• <b>' + SIAGA.angka(p.sertifikasi_baru) + '</b> data sertifikasi baru<br>'))
+      + '<br>Proses berjalan di server dan tidak dapat dibatalkan. Lanjutkan?',
+    labelOk: 'Ya, jalankan impor'
+  }).then(function (ya) {
+    if (!ya) return;
+    var tombol = SIAGA.el('impJalankan');
+    SIAGA.tombolSibuk(tombol, true, 'Mengimpor...');
+
+    SIAGA.api('apiJalankanImpor', [ImpState.sheet, {
+      hanya_user: hanyaUser,
+      perbarui_nama: perbaruiNama
+    }]).then(function (r) {
+      SIAGA.tombolSibuk(tombol, false);
+      renderHasilImpor(r);
+      SIAGA.sukses('Impor selesai dalam ' + SIAGA.angka(r.durasi_ms) + ' ms.', 'Impor berhasil');
+      SIAGA.perbaruiBadgeHeader();
+    }).catch(function (e) {
+      SIAGA.tombolSibuk(tombol, false);
+      SIAGA.gagal(e.message);
+    });
+  });
+}
+
+function renderHasilImpor(r) {
+  var html = '<div class="gde-card siaga-mt-4">'
+    + '<div class="siaga-panel-head">'
+    + '<i class="bi ' + (r.ok ? 'bi-check-circle-fill' : 'bi-exclamation-triangle-fill') + '" '
+    + 'style="color:' + (r.ok ? 'var(--gde-green-d)' : 'var(--gde-warning)') + '"></i>'
+    + '<div><h3>Hasil impor — ' + SIAGA.esc(r.sheet) + '</h3>'
+    + '<div class="siaga-panel-head__sub">Selesai dalam ' + SIAGA.angka(r.durasi_ms) + ' ms</div></div>'
+    + '</div>'
+    + '<div class="gde-card__body">'
+    + '<div class="gde-grid gde-grid--4 siaga-mb-4">'
+    + miniImp('Akun dibuat', r.user_baru, 'bi-person-plus', 'green')
+    + miniImp('Akun diperbarui', r.user_diperbarui, 'bi-person-check', 'blue')
+    + miniImp('Sertifikasi dibuat', r.sertifikasi_baru, 'bi-award', 'blue')
+    + miniImp('Duplikat dilewati', r.sertifikasi_duplikat, 'bi-shield-check', 'yellow')
+    + '</div>';
+
+  if (r.contoh_user && r.contoh_user.length) {
+    html += '<div class="gde-u-eyebrow siaga-mb-4">Akun yang baru dibuat — sampaikan ke karyawan</div>'
+      + '<div class="gde-table-wrap siaga-mb-4"><table class="gde-table gde-table--compact">'
+      + '<thead><tr><th>Employee Code</th><th>Nama</th><th>Username</th><th>Password</th></tr></thead>'
+      + '<tbody>' + r.contoh_user.map(function (u) {
+        return '<tr><td><b>' + SIAGA.esc(u.employee_code) + '</b></td>'
+          + '<td>' + SIAGA.esc(u.nama_lengkap) + '</td>'
+          + '<td><span class="gde-badge gde-badge--blue">' + SIAGA.esc(u.username) + '</span></td>'
+          + '<td class="gde-u-mono">' + SIAGA.esc(u.password) + '</td></tr>';
+      }).join('') + '</tbody></table></div>'
+      + '<p class="siaga-inline-note">Daftar lengkap username &amp; password ada pada sheet '
+      + '<code>Master_User</code> — kolom Username dan Password.</p>';
+  }
+
+  if (r.dilewati_tanpa_kode) {
+    html += '<div class="gde-alert gde-alert--warning siaga-mt-3">'
+      + '<i class="bi bi-info-circle gde-alert__icon"></i>'
+      + '<div class="gde-alert__body"><strong>' + SIAGA.angka(r.dilewati_tanpa_kode)
+      + ' baris dilewati</strong>Baris tersebut tidak memiliki Employee Code.</div></div>';
+  }
+
+  if (r.errors && r.errors.length) {
+    html += '<div class="gde-alert gde-alert--danger siaga-mt-3">'
+      + '<i class="bi bi-x-circle gde-alert__icon"></i>'
+      + '<div class="gde-alert__body"><strong>' + r.errors.length + ' baris bermasalah</strong>'
+      + '<div class="siaga-scroll-y siaga-mt-3">'
+      + r.errors.map(function (e) { return '<div>• ' + SIAGA.esc(e) + '</div>'; }).join('')
+      + '</div></div></div>';
+  }
+
+  html += '<div class="gde-u-flex gde-u-flex-wrap siaga-gap-2 siaga-mt-4">'
+    + '<button class="gde-btn gde-btn--outline" type="button" data-view="masteruser">'
+    + '<i class="bi bi-people"></i> Buka Master User</button>'
+    + '<button class="gde-btn gde-btn--outline" type="button" data-view="data">'
+    + '<i class="bi bi-card-checklist"></i> Lihat Data Sertifikasi</button>'
+    + '<button class="gde-btn gde-btn--outline" type="button" data-view="pengaturan">'
+    + '<i class="bi bi-sliders"></i> Hitung ulang status</button>'
+    + '</div></div></div>';
+
+  var lama = SIAGA.el('impHasilHasil');
+  if (lama) lama.remove();
+  var div = document.createElement('div');
+  div.id = 'impHasilHasil';
+  div.innerHTML = html;
+  SIAGA.el('impHasil').appendChild(div);
+}
+
+/* ------------------------------------------------------- alat bantu akun -- */
+function buatUserDariMasterFile() {
+  var tombol = SIAGA.el('impBuatUser');
+  SIAGA.konfirmasi({
+    judul: 'Buat akun dari data sertifikasi',
+    pesan: 'Sistem akan membaca sheet Master_File dan membuatkan akun untuk setiap Employee Code '
+      + 'yang belum terdaftar. Username diambil dari nama depan (dari sheet sumber bila ada), '
+      + 'password = Employee Code penuh.',
+    labelOk: 'Buat akun'
+  }).then(function (ya) {
+    if (!ya) return;
+    SIAGA.tombolSibuk(tombol, true, 'Membuat...');
+    SIAGA.api('apiBuatUserDariSertifikasi', [{
+      sheet_nama: ImpState.sheet,
+      perbarui_nama: true
+    }]).then(function (r) {
+      SIAGA.tombolSibuk(tombol, false);
+      var pesan = 'Akun baru: ' + SIAGA.angka(r.dibuat)
+        + ' · sudah ada: ' + SIAGA.angka(r.dilewati)
+        + ' · nama dilengkapi: ' + SIAGA.angka(r.dilengkapi);
+      if (r.errors && r.errors.length) {
+        SIAGA.ingat(pesan + ' · ' + r.errors.length + ' error.', 'Selesai dengan catatan');
+      } else {
+        SIAGA.sukses(pesan, 'Pembuatan akun selesai');
+      }
+      renderHasilAkun(r, 'Hasil pembuatan akun dari Master_File');
+    }).catch(function (e) {
+      SIAGA.tombolSibuk(tombol, false);
+      SIAGA.gagal(e.message);
+    });
+  });
+}
+
+function rapikanAkun() {
+  var tombol = SIAGA.el('impRapikan');
+  SIAGA.konfirmasi({
+    judul: 'Rapikan username & password',
+    pesan: 'Password SELURUH akun akan disamakan dengan Employee Code masing-masing. '
+      + 'Username yang bentrok akan dinomori ulang (mis. adiasa, adiasa2). '
+      + 'Username yang sudah disesuaikan sendiri oleh karyawan tidak diubah.',
+    labelOk: 'Rapikan sekarang'
+  }).then(function (ya) {
+    if (!ya) return;
+    SIAGA.tombolSibuk(tombol, true, 'Merapikan...');
+    SIAGA.api('apiRapikanUsernamePassword', [{}]).then(function (r) {
+      SIAGA.tombolSibuk(tombol, false);
+      SIAGA.sukses('Username diubah: ' + SIAGA.angka(r.username_diubah)
+        + ' · password disamakan: ' + SIAGA.angka(r.password_diubah)
+        + ' dari ' + SIAGA.angka(r.total) + ' akun.', 'Perapian selesai');
+      renderHasilAkun(r, 'Hasil perapian username & password');
+    }).catch(function (e) {
+      SIAGA.tombolSibuk(tombol, false);
+      SIAGA.gagal(e.message);
+    });
+  });
+}
+
+function renderHasilAkun(r, judul) {
+  var html = '<div class="gde-card siaga-mt-4">'
+    + '<div class="siaga-panel-head"><i class="bi bi-check-circle-fill" '
+    + 'style="color:var(--gde-green-d)"></i><div><h3>' + SIAGA.esc(judul) + '</h3></div></div>'
+    + '<div class="gde-card__body">'
+    + '<div class="gde-grid gde-grid--3 siaga-mb-4">'
+    + miniImp('Dibuat / diubah', r.dibuat !== undefined ? r.dibuat : (r.username_diubah || 0),
+      'bi-person-plus', 'green')
+    + miniImp('Dilewati', r.dilewati !== undefined ? r.dilewati : (r.password_diubah || 0),
+      'bi-person-check', 'blue')
+    + miniImp('Nama dilengkapi', r.dilengkapi !== undefined ? r.dilengkapi : (r.total || 0),
+      'bi-pencil-square', 'yellow')
+    + '</div>';
+
+  if (r.daftar && r.daftar.length) {
+    html += '<div class="gde-u-eyebrow siaga-mb-4">Akun baru</div>'
+      + '<div class="siaga-scroll-y gde-u-mono" style="font-size:.75rem">'
+      + r.daftar.map(function (x) { return '<div>• ' + SIAGA.esc(x) + '</div>'; }).join('')
+      + '</div>';
+  }
+  if (r.errors && r.errors.length) {
+    html += '<div class="gde-alert gde-alert--danger siaga-mt-3">'
+      + '<i class="bi bi-x-circle gde-alert__icon"></i>'
+      + '<div class="gde-alert__body"><strong>' + r.errors.length + ' error</strong>'
+      + '<div class="siaga-scroll-y siaga-mt-3">'
+      + r.errors.map(function (e) { return '<div>• ' + SIAGA.esc(e) + '</div>'; }).join('')
+      + '</div></div></div>';
+  }
+  html += '<button class="gde-btn gde-btn--outline siaga-mt-4" type="button" data-view="masteruser">'
+    + '<i class="bi bi-people"></i> Buka Master User</button></div></div>';
+
+  var lama = SIAGA.el('impHasilHasil');
+  if (lama) lama.remove();
+  SIAGA.el('impHasil').classList.remove('gde-u-hide');
+  var div = document.createElement('div');
+  div.id = 'impHasilHasil';
+  div.innerHTML = html;
+  SIAGA.el('impHasil').appendChild(div);
+  SIAGA.perbaruiBadgeHeader();
+}
+</script>
