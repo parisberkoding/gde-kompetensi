@@ -1,0 +1,165 @@
+/* ==========================================================================
+   GDE UI TEMPLATES — 04. APP SHELL
+   Kerangka aplikasi ber-prefiks `gde-`: topbar, sidebar, area konten, footer.
+   Untuk markup BARU. Markup lama (NiceAdmin) dijembatani oleh gde-compat.css
+   sehingga tampilannya identik tanpa perlu menulis ulang Blade.
+   ========================================================================== */
+
+.gde-body { background: var(--gde-surface-3); min-height: 100vh; }
+
+/* ---------- 1. TOPBAR ---------- */
+.gde-topbar {
+  position: sticky; top: 0; z-index: var(--gde-z-topbar);
+  height: var(--gde-topbar-h);
+  background: rgba(255, 255, 255, .94);
+  backdrop-filter: saturate(180%) blur(12px);
+  border-bottom: 1px solid var(--gde-line);
+}
+.gde-topbar__inner {
+  height: 100%; display: flex; align-items: center; gap: var(--gde-sp-4);
+  padding: 0 var(--gde-sp-5); max-width: var(--gde-content-max); margin: 0 auto;
+}
+.gde-topbar__spacer { flex: 1 1 auto; }
+.gde-topbar__actions { display: flex; align-items: center; gap: var(--gde-sp-2); }
+
+/* Merek */
+.gde-brand { display: flex; align-items: center; gap: var(--gde-sp-3); min-width: 0; }
+.gde-brand:hover { text-decoration: none; }
+.gde-brand__logo { width: 38px; height: 38px; object-fit: contain; flex: none; }
+.gde-brand__name { display: block; font-size: var(--gde-fs-lg); font-weight: var(--gde-fw-bold); color: var(--gde-blue); line-height: 1.15; letter-spacing: var(--gde-ls-tight); }
+.gde-brand__sub { display: block; font-size: .55rem; font-weight: var(--gde-fw-semibold); color: var(--gde-muted); letter-spacing: .09em; text-transform: uppercase; white-space: nowrap; }
+.gde-brand__divider { width: 1px; height: 26px; background: var(--gde-line); flex: none; }
+.gde-brand__section { font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold); color: var(--gde-ink-2); white-space: nowrap; }
+
+/* Tombol ikon di topbar */
+.gde-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border: 1px solid var(--gde-line); border-radius: var(--gde-r-sm);
+  background: #fff; color: var(--gde-ink-2); font-size: 1rem; cursor: pointer;
+  transition: var(--gde-t-fast); flex: none;
+}
+.gde-icon-btn:hover { border-color: var(--gde-green); color: var(--gde-green-d); background: var(--gde-green-l); text-decoration: none; }
+
+/* Pencarian cepat di topbar */
+.gde-search { position: relative; }
+.gde-search input {
+  width: 210px; padding: .5rem .9rem .5rem 2.2rem;
+  border: 1px solid var(--gde-line); border-radius: var(--gde-r-pill);
+  font-family: var(--gde-font); font-size: var(--gde-fs-base); background: #fff; color: var(--gde-ink);
+  transition: var(--gde-t-fast);
+}
+.gde-search input:focus { outline: none; border-color: var(--gde-green); box-shadow: var(--gde-ring-green); width: 270px; }
+.gde-search .bi { position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); color: var(--gde-muted-2); font-size: .9rem; }
+
+/* Profil pengguna */
+.gde-user { display: flex; align-items: center; gap: var(--gde-sp-2); padding: .25rem .5rem .25rem .25rem; border-radius: var(--gde-r-pill); transition: var(--gde-t-fast); }
+.gde-user:hover { background: var(--gde-surface-2); text-decoration: none; }
+.gde-user__meta { line-height: 1.15; }
+.gde-user__name { display: block; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-semibold); color: var(--gde-ink); }
+.gde-user__role { display: block; font-size: var(--gde-fs-xs); color: var(--gde-muted-2); }
+
+/* ---------- 2. SIDEBAR ---------- */
+.gde-shell { display: grid; grid-template-columns: var(--gde-sidebar-w) minmax(0, 1fr); max-width: var(--gde-content-max); margin: 0 auto; align-items: start; }
+
+.gde-sidebar {
+  position: sticky; top: var(--gde-topbar-h);
+  height: calc(100vh - var(--gde-topbar-h));
+  overflow-y: auto; overscroll-behavior: contain;
+  background: var(--gde-sidebar-bg);
+  border-right: 1px solid rgba(255, 255, 255, .06);
+  padding: var(--gde-sp-4) var(--gde-sp-3) var(--gde-sp-10);
+}
+.gde-sidebar__label {
+  font-size: .58rem; font-weight: var(--gde-fw-bold); letter-spacing: .12em; text-transform: uppercase;
+  color: var(--gde-sidebar-fg-dim); padding: var(--gde-sp-3) var(--gde-sp-3) var(--gde-sp-2);
+}
+.gde-nav { list-style: none; margin: 0; padding: 0; }
+.gde-nav li { margin: 1px 0; }
+.gde-nav a, .gde-nav .gde-nav__item {
+  display: flex; align-items: center; gap: var(--gde-sp-3);
+  padding: .6rem .75rem; border-radius: var(--gde-r-sm);
+  color: var(--gde-sidebar-fg); font-size: var(--gde-fs-base); font-weight: var(--gde-fw-medium);
+  transition: var(--gde-t-fast); text-decoration: none;
+}
+.gde-nav a:hover, .gde-nav .gde-nav__item:hover { background: var(--gde-sidebar-hover); color: var(--gde-sidebar-fg-strong); text-decoration: none; }
+.gde-nav .bi { font-size: 1rem; opacity: .85; flex: none; }
+.gde-nav .is-active { background: var(--gde-sidebar-active-bg); color: var(--gde-sidebar-active-fg); font-weight: var(--gde-fw-semibold); box-shadow: inset 3px 0 0 var(--gde-green); }
+.gde-nav .is-active .bi { color: var(--gde-green); opacity: 1; }
+.gde-nav .gde-nav__chev { margin-left: auto; opacity: .55; font-size: .8rem; }
+.gde-nav__count { margin-left: auto; background: var(--gde-red); color: #fff; font-size: .6rem; font-weight: var(--gde-fw-bold); padding: 1px 7px; border-radius: var(--gde-r-pill); }
+.gde-nav--sub { padding-left: var(--gde-sp-5); }
+.gde-nav--sub a { font-size: var(--gde-fs-sm); padding: .45rem .75rem; color: rgba(255, 255, 255, .62); }
+.gde-nav--sub a.is-active { color: #fff; }
+
+.gde-sidebar__cta {
+  margin-top: var(--gde-sp-6); padding: var(--gde-sp-4);
+  border-radius: var(--gde-r-md); background: rgba(255, 255, 255, .07);
+  border: 1px solid rgba(255, 255, 255, .1); color: #fff;
+}
+.gde-sidebar__cta strong { font-size: var(--gde-fs-base); }
+.gde-sidebar__cta p { font-size: var(--gde-fs-xs); color: rgba(255, 255, 255, .6); margin: var(--gde-sp-2) 0 var(--gde-sp-3); line-height: 1.6; }
+.gde-sidebar__cta a {
+  display: inline-flex; align-items: center; gap: 6px; background: #fff; color: var(--gde-blue);
+  font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold); padding: .4rem .8rem; border-radius: var(--gde-r-pill);
+}
+.gde-sidebar__cta a:hover { background: var(--gde-green); color: #0B2A05; text-decoration: none; }
+
+/* Sidebar ramping (ikon saja) */
+.gde-shell.is-collapsed { grid-template-columns: var(--gde-sidebar-w-collapsed) minmax(0, 1fr); }
+.gde-shell.is-collapsed .gde-sidebar { padding-left: var(--gde-sp-2); padding-right: var(--gde-sp-2); }
+.gde-shell.is-collapsed .gde-nav span:not(.gde-nav__count), .gde-shell.is-collapsed .gde-nav__chev, .gde-shell.is-collapsed .gde-sidebar__label, .gde-shell.is-collapsed .gde-sidebar__cta { display: none; }
+.gde-shell.is-collapsed .gde-nav a, .gde-shell.is-collapsed .gde-nav .gde-nav__item { justify-content: center; padding: .6rem .5rem; }
+
+/* ---------- 3. KONTEN ---------- */
+.gde-content { min-width: 0; padding: var(--gde-sp-6) var(--gde-sp-8) var(--gde-sp-16); }
+.gde-content--flush { padding-left: 0; padding-right: 0; }
+.gde-wrap { max-width: 1080px; }
+.gde-wrap--wide { max-width: none; }
+
+/* Grid utilitas internal shell */
+.gde-grid { display: grid; gap: var(--gde-sp-4); }
+.gde-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.gde-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.gde-grid--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.gde-grid--auto { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+/* ---------- 4. FOOTER ---------- */
+.gde-footer {
+  border-top: 1px solid var(--gde-line); background: #fff;
+  padding: var(--gde-sp-5) var(--gde-sp-8);
+}
+.gde-footer__inner { max-width: var(--gde-content-max); margin: 0 auto; display: flex; flex-wrap: wrap; gap: var(--gde-sp-3); align-items: center; justify-content: space-between; }
+.gde-footer p { margin: 0; font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.gde-footer a { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.gde-footer a:hover { color: var(--gde-blue); }
+
+/* ---------- 5. SCRIM SIDEBAR MOBILE ---------- */
+.gde-scrim { position: fixed; inset: 0; background: var(--gde-scrim); z-index: var(--gde-z-scrim); display: none; }
+.gde-scrim.is-open { display: block; }
+
+/* ---------- 6. RESPONSIF ---------- */
+@media (max-width: 1200px) {
+  .gde-content { padding: var(--gde-sp-5) var(--gde-sp-5) var(--gde-sp-12); }
+  .gde-grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 992px) {
+  .gde-shell { grid-template-columns: 1fr; }
+  .gde-shell.is-collapsed { grid-template-columns: 1fr; }
+  .gde-sidebar {
+    position: fixed; top: var(--gde-topbar-h); left: 0; z-index: var(--gde-z-sidebar);
+    width: min(310px, 88vw); transform: translateX(-104%);
+    transition: transform var(--gde-t-slow); box-shadow: var(--gde-sh-3);
+  }
+  .gde-sidebar.is-open { transform: none; }
+  .gde-sidebar__toggle { display: inline-flex; }
+  .gde-grid--3, .gde-grid--2 { grid-template-columns: 1fr; }
+  .gde-brand__sub, .gde-brand__divider, .gde-brand__section { display: none; }
+  .gde-search input { width: 150px; }
+  .gde-search input:focus { width: 190px; }
+}
+@media (max-width: 620px) {
+  .gde-content { padding: var(--gde-sp-4) var(--gde-sp-4) var(--gde-sp-10); }
+  .gde-grid--4 { grid-template-columns: 1fr; }
+  .gde-page-head h1 { font-size: var(--gde-fs-xl); }
+}
+@media (min-width: 993px) { .gde-sidebar__toggle { display: none; } }

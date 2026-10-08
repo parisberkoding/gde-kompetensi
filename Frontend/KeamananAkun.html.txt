@@ -1,0 +1,401 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — KeamananAkun.html
+  Halaman: Username & Password (Requirement 3.c).
+  Kiri  : ubah username (wajib konfirmasi password saat ini).
+  Kanan : ubah password + indikator kekuatan password.
+  Bawah : ringkasan keamanan sesi yang sedang aktif + tombol keluar.
+  KONTRAK API: apiChangeUsername, apiChangePassword, apiGetSession
+               -> lihat subprocess.gs
+  ============================================================================
+-->
+<div id="akRoot">
+  <div class="siaga-loader"><div class="siaga-loader__ring"></div><p>Menyiapkan halaman keamanan...</p></div>
+</div>
+
+<script>
+/* ==========================================================================
+   KONTROLER KEAMANAN AKUN (USERNAME & PASSWORD)
+   ========================================================================== */
+var AkState = { sesi: null };
+
+function initKeamananAkun(param) {
+  'use strict';
+  akRenderKerangka();
+  akPasangPerilaku();
+  akMuatSesi();
+}
+
+/* --------------------------------------------------------------- kerangka -- */
+function akRenderKerangka() {
+  var u = SIAGA.pengguna();
+
+  SIAGA.el('akRoot').innerHTML = ''
+    + '<div class="gde-page-head">'
+    + '  <div>'
+    + '    <div class="gde-u-eyebrow">Keamanan</div>'
+    + '    <h1>Username &amp; Password</h1>'
+    + '    <p>Ubah kredensial masuk Anda dan pantau keamanan sesi yang sedang aktif. '
+    + 'Setelah password diganti, seluruh sesi lain otomatis dicabut.</p>'
+    + '  </div>'
+    + '  <div class="gde-page-actions">'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="akMuatUlang">'
+    + '      <i class="bi bi-arrow-clockwise"></i> Segarkan</button>'
+    + '  </div>'
+    + '</div>'
+    + '<div class="siaga-2col">'
+    + akKartuUsername(u)
+    + akKartuPassword()
+    + '</div>'
+    + '<div class="siaga-mt-4" id="akSesi">' + SIAGA.pemuatHtml('Memeriksa sesi...') + '</div>';
+}
+
+function akKartuUsername(u) {
+  return ''
+    + '<div class="gde-card">'
+    + '  <div class="siaga-panel-head">'
+    + '    <i class="bi bi-person-badge" style="color:var(--gde-blue)"></i>'
+    + '    <div><h3>Ubah Username</h3>'
+    + '    <div class="siaga-panel-head__sub">Username dipakai untuk masuk ke aplikasi</div></div>'
+    + '  </div>'
+    + '  <div class="gde-card__body">'
+    + '    <div class="gde-u-between" style="margin-bottom:1rem">'
+    + '      <span class="siaga-inline-note">Username saat ini</span>'
+    + '      <span class="gde-chip">@<b id="akUsernameKini">' + SIAGA.esc(u.username || '—') + '</b></span>'
+    + '    </div>'
+    + '    <form id="akFormUsername" autocomplete="off" novalidate>'
+    + '      <div style="margin-bottom:1rem">'
+    + '        <label class="gde-label" for="akUsernameBaru">Username baru <span class="gde-req">*</span></label>'
+    + '        <input class="gde-input" type="text" id="akUsernameBaru" name="username_baru" '
+    + 'placeholder="contoh: adiasa" autocapitalize="none" spellcheck="false">'
+    + '        <div class="gde-hint">Minimal 3 karakter. Hanya huruf, angka, titik (.), dan garis bawah (_).</div>'
+    + '        <div class="gde-hint">Akan disimpan sebagai: <b id="akSlug">—</b></div>'
+    + '      </div>'
+    + '      <div style="margin-bottom:1.25rem">'
+    + '        <label class="gde-label" for="akPasswordUsername">Password saat ini <span class="gde-req">*</span></label>'
+    + '        <div class="siaga-pass">'
+    + '          <input class="gde-input" type="password" id="akPasswordUsername" name="password_saat_ini" '
+    + 'autocomplete="current-password" placeholder="Password Anda sekarang">'
+    + '          <button class="siaga-pass__toggle" type="button" data-ak-mata="akPasswordUsername" '
+    + 'aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>'
+    + '        </div>'
+    + '        <div class="gde-hint">Demi keamanan, masukkan password Anda saat ini sebagai konfirmasi.</div>'
+    + '      </div>'
+    + '      <button class="gde-btn gde-btn--primary gde-btn--block" type="submit" id="akSubmitUsername">'
+    + '        <i class="bi bi-save"></i> Simpan username</button>'
+    + '    </form>'
+    + '  </div>'
+    + '</div>';
+}
+
+function akKartuPassword() {
+  return ''
+    + '<div class="gde-card">'
+    + '  <div class="siaga-panel-head">'
+    + '    <i class="bi bi-shield-lock" style="color:var(--gde-blue)"></i>'
+    + '    <div><h3>Ubah Password</h3>'
+    + '    <div class="siaga-panel-head__sub">Ganti password secara berkala</div></div>'
+    + '  </div>'
+    + '  <div class="gde-card__body">'
+    + '    <form id="akFormPassword" autocomplete="off" novalidate>'
+    + '      <div style="margin-bottom:1rem">'
+    + '        <label class="gde-label" for="akPasswordLama">Password saat ini <span class="gde-req">*</span></label>'
+    + '        <div class="siaga-pass">'
+    + '          <input class="gde-input" type="password" id="akPasswordLama" name="password_lama" '
+    + 'autocomplete="current-password" placeholder="Password lama">'
+    + '          <button class="siaga-pass__toggle" type="button" data-ak-mata="akPasswordLama" '
+    + 'aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>'
+    + '        </div>'
+    + '      </div>'
+    + '      <div style="margin-bottom:1rem">'
+    + '        <label class="gde-label" for="akPasswordBaru">Password baru <span class="gde-req">*</span></label>'
+    + '        <div class="siaga-pass">'
+    + '          <input class="gde-input" type="password" id="akPasswordBaru" name="password_baru" '
+    + 'autocomplete="new-password" placeholder="Minimal 6 karakter">'
+    + '          <button class="siaga-pass__toggle" type="button" data-ak-mata="akPasswordBaru" '
+    + 'aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>'
+    + '        </div>'
+    + '      </div>'
+    + '      <div style="margin-bottom:1rem">'
+    + '        <label class="gde-label" for="akKonfirmasi">Ulangi password baru <span class="gde-req">*</span></label>'
+    + '        <div class="siaga-pass">'
+    + '          <input class="gde-input" type="password" id="akKonfirmasi" name="konfirmasi_password" '
+    + 'autocomplete="new-password" placeholder="Ketik ulang password baru">'
+    + '          <button class="siaga-pass__toggle" type="button" data-ak-mata="akKonfirmasi" '
+    + 'aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>'
+    + '        </div>'
+    + '      </div>'
+    + '      <div class="siaga-mt-3">'
+    + '        <div class="gde-u-between" style="margin-bottom:4px">'
+    + '          <span class="siaga-inline-note">Kekuatan password</span>'
+    + '          <b id="akKuatLabel" style="font-size:.75rem;color:var(--gde-muted)">—</b>'
+    + '        </div>'
+    + '        <div class="gde-progress" id="akKuatWrap">'
+    + '          <span class="gde-progress__bar" id="akKuatBar" style="width:0%"></span></div>'
+    + '        <div class="gde-hint">Minimal 6 karakter. Kombinasikan huruf besar, huruf kecil, '
+    + 'angka, dan simbol agar lebih kuat.</div>'
+    + '      </div>'
+    + '      <button class="gde-btn gde-btn--primary gde-btn--block siaga-mt-4" type="submit" id="akSubmitPassword">'
+    + '        <i class="bi bi-key"></i> Simpan password</button>'
+    + '    </form>'
+    + '  </div>'
+    + '</div>';
+}
+
+/* ------------------------------------------------------------ perilaku UI -- */
+function akPasangPerilaku() {
+  var formUser = SIAGA.el('akFormUsername');
+  if (formUser) formUser.addEventListener('submit', akSimpanUsername);
+
+  var formPass = SIAGA.el('akFormPassword');
+  if (formPass) formPass.addEventListener('submit', akSimpanPassword);
+
+  var ulang = SIAGA.el('akMuatUlang');
+  if (ulang) ulang.addEventListener('click', function () { akMuatSesi(); });
+
+  /* Tombol mata untuk semua kolom password. */
+  SIAGA.qsa('[data-ak-mata]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var input = SIAGA.el(btn.getAttribute('data-ak-mata'));
+      if (!input) return;
+      var lihat = input.type === 'password';
+      input.type = lihat ? 'text' : 'password';
+      btn.innerHTML = '<i class="bi ' + (lihat ? 'bi-eye-slash' : 'bi-eye') + '"></i>';
+    });
+  });
+
+  /* Pratinjau slug username. */
+  var baru = SIAGA.el('akUsernameBaru');
+  if (baru) {
+    baru.addEventListener('input', function () {
+      var s = akSlug(baru.value);
+      var label = SIAGA.el('akSlug');
+      if (label) label.textContent = s || '—';
+    });
+  }
+
+  /* Indikator kekuatan password. */
+  var passBaru = SIAGA.el('akPasswordBaru');
+  if (passBaru) passBaru.addEventListener('input', function () { akRenderKekuatan(passBaru.value); });
+}
+
+/* ------------------------------------------------------------- slug/username */
+/** Cerminan slugUsername_() di server. */
+function akSlug(s) {
+  return String(s || '').toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '')
+    .replace(/^[._-]+|[._-]+$/g, '')
+    .substring(0, 40);
+}
+
+function akSimpanUsername(e) {
+  e.preventDefault();
+  var form = SIAGA.el('akFormUsername');
+  SIAGA.bersihkanInvalid(form);
+
+  var input = SIAGA.el('akUsernameBaru');
+  var pass = SIAGA.el('akPasswordUsername');
+  var slug = akSlug(input.value);
+
+  if (!slug || slug.length < 3) {
+    SIAGA.tandaiInvalid(input, 'Username minimal 3 karakter (huruf, angka, titik, garis bawah).');
+    return;
+  }
+  if (!String(pass.value || '')) {
+    SIAGA.tandaiInvalid(pass, 'Password saat ini wajib diisi.');
+    return;
+  }
+
+  var tombol = SIAGA.el('akSubmitUsername');
+  SIAGA.tombolSibuk(tombol, true, 'Menyimpan...');
+
+  SIAGA.api('apiChangeUsername', [slug, pass.value]).then(function (r) {
+    SIAGA.tombolSibuk(tombol, false);
+    var user = (r && r.user) || SIAGA.pengguna();
+    var lama = (r && r.username_lama) || '';
+    var baru = (r && r.username_baru) || slug;
+
+    SIAGA.simpanSesi(SIAGA.state.token, user);
+    SIAGA.sukses('Username diubah' + (lama ? ' dari "' + lama + '"' : '') + ' menjadi "' + baru + '".', 'Berhasil');
+    SIAGA.renderShell();
+    SIAGA.muatView('keamanan');
+  }).catch(function (err) {
+    SIAGA.tombolSibuk(tombol, false);
+    SIAGA.gagal(err.message);
+  });
+}
+
+/* ------------------------------------------------------- kekuatan password -- */
+function akKekuatan(pass) {
+  var p = String(pass || '');
+  if (!p) return { label: '—', kelas: 'gde-progress', persen: 0, warna: 'var(--gde-muted)' };
+
+  var skor = 0;
+  if (p.length >= 6) skor++;
+  if (p.length >= 10) skor++;
+  if (/[a-z]/.test(p) && /[A-Z]/.test(p)) skor++;
+  if (/[0-9]/.test(p) && /[^A-Za-z0-9]/.test(p)) skor++;
+
+  if (skor <= 1) return { label: 'Lemah', kelas: 'gde-progress gde-progress--red', persen: 33, warna: '#C4142A' };
+  if (skor === 2) return { label: 'Sedang', kelas: 'gde-progress gde-progress--yellow', persen: 66, warna: '#6B5F00' };
+  return { label: 'Kuat', kelas: 'gde-progress', persen: 100, warna: '#3F6B18' };
+}
+
+function akRenderKekuatan(pass) {
+  var k = akKekuatan(pass);
+  var wrap = SIAGA.el('akKuatWrap');
+  var bar = SIAGA.el('akKuatBar');
+  var label = SIAGA.el('akKuatLabel');
+  if (wrap) wrap.className = k.kelas;
+  if (bar) bar.style.width = k.persen + '%';
+  if (label) {
+    label.textContent = k.label;
+    label.style.color = k.warna;
+  }
+}
+
+function akSimpanPassword(e) {
+  e.preventDefault();
+  var form = SIAGA.el('akFormPassword');
+  SIAGA.bersihkanInvalid(form);
+
+  var v = SIAGA.nilaiForm(form);
+  var lama = String(v.password_lama || '');
+  var baru = String(v.password_baru || '');
+  var konfirmasi = String(v.konfirmasi_password || '');
+
+  var iLama = SIAGA.el('akPasswordLama');
+  var iBaru = SIAGA.el('akPasswordBaru');
+  var iKonfirmasi = SIAGA.el('akKonfirmasi');
+
+  if (!lama) { SIAGA.tandaiInvalid(iLama, 'Password saat ini wajib diisi.'); return; }
+  if (baru.length < 6) { SIAGA.tandaiInvalid(iBaru, 'Password baru minimal 6 karakter.'); return; }
+  if (baru === lama) { SIAGA.tandaiInvalid(iBaru, 'Password baru tidak boleh sama dengan password lama.'); return; }
+  if (baru !== konfirmasi) { SIAGA.tandaiInvalid(iKonfirmasi, 'Konfirmasi password tidak sama.'); return; }
+
+  var tombol = SIAGA.el('akSubmitPassword');
+  SIAGA.tombolSibuk(tombol, true, 'Menyimpan...');
+
+  SIAGA.api('apiChangePassword', [lama, baru, konfirmasi]).then(function (r) {
+    SIAGA.tombolSibuk(tombol, false);
+    var dicabut = SIAGA.num(r && r.sesi_lain_dicabut, 0);
+
+    SIAGA.sukses('Password diubah. ' + dicabut + ' sesi lain dicabut.', 'Berhasil');
+
+    /* Tandai password awal sudah diganti agar peringatan tidak muncul lagi. */
+    if (SIAGA.state.user) {
+      SIAGA.state.user.must_change_password = false;
+      SIAGA.simpanSesi(SIAGA.state.token, SIAGA.state.user);
+    }
+
+    SIAGA.resetForm(form);
+    akRenderKekuatan('');
+    akMuatSesi();
+  }).catch(function (err) {
+    SIAGA.tombolSibuk(tombol, false);
+    SIAGA.gagal(err.message);
+  });
+}
+
+/* ------------------------------------------------------------ keamanan sesi -- */
+function akMuatSesi() {
+  var box = SIAGA.el('akSesi');
+  if (!box) return;
+  box.innerHTML = SIAGA.pemuatHtml('Memeriksa sesi...');
+
+  SIAGA.api('apiGetSession', []).then(function (d) {
+    AkState.sesi = d;
+    akRenderSesi(d);
+  }).catch(function (e) {
+    box.innerHTML = SIAGA.galatHtml(e.message);
+  });
+}
+
+function akRenderSesi(d) {
+  var box = SIAGA.el('akSesi');
+  if (!box) return;
+
+  if (!d || !d.user) {
+    box.innerHTML = SIAGA.kosongHtml('bi-shield-slash', 'Informasi sesi tidak tersedia',
+      'Data sesi tidak dapat dibaca. Coba segarkan halaman atau login kembali.');
+    return;
+  }
+
+  var user = d.user || SIAGA.pengguna();
+  var mustChange = !!d.must_change_password;
+
+  /* Sinkronkan chip username dengan data sesi terbaru. */
+  var chip = SIAGA.el('akUsernameKini');
+  if (chip) chip.textContent = user.username || '—';
+
+  var sisaHari = '';
+  var valid = SIAGA.toDate(d && d.valid_until);
+  if (valid) {
+    var hari = Math.round((valid.getTime() - akHariIni().getTime()) / 86400000);
+    sisaHari = hari >= 0 ? ('± ' + SIAGA.angka(hari) + ' hari lagi') : 'sudah lewat';
+  }
+
+  box.innerHTML = ''
+    + '<div class="gde-card">'
+    + '  <div class="siaga-panel-head">'
+    + '    <i class="bi bi-shield-check" style="color:var(--gde-green-d)"></i>'
+    + '    <div><h3>Keamanan sesi</h3>'
+    + '    <div class="siaga-panel-head__sub">Informasi sesi yang sedang Anda pakai</div></div>'
+    + '  </div>'
+    + '  <div class="gde-card__body">'
+    + (mustChange
+      ? '    <div class="gde-alert gde-alert--warning" style="margin-bottom:1rem">'
+        + '<i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>'
+        + '<div class="gde-alert__body"><strong>Password awal masih dipakai</strong>'
+        + 'Segera ubah password Anda memakai formulir Ubah Password di atas.</div></div>'
+      : '')
+    + '    <div class="gde-alert gde-alert--info" style="margin-bottom:1rem">'
+    + '      <i class="bi bi-info-circle-fill gde-alert__icon"></i>'
+    + '      <div class="gde-alert__body"><strong>Catatan keamanan</strong>'
+    + 'Mengganti password akan mencabut seluruh sesi lain yang masih aktif di perangkat lain.</div>'
+    + '    </div>'
+    + '    <dl class="siaga-dl">'
+    + akBaris('Username', user.username)
+    + akBaris('Employee Code', user.employee_code)
+    + akBarisHtml('Role', '<span class="gde-chip">'
+      + SIAGA.esc(user.role_label || user.role || '—') + '</span>')
+    + akBarisHtml('Wajib ganti password', mustChange
+      ? '<span class="gde-status gde-status--yellow"><i class="bi bi-exclamation-triangle-fill"></i>Ya</span>'
+      : '<span class="gde-status gde-status--green"><i class="bi bi-check-circle-fill"></i>Tidak</span>')
+    + akBaris('Sesi berlaku sampai', valid ? (SIAGA.tglIndo(valid, true) + (sisaHari ? ' (' + sisaHari + ')' : '')) : '')
+    + '    </dl>'
+    + '  </div>'
+    + '  <div class="gde-card__foot">'
+    + '    <button class="gde-btn gde-btn--danger" type="button" id="akKeluar">'
+    + '      <i class="bi bi-box-arrow-right"></i> Keluar</button>'
+    + '    <span class="siaga-inline-note">Anda akan keluar dari sesi ini dan kembali ke halaman masuk.</span>'
+    + '  </div>'
+    + '</div>';
+
+  var keluar = SIAGA.el('akKeluar');
+  if (keluar) {
+    keluar.addEventListener('click', function () {
+      SIAGA.konfirmasi({
+        judul: 'Keluar dari aplikasi',
+        pesan: 'Anda akan keluar dari sesi ini. Sesi di perangkat lain tidak terpengaruh.',
+        labelOk: 'Keluar',
+        bahaya: true
+      }).then(function (ya) { if (ya) SIAGA.logout(); });
+    });
+  }
+}
+
+function akBaris(k, v) {
+  var nilai = (v === null || v === undefined || String(v).trim() === '') ? '—' : String(v);
+  return '<dt>' + SIAGA.esc(k) + '</dt><dd>' + SIAGA.esc(nilai) + '</dd>';
+}
+
+function akBarisHtml(k, html) {
+  return '<dt>' + SIAGA.esc(k) + '</dt><dd>' + html + '</dd>';
+}
+
+function akHariIni() {
+  var d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+</script>

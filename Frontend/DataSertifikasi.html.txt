@@ -1,0 +1,598 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — DataSertifikasi.html
+  Halaman 2: Detailing data.
+  Penelusuran seluruh data sertifikasi: filter, tabel berpaginasi, modal detail
+  (termasuk pratinjau lampiran), verifikasi oleh HC, ubah, hapus, dan ekspor.
+  KONTRAK API: apiListFiles, apiGetFile, apiDeleteFile, apiVerifyFile,
+               apiExportExcel, apiExportPdf, apiListEmployees, apiGetMeta
+  ============================================================================
+-->
+<div id="dsRoot">
+  <div class="siaga-loader"><div class="siaga-loader__ring"></div><p>Memuat data sertifikasi...</p></div>
+</div>
+
+<!-- ============================== MODAL DETAIL ============================== -->
+<div class="gde-modal" id="dsModalDetail">
+  <div class="gde-modal__scrim" data-tutup="dsModalDetail"></div>
+  <div class="gde-modal__dialog gde-modal__dialog--lg">
+    <div class="gde-modal__head">
+      <h3>Detail Sertifikasi</h3>
+      <button class="gde-modal__close" type="button" data-tutup="dsModalDetail">&times;</button>
+    </div>
+    <div class="gde-modal__body" id="dsDetailIsi"></div>
+    <div class="gde-modal__foot" id="dsDetailAksi"></div>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   KONTROLER DATA SERTIFIKASI
+   ========================================================================== */
+var DsState = {
+  filter: {
+    q: '', status: '', divisi: '', kategori: '', verifikasi: '',
+    dari: '', sampai: '', sort: 'prioritas', dir: 'asc',
+    page: 1, per_page: 25
+  },
+  hasil: null,
+  detail: null,
+  daftarPemegang: []
+};
+
+function initDataSertifikasi(param) {
+  'use strict';
+
+  if (param) {
+    var q = String(param);
+    if (q.indexOf('q=') === 0) DsState.filter.q = decodeURIComponent(q.substring(2));
+    if (q.indexOf('status=') === 0) DsState.filter.status = decodeURIComponent(q.substring(7)).toUpperCase();
+    if (q.indexOf('pekerja=') === 0) {
+      DsState.filter.q = decodeURIComponent(q.substring(8));
+    }
+  }
+  if (SIAGA.state.paramDoc) {
+    var doc = SIAGA.state.paramDoc;
+    SIAGA.state.paramDoc = '';
+    bukaDetail(doc);
+  }
+
+  renderDsKerangka();
+  muatDs(true);
+}
+
+/* -------------------------------------------------------------- kerangka -- */
+function renderDsKerangka() {
+  var isHc = SIAGA.isHc();
+  var meta = SIAGA.state.meta || {};
+
+  var opsiStatus = (meta.statuses || []).map(function (s) {
+    return '<option value="' + SIAGA.attr(s.key) + '">' + SIAGA.esc(s.label) + '</option>';
+  }).join('');
+
+  var opsiKategori = (meta.kategori_options || []).map(function (k) {
+    return '<option value="' + SIAGA.attr(k) + '">' + SIAGA.esc(k) + '</option>';
+  }).join('');
+
+  SIAGA.el('dsRoot').innerHTML = ''
+    + '<div class="gde-page-head">'
+    + '  <div>'
+    + '    <div class="gde-u-eyebrow">Penelusuran</div>'
+    + '    <h1>Data Sertifikasi</h1>'
+    + '    <p>Cari, periksa, dan kelola seluruh data sertifikasi beserta lampirannya.</p>'
+    + '  </div>'
+    + '  <div class="gde-page-actions">'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="dsEksporExcel">'
+    + '      <i class="bi bi-file-earmark-excel"></i> Excel</button>'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="dsEksporPdf">'
+    + '      <i class="bi bi-file-earmark-pdf"></i> PDF</button>'
+    + '    <button class="gde-btn gde-btn--primary" type="button" data-view="register">'
+    + '      <i class="bi bi-plus-circle"></i> Tambah data</button>'
+    + '  </div>'
+    + '</div>'
+
+    /* ringkasan status */
+    + '<div class="gde-grid gde-grid--4 siaga-mb-4" id="dsRingkas"></div>'
+
+    + '<div class="gde-card">'
+    + '  <div class="siaga-toolbar">'
+    + '    <div class="siaga-toolbar__field siaga-toolbar__field--grow">'
+    + '      <label class="gde-label" for="dsCari">Pencarian</label>'
+    + '      <input class="gde-input" id="dsCari" type="text" placeholder="Nama, Employee Code, sertifikasi, no. sertifikat...">'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="dsStatus">Status</label>'
+    + '      <select class="gde-select" id="dsStatus"><option value="">Semua status</option>' + opsiStatus + '</select>'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="dsDivisi">Divisi</label>'
+    + '      <select class="gde-select" id="dsDivisi"><option value="">Semua divisi</option></select>'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="dsKategori">Kategori</label>'
+    + '      <select class="gde-select" id="dsKategori"><option value="">Semua kategori</option>' + opsiKategori + '</select>'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="dsVerifikasi">Verifikasi</label>'
+    + '      <select class="gde-select" id="dsVerifikasi">'
+    + '        <option value="">Semua</option>'
+    + '        <option value="PENDING">Menunggu verifikasi</option>'
+    + '        <option value="VERIFIED">Terverifikasi</option>'
+    + '        <option value="REJECTED">Ditolak</option>'
+    + '      </select>'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="dsDari">Berlaku sampai (dari)</label>'
+    + '      <input class="gde-input" id="dsDari" type="date">'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="dsSampai">s.d.</label>'
+    + '      <input class="gde-input" id="dsSampai" type="date">'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="dsUrut">Urutkan</label>'
+    + '      <select class="gde-select" id="dsUrut">'
+    + '        <option value="prioritas">Paling mendesak</option>'
+    + '        <option value="expired">Tanggal berakhir</option>'
+    + '        <option value="nama">Nama pekerja</option>'
+    + '        <option value="sertifikasi">Nama sertifikasi</option>'
+    + '        <option value="divisi">Divisi</option>'
+    + '      </select>'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field" style="min-width:auto">'
+    + '      <label class="gde-label">&nbsp;</label>'
+    + '      <button class="gde-btn gde-btn--outline" type="button" id="dsReset">'
+    + '        <i class="bi bi-arrow-counterclockwise"></i> Reset</button>'
+    + '    </div>'
+    + '  </div>'
+
+    + '  <div id="dsTabel"></div>'
+    + '</div>';
+
+  isiOpsiDivisiDs(meta.divisi_options || []);
+
+  /* ---- pasang event ---- */
+  var cari = SIAGA.el('dsCari');
+  cari.value = DsState.filter.q;
+  cari.addEventListener('input', SIAGA.debounce(function () {
+    DsState.filter.q = cari.value;
+    DsState.filter.page = 1;
+    muatDs(false);
+  }, 340));
+
+  [['dsStatus', 'status'], ['dsDivisi', 'divisi'], ['dsKategori', 'kategori'],
+  ['dsVerifikasi', 'verifikasi'], ['dsUrut', 'sort']].forEach(function (pasang) {
+    var node = SIAGA.el(pasang[0]);
+    if (!node) return;
+    node.value = DsState.filter[pasang[1]];
+    node.addEventListener('change', function () {
+      DsState.filter[pasang[1]] = node.value;
+      DsState.filter.page = 1;
+      muatDs(false);
+    });
+  });
+
+  ['dsDari', 'dsSampai'].forEach(function (id) {
+    var node = SIAGA.el(id);
+    if (!node) return;
+    node.addEventListener('change', function () {
+      DsState.filter[id === 'dsDari' ? 'dari' : 'sampai'] = node.value;
+      DsState.filter.page = 1;
+      muatDs(false);
+    });
+  });
+
+  var reset = SIAGA.el('dsReset');
+  if (reset) {
+    reset.addEventListener('click', function () {
+      DsState.filter = {
+        q: '', status: '', divisi: '', kategori: '', verifikasi: '',
+        dari: '', sampai: '', sort: 'prioritas', dir: 'asc',
+        page: 1, per_page: DsState.filter.per_page
+      };
+      renderDsKerangka();
+      muatDs(true);
+    });
+  }
+
+  var exXls = SIAGA.el('dsEksporExcel');
+  if (exXls) exXls.addEventListener('click', function () { jalankanEkspor(exXls, 'excel'); });
+  var exPdf = SIAGA.el('dsEksporPdf');
+  if (exPdf) exPdf.addEventListener('click', function () { jalankanEkspor(exPdf, 'pdf'); });
+}
+
+function isiOpsiDivisiDs(opsi) {
+  var sel = SIAGA.el('dsDivisi');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">Semua divisi</option>'
+    + opsi.map(function (o) {
+      return '<option value="' + SIAGA.attr(o) + '">' + SIAGA.esc(o) + '</option>';
+    }).join('');
+  sel.value = DsState.filter.divisi;
+}
+
+/* ------------------------------------------------------------- pemuatan -- */
+function muatDs(sekaligus) {
+  if (sekaligus) {
+    var meta = SIAGA.state.meta || {};
+    isiOpsiDivisiDs(meta.divisi_options || []);
+  }
+  SIAGA.el('dsTabel').innerHTML = SIAGA.pemuatHtml('Memuat data...');
+  SIAGA.api('apiListFiles', [DsState.filter]).then(function (d) {
+    DsState.hasil = d;
+    renderDsRingkas(d);
+    renderDsTabel(d);
+  }).catch(function (e) {
+    SIAGA.el('dsTabel').innerHTML = SIAGA.galatHtml(e.message);
+  });
+}
+
+function renderDsRingkas(d) {
+  var r = d.ringkasan || {};
+  var defs = d.status_defs || [];
+  var html = defs.filter(function (s) {
+    return ['KADALUARSA', 'MENDEKATI_KADALUARSA', 'SEGERA_PERPANJANG', 'MASIH_BERLAKU'].indexOf(s.key) !== -1;
+  }).map(function (s) {
+    return '<div class="siaga-mini siaga-mini--' + s.tone + '">'
+      + '<div class="siaga-mini__icon"><i class="bi ' + s.icon + '"></i></div>'
+      + '<div style="min-width:0">'
+      + '<div class="siaga-mini__label">' + SIAGA.esc(s.label) + '</div>'
+      + '<div class="siaga-mini__value">' + SIAGA.angka(r[s.key] || 0) + '</div>'
+      + '</div></div>';
+  }).join('');
+  SIAGA.el('dsRingkas').innerHTML = html;
+}
+
+/* ---------------------------------------------------------------- tabel -- */
+function renderDsTabel(d) {
+  var wadah = SIAGA.el('dsTabel');
+  if (!d.rows || !d.rows.length) {
+    wadah.innerHTML = SIAGA.kosongHtml('bi-inbox', 'Tidak ada data yang cocok',
+      'Coba ubah kata kunci atau reset filter.',
+      '<button class="gde-btn gde-btn--outline" type="button" data-view="register">'
+      + '<i class="bi bi-plus-circle"></i> Tambah data sertifikasi</button>');
+    return;
+  }
+
+  var isHc = SIAGA.isHc();
+
+  var baris = d.rows.map(function (r, i) {
+    var no = ((d.page - 1) * d.per_page) + i + 1;
+    return '<tr data-doc="' + SIAGA.attr(r.doc_id) + '" style="cursor:pointer">'
+      + '<td class="gde-ctr gde-u-tabular">' + no + '</td>'
+      + '<td class="siaga-td-nama">'
+      + '<strong>' + SIAGA.esc(r.nama_pemegang || '-') + '</strong>'
+      + '<span>' + SIAGA.esc(r.employee_id) + (r.divisi ? (' · ' + SIAGA.esc(r.divisi)) : '') + '</span>'
+      + '</td>'
+      + '<td class="siaga-td-sert">'
+      + '<strong>' + SIAGA.esc(r.nama_sertifikasi) + '</strong>'
+      + '<span>' + SIAGA.esc(r.kategori || 'Tanpa kategori')
+      + (r.no_sertifikat ? (' · ' + SIAGA.esc(r.no_sertifikat)) : '') + '</span>'
+      + '</td>'
+      + '<td class="gde-ctr gde-u-nowrap">' + SIAGA.esc(SIAGA.tglSingkat(r.expired_at)) + '</td>'
+      + '<td class="gde-ctr siaga-sisa">'
+      + '<span style="color:' + warnaSisaDs(r.sisa_hari) + '">' + SIAGA.esc(SIAGA.sisaTeks(r.sisa_hari)) + '</span>'
+      + '<small>' + SIAGA.esc(SIAGA.sisaBulanTeks(r.sisa_bulan)) + '</small>'
+      + '</td>'
+      + '<td class="gde-ctr">' + SIAGA.statusBadge(r.status, r.status_label, r.status_tone, r.status_icon) + '</td>'
+      + '<td class="gde-ctr">' + badgeVerifikasi(r.status_verifikasi) + '</td>'
+      + '<td class="gde-ctr">' + (r.file_id
+        ? '<a href="' + SIAGA.attr(r.view_url) + '" target="_blank" title="' + SIAGA.attr(r.file_name) + '">'
+        + '<i class="bi ' + SIAGA.attr(r.file_icon) + '" style="font-size:1.15rem;color:var(--gde-blue)"></i></a>'
+        : '<i class="bi bi-dash-circle" style="color:var(--gde-muted-2)"></i>') + '</td>'
+      + '<td><div class="siaga-aksi">'
+      + '<button class="gde-btn gde-btn--outline gde-btn--xs" type="button" data-aksi="detail" '
+      + 'data-doc="' + SIAGA.attr(r.doc_id) + '" title="Detail"><i class="bi bi-eye"></i></button>'
+      + (isHc ? '<button class="gde-btn gde-btn--outline gde-btn--xs" type="button" data-aksi="verifikasi" '
+        + 'data-doc="' + SIAGA.attr(r.doc_id) + '" title="Verifikasi"><i class="bi bi-patch-check"></i></button>' : '')
+      + '</div></td>'
+      + '</tr>';
+  }).join('');
+
+  wadah.innerHTML = ''
+    + '<div class="siaga-tablewrap"><table class="gde-table gde-table--compact">'
+    + '<thead><tr>'
+    + '<th class="gde-ctr" style="width:48px">No</th>'
+    + '<th>Pemegang</th>'
+    + '<th>Sertifikasi</th>'
+    + '<th class="gde-ctr">Berakhir</th>'
+    + '<th class="gde-ctr">Sisa masa berlaku</th>'
+    + '<th class="gde-ctr">Status</th>'
+    + '<th class="gde-ctr">Verifikasi</th>'
+    + '<th class="gde-ctr">Berkas</th>'
+    + '<th class="gde-u-text-right" style="width:110px">Aksi</th>'
+    + '</tr></thead>'
+    + '<tbody>' + baris + '</tbody>'
+    + '</table></div>'
+    + '<div class="siaga-pager">'
+    + '  <span class="siaga-pager__info">Menampilkan ' + SIAGA.angka(d.rows.length)
+    + ' dari ' + SIAGA.angka(d.total) + ' data (halaman ' + d.page + ' / ' + d.pages + ')</span>'
+    + '  <div class="gde-pagination" id="dsPager">' + renderPager(d) + '</div>'
+    + '</div>';
+
+  pasangEventTabel();
+}
+
+function renderPager(d) {
+  if (d.pages <= 1) return '';
+  var out = [];
+  var p = d.page;
+  var dari = Math.max(1, p - 2);
+  var sampai = Math.min(d.pages, dari + 4);
+  dari = Math.max(1, sampai - 4);
+
+  out.push('<a href="#" data-hal="' + (p - 1) + '"' + (p <= 1 ? ' class="is-disabled"' : '') + '>'
+    + '<i class="bi bi-chevron-left"></i></a>');
+  if (dari > 1) {
+    out.push('<a href="#" data-hal="1">1</a>');
+    if (dari > 2) out.push('<span class="is-disabled">…</span>');
+  }
+  for (var i = dari; i <= sampai; i++) {
+    out.push('<a href="#" data-hal="' + i + '"' + (i === p ? ' class="is-active"' : '') + '>' + i + '</a>');
+  }
+  if (sampai < d.pages) {
+    if (sampai < d.pages - 1) out.push('<span class="is-disabled">…</span>');
+    out.push('<a href="#" data-hal="' + d.pages + '">' + d.pages + '</a>');
+  }
+  out.push('<a href="#" data-hal="' + (p + 1) + '"' + (p >= d.pages ? ' class="is-disabled"' : '') + '>'
+    + '<i class="bi bi-chevron-right"></i></a>');
+  return out.join('');
+}
+
+function badgeVerifikasi(v) {
+  var s = String(v || 'PENDING').toUpperCase();
+  if (s === 'VERIFIED') return '<span class="gde-badge" style="background:var(--gde-green-l2);color:#3F6B18"><i class="bi bi-patch-check-fill"></i> Terverifikasi</span>';
+  if (s === 'REJECTED') return '<span class="gde-badge gde-badge--red"><i class="bi bi-x-circle-fill"></i> Ditolak</span>';
+  return '<span class="gde-badge gde-badge--yellow"><i class="bi bi-hourglass-split"></i> Menunggu</span>';
+}
+
+function warnaSisaDs(hari) {
+  if (hari === null || hari === undefined || hari === '') return 'var(--gde-muted)';
+  var h = SIAGA.num(hari);
+  if (h < 0) return '#7F1D1D';
+  if (h <= 60) return '#1B2430';
+  if (h <= 90) return '#C4142A';
+  if (h <= 180) return '#8A4B00';
+  if (h <= 270) return '#6B5F00';
+  return '#3F6B18';
+}
+
+function pasangEventTabel() {
+  var wadah = SIAGA.el('dsTabel');
+
+  SIAGA.on(wadah, 'click', '[data-hal]', function (e, t) {
+    e.preventDefault();
+    if (t.classList.contains('is-disabled')) return;
+    DsState.filter.page = SIAGA.num(t.getAttribute('data-hal'), 1);
+    muatDs(false);
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (x) { }
+  });
+
+  SIAGA.on(wadah, 'click', '[data-aksi]', function (e, t) {
+    e.stopPropagation();
+    var aksi = t.getAttribute('data-aksi');
+    var doc = t.getAttribute('data-doc');
+    if (aksi === 'detail') bukaDetail(doc);
+    if (aksi === 'verifikasi') bukaVerifikasi(doc);
+  });
+
+  SIAGA.on(wadah, 'click', 'tbody tr[data-doc]', function (e, t) {
+    if (e.target.closest('[data-aksi]') || e.target.closest('a')) return;
+    bukaDetail(t.getAttribute('data-doc'));
+  });
+}
+
+/* ---------------------------------------------------------- modal detail -- */
+function bukaDetail(docId) {
+  SIAGA.el('dsDetailIsi').innerHTML = SIAGA.pemuatHtml('Memuat detail...');
+  SIAGA.el('dsDetailAksi').innerHTML = '';
+  SIAGA.modalBuka('dsModalDetail');
+
+  SIAGA.api('apiGetFile', [docId]).then(function (d) {
+    DsState.detail = d.file;
+    renderDetail(d.file);
+  }).catch(function (e) {
+    SIAGA.el('dsDetailIsi').innerHTML = SIAGA.galatHtml(e.message);
+  });
+}
+
+function renderDetail(f) {
+  var baris = [
+    ['Doc ID', f.doc_id],
+    ['Pemegang', (f.nama_pemegang || '-') + ' (' + f.employee_id + ')'],
+    ['Divisi / Jabatan', (f.divisi || '-') + ' / ' + (f.jabatan || '-')],
+    ['Nama sertifikasi', f.nama_sertifikasi],
+    ['Kategori', f.kategori || '-'],
+    ['Penerbit', f.penerbit || '-'],
+    ['No. sertifikat', f.no_sertifikat || '-'],
+    ['Mulai pelaksanaan', SIAGA.tglIndo(f.start_pelaksanaan)],
+    ['Selesai pelaksanaan', SIAGA.tglIndo(f.end_pelaksanaan)],
+    ['Tanggal sertifikasi', f.tanggal_sertifikasi ? SIAGA.tglIndo(f.tanggal_sertifikasi) : '—'],
+    ['Tanggal perpanjangan', f.tanggal_waktu_perpanjangan ? SIAGA.tglIndo(f.tanggal_waktu_perpanjangan) : 'Belum diperpanjang'],
+    ['Masa berlaku', f.masa_berlaku_bulan ? (f.masa_berlaku_bulan + ' bulan') : '-'],
+    ['Berlaku sampai', SIAGA.tglIndo(f.expired_at)],
+    ['Sisa masa berlaku', SIAGA.sisaTeks(f.sisa_hari) + (f.sisa_bulan !== null ? (' (± ' + SIAGA.sisaBulanTeks(f.sisa_bulan) + ')') : '')],
+    ['Status', null],
+    ['Verifikasi', null],
+    ['Terakhir diperbarui', f.updated_at || '—'],
+    ['Pertama diinput', f.created_at ? (f.created_at + (f.created_by ? (' oleh ' + f.created_by) : '')) : '—']
+  ];
+
+  var html = '<div class="siaga-modal-grid">'
+    + '<div>'
+    + '<dl class="siaga-dl">'
+    + baris.map(function (b) {
+      if (b[1] === null && b[0] === 'Status') {
+        return '<dt>Status</dt><dd>' + SIAGA.statusBadge(f.status, f.status_label, f.status_tone, f.status_icon) + '</dd>';
+      }
+      if (b[1] === null && b[0] === 'Verifikasi') {
+        return '<dt>Verifikasi</dt><dd>' + badgeVerifikasi(f.status_verifikasi)
+          + (f.verified_by ? (' <span class="siaga-inline-note">oleh ' + SIAGA.esc(f.verified_by) + '</span>') : '') + '</dd>';
+      }
+      return '<dt>' + SIAGA.esc(b[0]) + '</dt><dd>' + SIAGA.esc(b[1]) + '</dd>';
+    }).join('')
+    + '</dl>'
+    + (f.catatan ? ('<div class="gde-alert gde-alert--info siaga-mt-4">'
+      + '<i class="bi bi-chat-left-text gde-alert__icon"></i>'
+      + '<div class="gde-alert__body"><strong>Catatan</strong>' + SIAGA.esc(f.catatan) + '</div></div>') : '')
+    + '</div>'
+    + '<div>'
+    + '<div class="gde-u-eyebrow" style="margin-bottom:.5rem">Lampiran</div>'
+    + pratinjauLampiranDs(f)
+    + '</div>'
+    + '</div>';
+
+  SIAGA.el('dsDetailIsi').innerHTML = html;
+
+  /* ---- aksi modal ---- */
+  var isHc = SIAGA.isHc();
+  var aksi = '<button class="gde-btn gde-btn--outline" type="button" data-tutup="dsModalDetail">Tutup</button>';
+  if (f.file_id) {
+    aksi += '<a class="gde-btn gde-btn--outline-primary" href="' + SIAGA.attr(f.view_url) + '" target="_blank">'
+      + '<i class="bi bi-box-arrow-up-right"></i> Buka di Drive</a>';
+    aksi += '<a class="gde-btn gde-btn--outline-primary" href="' + SIAGA.attr(f.download_url) + '" target="_blank">'
+      + '<i class="bi bi-download"></i> Unduh</a>';
+  }
+  if (isHc && f.status_verifikasi !== 'VERIFIED') {
+    aksi += '<button class="gde-btn gde-btn--green" type="button" id="dsVerifikasiBtn">'
+      + '<i class="bi bi-patch-check"></i> Verifikasi</button>';
+  }
+  if (isHc) {
+    aksi += '<button class="gde-btn gde-btn--outline-danger" type="button" id="dsHapusBtn">'
+      + '<i class="bi bi-trash"></i> Hapus</button>';
+  }
+  aksi += '<button class="gde-btn gde-btn--primary" type="button" id="dsUbahBtn">'
+    + '<i class="bi bi-pencil"></i> Ubah</button>';
+  SIAGA.el('dsDetailAksi').innerHTML = aksi;
+
+  var vb = SIAGA.el('dsVerifikasiBtn');
+  if (vb) vb.addEventListener('click', function () { SIAGA.modalTutup('dsModalDetail'); bukaVerifikasi(f.doc_id); });
+  var hb = SIAGA.el('dsHapusBtn');
+  if (hb) hb.addEventListener('click', function () { hapusDs(f); });
+  var ub = SIAGA.el('dsUbahBtn');
+  if (ub) ub.addEventListener('click', function () {
+    SIAGA.state.paramDoc = f.doc_id;
+    SIAGA.modalTutup('dsModalDetail');
+    SIAGA.navigasi('register');
+  });
+
+  SIAGA.on(SIAGA.el('dsModalDetail'), 'click', '[data-tutup]', function () {
+    SIAGA.modalTutup('dsModalDetail');
+  });
+}
+
+function pratinjauLampiranDs(f) {
+  if (!f.file_id) {
+    return '<div class="gde-alert gde-alert--warning">'
+      + '<i class="bi bi-paperclip gde-alert__icon"></i>'
+      + '<div class="gde-alert__body"><strong>Belum ada lampiran</strong>'
+      + 'Unggah berkas sertifikat agar mudah diverifikasi dan diaudit.</div></div>';
+  }
+  var mime = String(f.mime_type || '');
+  var isGambar = mime.indexOf('image/') === 0;
+  var isPdf = mime.indexOf('pdf') !== -1 || SIAGA.extDari(f.file_name) === 'pdf';
+
+  var isi;
+  if (isGambar) {
+    isi = '<img src="' + SIAGA.attr(SIAGA.pratinjauUrl(f.file_id, f.mime_type, f.file_name)) + '" alt="Lampiran">';
+  } else if (isPdf) {
+    isi = '<iframe src="' + SIAGA.attr(f.preview_url) + '" title="Pratinjau PDF" loading="lazy"></iframe>';
+  } else {
+    isi = '<div class="siaga-lampiran__empty">'
+      + '<i class="bi ' + SIAGA.attr(f.file_icon) + '"></i>'
+      + '<strong>' + SIAGA.esc(f.file_name || 'Berkas') + '</strong>'
+      + '<p class="siaga-inline-note">Pratinjau tidak tersedia untuk jenis berkas ini. '
+      + 'Klik "Buka di Drive" untuk melihat isinya.</p></div>';
+  }
+
+  return '<div style="border:1px solid var(--gde-line);border-radius:var(--gde-r-md);overflow:hidden">'
+    + '<div class="siaga-lampiran__toolbar">'
+    + '<i class="bi ' + SIAGA.attr(f.file_icon) + '" style="color:var(--gde-blue);font-size:1.1rem"></i>'
+    + '<span style="font-size:.78rem;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+    + SIAGA.esc(f.file_name || '-') + '</span>'
+    + '<span class="gde-chip gde-chip--soft" style="font-size:.65rem">' + SIAGA.esc(f.ukuran_label) + '</span>'
+    + '</div>'
+    + '<div class="siaga-lampiran__viewer">' + isi + '</div>'
+    + '</div>';
+}
+
+/* ------------------------------------------------------------ verifikasi -- */
+function bukaVerifikasi(docId) {
+  SIAGA.api('apiGetFile', [docId]).then(function (d) {
+    var f = d.file;
+    return SIAGA.konfirmasi({
+      judul: 'Verifikasi data sertifikasi',
+      pesanHtml: '<b>' + SIAGA.esc(f.nama_sertifikasi) + '</b><br>'
+        + SIAGA.esc(f.nama_pemegang) + ' (' + SIAGA.esc(f.employee_id) + ')<br>'
+        + 'Berlaku sampai ' + SIAGA.esc(SIAGA.tglIndo(f.expired_at)) + ' — '
+        + SIAGA.statusBadge(f.status, f.status_label, f.status_tone, f.status_icon)
+        + '<br><br>Verifikasi berarti data ini dianggap benar oleh Human Capital.',
+      labelOk: 'Verifikasi',
+      labelBatal: 'Tolak / nanti',
+      bahaya: false
+    }).then(function (ya) {
+      var keputusan = ya ? 'VERIFIED' : 'REJECTED';
+      if (!ya) {
+        return SIAGA.konfirmasi({
+          judul: 'Tandai ditolak?',
+          pesan: 'Data akan ditandai DITOLAK sehingga pemiliknya perlu memperbaiki. '
+            + 'Pilih "Batal" untuk membiarkannya tetap menunggu verifikasi.',
+          labelOk: 'Tandai ditolak',
+          bahaya: true
+        }).then(function (tidak) {
+          if (!tidak) return null;
+          return SIAGA.api('apiVerifyFile', [docId, keputusan, 'Ditolak oleh HC, mohon periksa kembali data dan lampirannya.']);
+        });
+      }
+      return SIAGA.api('apiVerifyFile', [docId, keputusan, '']);
+    });
+  }).then(function (r) {
+    if (!r) return;
+    SIAGA.sukses('Status verifikasi diperbarui.', 'Berhasil');
+    muatDs(false);
+    if (SIAGA.el('dsModalDetail').classList.contains('is-open')) bukaDetail(r.doc_id);
+  }).catch(function (e) { SIAGA.gagal(e.message); });
+}
+
+/* ---------------------------------------------------------------- hapus -- */
+function hapusDs(f) {
+  SIAGA.konfirmasi({
+    judul: 'Hapus data sertifikasi',
+    pesanHtml: 'Data <b>' + SIAGA.esc(f.nama_sertifikasi) + '</b> milik '
+      + SIAGA.esc(f.nama_pemegang || f.employee_id) + ' akan dihapus permanen'
+      + (f.file_id ? ' beserta lampirannya' : '') + '. Tindakan ini tidak dapat dibatalkan.',
+    labelOk: 'Hapus permanen',
+    bahaya: true
+  }).then(function (ya) {
+    if (!ya) return;
+    return SIAGA.api('apiDeleteFile', [f.doc_id]).then(function () {
+      SIAGA.sukses('Data sertifikasi dihapus.', 'Berhasil');
+      SIAGA.modalTutup('dsModalDetail');
+      muatDs(false);
+    });
+  }).catch(function (e) { SIAGA.gagal(e.message); });
+}
+
+/* ---------------------------------------------------------------- ekspor -- */
+function jalankanEkspor(btn, jenis) {
+  SIAGA.tombolSibuk(btn, true, 'Menyiapkan...');
+  var filter = {
+    q: DsState.filter.q, status: DsState.filter.status, divisi: DsState.filter.divisi,
+    kategori: DsState.filter.kategori, verifikasi: DsState.filter.verifikasi,
+    dari: DsState.filter.dari, sampai: DsState.filter.sampai,
+    judul: 'Rekap Sertifikasi & Masa Berlaku'
+  };
+  var panggil = (jenis === 'excel')
+    ? SIAGA.api('apiExportExcel', [filter])
+    : SIAGA.api('apiExportPdf', [filter]);
+
+  panggil.then(function (r) {
+    SIAGA.tombolSibuk(btn, false);
+    SIAGA.sukses(r.name + ' berisi ' + SIAGA.angka(r.jumlah) + ' baris berhasil dibuat.', 'Ekspor selesai');
+    window.open(r.url, '_blank');
+  }).catch(function (e) {
+    SIAGA.tombolSibuk(btn, false);
+    SIAGA.gagal(e.message);
+  });
+}
+</script>

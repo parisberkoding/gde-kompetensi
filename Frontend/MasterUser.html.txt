@@ -1,0 +1,987 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — MasterUser.html
+  Halaman: Master User — kelola akun, role, dan data pekerja.
+  Hanya untuk role HC dan SA (router sudah menjaga, halaman ini tetap
+  memasang guard sendiri lewat SIAGA.isHc()).
+
+  KONTRAK API (lihat subprocess.gs bagian 3 & 10):
+    apiListUsers(token, filter)      -> { rows:[userPublic_ + jumlah_sertifikasi], total }
+    apiGetUser(token, employee_code) -> { user }
+    apiSaveUser(token, data)         -> { mode:'insert'|'update', employee_code, username, password_awal? }
+    apiDeleteUser(token, employee_code) -> { ok, employee_code }
+    apiResetPassword(token, employee_code) -> { employee_code, password_awal }
+    apiSyncUsersFromFiles(token)     -> { dibuat, dilewati, daftar[], errors[] }
+    apiImportUsers(token, teks, opsi)-> { dibuat, diperbarui, gagal, pesan[] }
+    apiGetMeta(token)                -> { divisi_options[], ... }
+  ============================================================================
+-->
+<div id="muRoot">
+  <div class="siaga-loader">
+    <div class="siaga-loader__ring"></div>
+    <p>Memuat master user...</p>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   KONTROLER MASTER USER
+   ========================================================================== */
+var MUState = {
+  baris: [],          // seluruh user (hasil apiListUsers tanpa filter)
+  meta: null,         // hasil apiGetMeta
+  filter: { q: '', role: '', divisi: '', status: '' },
+  halaman: 1,
+  perHalaman: 25,
+  mode: 'baru',       // 'baru' | 'ubah'
+  kode: ''            // employee_code yang sedang diubah
+};
+
+function initMasterUser(param) {
+  'use strict';
+
+  /* Guard role: halaman ini khusus HC / SA */
+  if (!SIAGA.isHc()) {
+    SIAGA.el('muRoot').innerHTML = SIAGA.galatHtml(
+      'Akses ditolak. Halaman Master User hanya dapat dibuka oleh Human Capital atau Super Admin.');
+    return;
+  }
+
+  /* state selalu segar setiap view dibuka */
+  MUState.baris = [];
+  MUState.meta = null;
+  MUState.filter = { q: '', role: '', divisi: '', status: '' };
+  MUState.halaman = 1;
+  MUState.mode = 'baru';
+  MUState.kode = '';
+
+  renderMuKerangka();
+  muatUser();
+}
+
+/* -------------------------------------------------------------- kerangka -- */
+function renderMuKerangka() {
+  SIAGA.el('muRoot').innerHTML = ''
+    /* ---------- header ---------- */
+    + '<div class="gde-page-head">'
+    + '  <div>'
+    + '    <div class="gde-u-eyebrow">Administrasi</div>'
+    + '    <h1>Master User</h1>'
+    + '    <p>Kelola akun, role, dan data pekerja Unit Patuha. Password awal setiap akun baru '
+    + '    adalah Employee Code dan wajib diganti saat login pertama.</p>'
+    + '  </div>'
+    + '  <div class="gde-page-actions">'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="muImporBtn">'
+    + '      <i class="bi bi-clipboard-plus"></i> Impor massal</button>'
+    + '    <button class="gde-btn gde-btn--outline-primary" type="button" id="muSyncBtn">'
+    + '      <i class="bi bi-arrow-repeat"></i> Sinkron dari data sertifikasi</button>'
+    + '    <button class="gde-btn gde-btn--primary" type="button" id="muTambahBtn">'
+    + '      <i class="bi bi-person-plus"></i> Tambah user</button>'
+    + '  </div>'
+    + '</div>'
+    /* ---------- KPI ---------- */
+    + '<div id="muKpi" class="gde-grid gde-grid--4 siaga-mb-4"></div>'
+    /* ---------- kartu tabel + toolbar ---------- */
+    + '<div class="gde-card">'
+    + '  <div class="siaga-toolbar">'
+    + '    <div class="siaga-toolbar__field siaga-toolbar__field--grow">'
+    + '      <label class="gde-label" for="muCari">Cari</label>'
+    + '      <input class="gde-input" type="search" id="muCari" autocomplete="off" '
+    + '             placeholder="Nama, Employee Code, username, email, jabatan, divisi...">'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="muRoleFilter">Role</label>'
+    + '      <select class="gde-select" id="muRoleFilter">'
+    + '        <option value="">Semua role</option>'
+    + '        <option value="SA">SA — Super Admin</option>'
+    + '        <option value="HC">HC — Human Capital</option>'
+    + '        <option value="EMP">EMP — Employee</option>'
+    + '      </select>'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="muDivisiFilter">Divisi</label>'
+    + '      <select class="gde-select" id="muDivisiFilter">'
+    + '        <option value="">Semua divisi</option>'
+    + '      </select>'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="muStatusFilter">Status</label>'
+    + '      <select class="gde-select" id="muStatusFilter">'
+    + '        <option value="">Semua status</option>'
+    + '        <option value="ACTIVE">ACTIVE</option>'
+    + '        <option value="INACTIVE">INACTIVE</option>'
+    + '      </select>'
+    + '    </div>'
+    + '    <button class="gde-btn gde-btn--outline gde-btn--sm" type="button" id="muReset">'
+    + '      <i class="bi bi-arrow-counterclockwise"></i> Reset</button>'
+    + '  </div>'
+    + '  <div id="muIsi"></div>'
+    + '</div>'
+    /* ---------- modal form ---------- */
+    + muModalFormHtml()
+    /* ---------- modal impor ---------- */
+    + muModalImporHtml()
+    /* ---------- modal hasil sinkron ---------- */
+    + muModalHasilHtml();
+
+  pasangPerilakuMu();
+}
+
+function muModalFormHtml() {
+  return ''
+    + '<div class="gde-modal" id="muModal" role="dialog" aria-modal="true">'
+    + '  <div class="gde-modal__scrim" data-mu-tutup="muModal"></div>'
+    + '  <div class="gde-modal__dialog gde-modal__dialog--lg">'
+    + '    <div class="gde-modal__head">'
+    + '      <h3 id="muModalJudul">Tambah user</h3>'
+    + '      <button class="gde-modal__close" type="button" data-mu-tutup="muModal" aria-label="Tutup">&times;</button>'
+    + '    </div>'
+    + '    <div class="gde-modal__body">'
+    + '      <form id="muForm" novalidate autocomplete="off">'
+    + '        <div class="siaga-formgrid siaga-formgrid--3">'
+    + '          <div>'
+    + '            <label class="gde-label" for="muEmployeeCode">Employee Code <span class="gde-req">*</span></label>'
+    + '            <input class="gde-input" type="text" id="muEmployeeCode" name="employee_code" '
+    + '                   placeholder="contoh: 4122196-C" autocapitalize="characters" spellcheck="false">'
+    + '            <div class="gde-hint" id="muHintCode">Dipakai sebagai password awal dan kunci data sertifikasi.</div>'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muNama">Nama Lengkap <span class="gde-req">*</span></label>'
+    + '            <input class="gde-input" type="text" id="muNama" name="nama_lengkap" '
+    + '                   placeholder="Nama sesuai data kepegawaian">'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muUsername">Username</label>'
+    + '            <input class="gde-input" type="text" id="muUsername" name="username" '
+    + '                   placeholder="kosongkan = otomatis" autocapitalize="none" spellcheck="false">'
+    + '            <div class="gde-hint">Kosongkan untuk otomatis dari nama depan.</div>'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muRole">Role <span class="gde-req">*</span></label>'
+    + '            <select class="gde-select" id="muRole" name="role">'
+    + '              <option value="EMP">EMP — Employee</option>'
+    + '              <option value="HC">HC — Human Capital</option>'
+    + '              <option value="SA">SA — Super Admin</option>'
+    + '            </select>'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muStatus">Status <span class="gde-req">*</span></label>'
+    + '            <select class="gde-select" id="muStatus" name="status">'
+    + '              <option value="ACTIVE">ACTIVE — dapat login</option>'
+    + '              <option value="INACTIVE">INACTIVE — akun dinonaktifkan</option>'
+    + '            </select>'
+    + '          </div>'
+    + '          <div id="muPassWrap">'
+    + '            <label class="gde-label" for="muPassword">Password</label>'
+    + '            <input class="gde-input" type="text" id="muPassword" name="password" '
+    + '                   placeholder="Password baru" autocomplete="new-password">'
+    + '            <div class="gde-hint">Kosongkan bila tidak diubah.</div>'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muEmailPerusahaan">Email Perusahaan</label>'
+    + '            <input class="gde-input" type="email" id="muEmailPerusahaan" name="email_perusahaan" '
+    + '                   placeholder="nama@geodipa.co.id" autocapitalize="none" spellcheck="false">'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muEmailPribadi">Email Pribadi</label>'
+    + '            <input class="gde-input" type="email" id="muEmailPribadi" name="email_pribadi" '
+    + '                   placeholder="nama@gmail.com" autocapitalize="none" spellcheck="false">'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muEmailAtasan">Email Atasan</label>'
+    + '            <input class="gde-input" type="email" id="muEmailAtasan" name="email_atasan" '
+    + '                   placeholder="atasan@geodipa.co.id" autocapitalize="none" spellcheck="false">'
+    + '            <div class="gde-hint">Dipakai untuk pengingat berjenjang ke atasan.</div>'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muDivisi">Divisi</label>'
+    + '            <input class="gde-input" type="text" id="muDivisi" name="divisi" list="muDaftarDivisi" '
+    + '                   placeholder="Pilih atau tulis divisi">'
+    + '            <datalist id="muDaftarDivisi"></datalist>'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muJabatan">Jabatan</label>'
+    + '            <input class="gde-input" type="text" id="muJabatan" name="jabatan" '
+    + '                   placeholder="contoh: Operator PLTP">'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muLokasi">Lokasi Kerja</label>'
+    + '            <input class="gde-input" type="text" id="muLokasi" name="lokasi_kerja" placeholder="Patuha">'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="muNoHp">No. HP</label>'
+    + '            <input class="gde-input" type="text" id="muNoHp" name="no_hp" placeholder="08xx xxxx xxxx">'
+    + '          </div>'
+    + '        </div>'
+    + '      </form>'
+    + '    </div>'
+    + '    <div class="gde-modal__foot">'
+    + '      <button class="gde-btn gde-btn--outline" type="button" data-mu-tutup="muModal">Batal</button>'
+    + '      <button class="gde-btn gde-btn--primary" type="button" id="muSimpan">'
+    + '        <i class="bi bi-save"></i> Simpan</button>'
+    + '    </div>'
+    + '  </div>'
+    + '</div>';
+}
+
+function muModalImporHtml() {
+  return ''
+    + '<div class="gde-modal" id="muImpor" role="dialog" aria-modal="true">'
+    + '  <div class="gde-modal__scrim" data-mu-tutup="muImpor"></div>'
+    + '  <div class="gde-modal__dialog gde-modal__dialog--lg">'
+    + '    <div class="gde-modal__head">'
+    + '      <h3>Impor user massal</h3>'
+    + '      <button class="gde-modal__close" type="button" data-mu-tutup="muImpor" aria-label="Tutup">&times;</button>'
+    + '    </div>'
+    + '    <div class="gde-modal__body">'
+    + '      <div class="gde-alert gde-alert--info">'
+    + '        <i class="bi bi-info-circle-fill gde-alert__icon"></i>'
+    + '        <div class="gde-alert__body">'
+    + '          <strong>Format tiap baris (pisahkan kolom dengan titik koma, pipa, atau tab)</strong>'
+    + '          <div class="gde-u-mono" style="font-size:.72rem;white-space:pre-wrap;margin-top:6px">'
+    + 'Employee_code ; Nama Lengkap ; Email Perusahaan ; Divisi ; Jabatan ; Role</div>'
+    + '          <div class="gde-u-mono" style="font-size:.72rem;white-space:pre-wrap;margin-top:6px;color:var(--gde-muted)">'
+    + '4122196-C ; Adi Asa Nugraha ; adi.asa@geodipa.co.id ; Operasi ; Operator PLTP ; EMP\n'
+    + '4122197-C ; Budi Santoso ; budi.santoso@geodipa.co.id ; Pemeliharaan ; Teknisi ; EMP</div>'
+    + '          <div style="margin-top:6px">Hanya <b>Employee_code</b> yang wajib. Role diisi SA, HC, atau EMP '
+    + '          (bawaan EMP). Baris header otomatis diabaikan. Akun baru memakai password awal = Employee Code.</div>'
+    + '        </div>'
+    + '      </div>'
+    + '      <div class="siaga-mt-3">'
+    + '        <label class="gde-label" for="muImporTeks">Data user</label>'
+    + '        <textarea class="gde-textarea" id="muImporTeks" rows="10" spellcheck="false" '
+    + '                  placeholder="Tempelkan data dari Excel / spreadsheet di sini..."></textarea>'
+    + '      </div>'
+    + '      <label class="gde-check siaga-mt-3" for="muImporGanti">'
+    + '        <input type="checkbox" id="muImporGanti">'
+    + '        <span>Ganti nama/data yang sudah ada (bila tidak dicentang, data lama hanya dilengkapi bila kosong)</span>'
+    + '      </label>'
+    + '      <div id="muImporHasil"></div>'
+    + '    </div>'
+    + '    <div class="gde-modal__foot">'
+    + '      <button class="gde-btn gde-btn--outline" type="button" data-mu-tutup="muImpor">Tutup</button>'
+    + '      <button class="gde-btn gde-btn--primary" type="button" id="muImporJalan">'
+    + '        <i class="bi bi-upload"></i> Impor</button>'
+    + '    </div>'
+    + '  </div>'
+    + '</div>';
+}
+
+function muModalHasilHtml() {
+  return ''
+    + '<div class="gde-modal" id="muHasil" role="dialog" aria-modal="true">'
+    + '  <div class="gde-modal__scrim" data-mu-tutup="muHasil"></div>'
+    + '  <div class="gde-modal__dialog">'
+    + '    <div class="gde-modal__head">'
+    + '      <h3>Sinkron dari data sertifikasi</h3>'
+    + '      <button class="gde-modal__close" type="button" data-mu-tutup="muHasil" aria-label="Tutup">&times;</button>'
+    + '    </div>'
+    + '    <div class="gde-modal__body" id="muHasilIsi"></div>'
+    + '    <div class="gde-modal__foot">'
+    + '      <button class="gde-btn gde-btn--primary" type="button" data-mu-tutup="muHasil">Selesai</button>'
+    + '    </div>'
+    + '  </div>'
+    + '</div>';
+}
+
+/* --------------------------------------------------------- pasang event -- */
+function pasangPerilakuMu() {
+  var akar = SIAGA.el('muRoot');
+  var form = SIAGA.el('muForm');
+  var cari = SIAGA.el('muCari');
+
+  /* --- header --- */
+  var tambah = SIAGA.el('muTambahBtn');
+  if (tambah) tambah.addEventListener('click', function () { bukaMuForm('baru', ''); });
+  var impor = SIAGA.el('muImporBtn');
+  if (impor) impor.addEventListener('click', bukaMuImpor);
+  var sync = SIAGA.el('muSyncBtn');
+  if (sync) sync.addEventListener('click', muSinkron);
+
+  /* --- toolbar (klien) --- */
+  if (cari) {
+    cari.addEventListener('input', SIAGA.debounce(function () {
+      MUState.filter.q = cari.value;
+      MUState.halaman = 1;
+      renderMuTabel();
+    }, 320));
+  }
+  var fRole = SIAGA.el('muRoleFilter');
+  if (fRole) {
+    fRole.addEventListener('change', function () {
+      MUState.filter.role = fRole.value;
+      MUState.halaman = 1;
+      renderMuTabel();
+    });
+  }
+  var fDivisi = SIAGA.el('muDivisiFilter');
+  if (fDivisi) {
+    fDivisi.addEventListener('change', function () {
+      MUState.filter.divisi = fDivisi.value;
+      MUState.halaman = 1;
+      renderMuTabel();
+    });
+  }
+  var fStatus = SIAGA.el('muStatusFilter');
+  if (fStatus) {
+    fStatus.addEventListener('change', function () {
+      MUState.filter.status = fStatus.value;
+      MUState.halaman = 1;
+      renderMuTabel();
+    });
+  }
+  var reset = SIAGA.el('muReset');
+  if (reset) {
+    reset.addEventListener('click', function () {
+      MUState.filter = { q: '', role: '', divisi: '', status: '' };
+      MUState.halaman = 1;
+      if (cari) cari.value = '';
+      if (fRole) fRole.value = '';
+      if (fDivisi) fDivisi.value = '';
+      if (fStatus) fStatus.value = '';
+      renderMuTabel();
+    });
+  }
+
+  /* --- form --- */
+  if (form) {
+    form.addEventListener('submit', function (e) { e.preventDefault(); simpanMu(); });
+  }
+  var simpan = SIAGA.el('muSimpan');
+  if (simpan) simpan.addEventListener('click', simpanMu);
+
+  /* --- impor --- */
+  var imporJalan = SIAGA.el('muImporJalan');
+  if (imporJalan) imporJalan.addEventListener('click', jalanMuImpor);
+
+  /* --- delegasi umum --- */
+  SIAGA.on(akar, 'click', '[data-mu-tutup]', function (e, t) {
+    SIAGA.modalTutup(t.getAttribute('data-mu-tutup'));
+  });
+
+  SIAGA.on(akar, 'click', '[data-mu-hal]', function (e, t) {
+    e.preventDefault();
+    MUState.halaman = SIAGA.num(t.getAttribute('data-mu-hal'), 1);
+    renderMuTabel();
+  });
+
+  SIAGA.on(akar, 'click', '[data-mu-pekerja]', function (e, t) {
+    e.preventDefault();
+    SIAGA.state.paramPekerja = t.getAttribute('data-mu-pekerja');
+    SIAGA.navigasi('pekerja');
+  });
+
+  SIAGA.on(akar, 'click', '[data-mu-aksi]', function (e, t) {
+    var aksi = t.getAttribute('data-mu-aksi');
+    var kode = t.getAttribute('data-mu-kode') || '';
+    if (aksi === 'tambah') bukaMuForm('baru', '');
+    else if (aksi === 'ubah') bukaMuForm('ubah', kode);
+    else if (aksi === 'reset') muResetPassword(kode);
+    else if (aksi === 'toggle') muToggleStatus(kode);
+    else if (aksi === 'hapus') muHapus(kode);
+  });
+}
+
+/* --------------------------------------------------------------- muatan -- */
+function muatUser() {
+  var isi = SIAGA.el('muIsi');
+  if (isi) isi.innerHTML = SIAGA.pemuatHtml('Memuat data user...');
+
+  var janjiMeta = SIAGA.api('apiGetMeta', []).then(function (m) {
+    return m;
+  }).catch(function () { return null; });
+
+  var janjiUser = SIAGA.api('apiListUsers', [{}]);
+
+  Promise.all([janjiMeta, janjiUser]).then(function (hasil) {
+    MUState.meta = hasil[0] || MUState.meta;
+    var d = hasil[1] || {};
+    MUState.baris = d.rows || [];
+    muIsiPilihanDivisi();
+    renderMuKpi();
+    renderMuTabel();
+  }).catch(function (e) {
+    var wadah = SIAGA.el('muIsi');
+    if (wadah) wadah.innerHTML = SIAGA.galatHtml(e.message);
+    var kpi = SIAGA.el('muKpi');
+    if (kpi) kpi.innerHTML = '';
+  });
+}
+
+function muIsiPilihanDivisi() {
+  var daftar = ((MUState.meta && MUState.meta.divisi_options) || []).slice();
+  MUState.baris.forEach(function (u) {
+    var v = String(u.divisi || '').trim();
+    if (v && daftar.indexOf(v) === -1) daftar.push(v);
+  });
+  daftar.sort();
+
+  var sel = SIAGA.el('muDivisiFilter');
+  if (sel) {
+    var nilai = MUState.filter.divisi;
+    sel.innerHTML = '<option value="">Semua divisi</option>'
+      + daftar.map(function (o) {
+        return '<option value="' + SIAGA.attr(o) + '">' + SIAGA.esc(o) + '</option>';
+      }).join('');
+    sel.value = nilai;
+  }
+
+  var dl = SIAGA.el('muDaftarDivisi');
+  if (dl) {
+    dl.innerHTML = daftar.map(function (o) {
+      return '<option value="' + SIAGA.attr(o) + '"></option>';
+    }).join('');
+  }
+}
+
+/* ------------------------------------------------------------------ KPI -- */
+function renderMuKpi() {
+  var total = MUState.baris.length;
+  var hcsa = 0, emp = 0, nonaktif = 0;
+  MUState.baris.forEach(function (u) {
+    var r = String(u.role || '').toUpperCase();
+    if (r === 'HC' || r === 'SA') hcsa++;
+    if (r === 'EMP') emp++;
+    if (String(u.status || '').toUpperCase() === 'INACTIVE') nonaktif++;
+  });
+
+  var wadah = SIAGA.el('muKpi');
+  if (!wadah) return;
+  wadah.innerHTML = ''
+    + muMini('Total user', total, 'bi-people', 'blue')
+    + muMini('HC / SA', hcsa, 'bi-shield-lock', 'green')
+    + muMini('Employee (EMP)', emp, 'bi-person-badge', 'yellow')
+    + muMini('Akun nonaktif', nonaktif, 'bi-person-slash', 'black');
+}
+
+function muMini(label, nilai, ikon, tone) {
+  return '<div class="siaga-mini siaga-mini--' + tone + '">'
+    + '<div class="siaga-mini__icon"><i class="bi ' + ikon + '"></i></div>'
+    + '<div style="min-width:0">'
+    + '<div class="siaga-mini__label">' + SIAGA.esc(label) + '</div>'
+    + '<div class="siaga-mini__value">' + SIAGA.angka(nilai) + '</div>'
+    + '</div></div>';
+}
+
+/* ---------------------------------------------------------------- tabel -- */
+function muBarisTersaring() {
+  var f = MUState.filter;
+  var q = String(f.q || '').trim().toLowerCase();
+  var role = String(f.role || '').toUpperCase();
+  var status = String(f.status || '').toUpperCase();
+
+  return MUState.baris.filter(function (u) {
+    if (role && String(u.role || '').toUpperCase() !== role) return false;
+    if (f.divisi && String(u.divisi || '') !== String(f.divisi)) return false;
+    if (status && String(u.status || '').toUpperCase() !== status) return false;
+    if (q) {
+      var gab = [u.employee_code, u.nama_lengkap, u.username, u.email_perusahaan,
+        u.email_pribadi, u.jabatan, u.divisi].join(' ').toLowerCase();
+      if (gab.indexOf(q) === -1) return false;
+    }
+    return true;
+  });
+}
+
+function renderMuTabel() {
+  var wadah = SIAGA.el('muIsi');
+  if (!wadah) return;
+
+  var semua = muBarisTersaring();
+  var per = MUState.perHalaman;
+  var maxHal = Math.max(1, Math.ceil(semua.length / per));
+  if (MUState.halaman > maxHal) MUState.halaman = maxHal;
+  if (MUState.halaman < 1) MUState.halaman = 1;
+  var mulai = (MUState.halaman - 1) * per;
+  var halamanIni = semua.slice(mulai, mulai + per);
+
+  /* keadaan loading sudah ditangani pemanggil; di sini kosong / terisi */
+  if (!MUState.baris.length) {
+    wadah.innerHTML = SIAGA.kosongHtml('bi-people', 'Belum ada user',
+      'Tambahkan akun satu per satu, impor massal, atau sinkronkan dari data sertifikasi yang sudah ada.',
+      '<div class="gde-u-flex gde-u-flex-wrap siaga-gap-2" style="justify-content:center">'
+        + '<button class="gde-btn gde-btn--primary" type="button" data-mu-aksi="tambah">'
+        + '<i class="bi bi-person-plus"></i> Tambah user</button>'
+        + '<button class="gde-btn gde-btn--outline-primary" type="button" id="muKosongSync">'
+        + '<i class="bi bi-arrow-repeat"></i> Sinkron dari data sertifikasi</button>'
+      + '</div>');
+    var kosongSync = SIAGA.el('muKosongSync');
+    if (kosongSync) kosongSync.addEventListener('click', muSinkron);
+    return;
+  }
+
+  if (!semua.length) {
+    wadah.innerHTML = SIAGA.kosongHtml('bi-search', 'Tidak ada user yang cocok',
+      'Ubah kata kunci atau reset filter untuk melihat seluruh user.');
+    return;
+  }
+
+  var html = '<div class="siaga-tablewrap">'
+    + '<table class="gde-table gde-table--compact">'
+    + '<thead><tr>'
+    + '<th class="gde-ctr" style="width:52px">No</th>'
+    + '<th>Pekerja</th>'
+    + '<th>Username</th>'
+    + '<th class="gde-ctr">Role</th>'
+    + '<th>Divisi / Jabatan</th>'
+    + '<th>Email</th>'
+    + '<th class="gde-ctr">Sertifikasi</th>'
+    + '<th class="gde-ctr">Status</th>'
+    + '<th class="gde-u-text-right gde-u-nowrap">Aksi</th>'
+    + '</tr></thead><tbody>';
+
+  html += halamanIni.map(function (u, i) {
+    return muBarisHtml(u, mulai + i + 1);
+  }).join('');
+
+  html += '</tbody></table></div>';
+  html += muPagerHtml(semua.length);
+
+  wadah.innerHTML = html;
+}
+
+function muBarisHtml(u, no) {
+  var role = String(u.role || 'EMP').toUpperCase();
+  var badgeRole = role === 'SA' ? 'gde-badge--solid-blue'
+    : (role === 'HC' ? 'gde-badge--blue' : 'gde-badge--gray');
+  var aktif = String(u.status || 'ACTIVE').toUpperCase() === 'ACTIVE';
+  var jml = SIAGA.num(u.jumlah_sertifikasi);
+  var kode = String(u.employee_code || '');
+
+  var email = '';
+  if (u.email_perusahaan) email += '<div>' + SIAGA.esc(u.email_perusahaan) + '</div>';
+  if (u.email_pribadi) email += '<div style="font-size:.68rem;color:var(--gde-muted)">' + SIAGA.esc(u.email_pribadi) + '</div>';
+  if (!email) email = '<span style="color:var(--gde-muted)">—</span>';
+
+  var atasan = u.email_atasan
+    ? '<div style="font-size:.68rem;color:var(--gde-muted)">Atasan: ' + SIAGA.esc(u.email_atasan) + '</div>'
+    : '';
+
+  var divisi = '<div style="font-size:.8rem;font-weight:600">' + SIAGA.esc(u.divisi || '—') + '</div>'
+    + '<div style="font-size:.68rem;color:var(--gde-muted)">' + SIAGA.esc(u.jabatan || '—') + '</div>';
+
+  var sertifikasi = jml
+    ? '<a href="#/pekerja" data-mu-pekerja="' + SIAGA.attr(kode) + '" title="Buka profil pekerja">'
+      + '<b>' + SIAGA.angka(jml) + '</b> <i class="bi bi-box-arrow-up-right" style="font-size:.7rem"></i></a>'
+    : '<span style="color:var(--gde-muted)">0</span>';
+
+  var hapusAttr = jml
+    ? ' disabled title="Masih memiliki ' + SIAGA.angka(jml) + ' data sertifikasi. Hapus data tersebut atau nonaktifkan akun ini."'
+    : ' title="Hapus akun ini"';
+
+  return '<tr>'
+    + '<td class="gde-ctr gde-u-tabular" style="color:var(--gde-muted)">' + SIAGA.angka(no) + '</td>'
+    + '<td class="siaga-td-nama">'
+    + '  <div class="gde-u-flex gde-u-items-center" style="gap:.55rem">'
+    + '    <span class="gde-avatar gde-avatar--sm">' + SIAGA.esc(u.inisial || SIAGA.inisial(u.nama_lengkap)) + '</span>'
+    + '    <div style="min-width:0">'
+    + '      <strong>' + SIAGA.esc(u.nama_lengkap || kode) + '</strong>'
+    + '      <span>' + SIAGA.esc(kode) + (u.lokasi_kerja ? ' · ' + SIAGA.esc(u.lokasi_kerja) : '') + '</span>'
+    + '    </div>'
+    + '  </div>'
+    + '</td>'
+    + '<td><span class="gde-u-mono" style="font-size:.78rem">' + SIAGA.esc(u.username || '—') + '</span></td>'
+    + '<td class="gde-ctr"><span class="gde-badge ' + badgeRole + '">' + SIAGA.esc(role) + '</span>'
+    + '  <div style="font-size:.65rem;color:var(--gde-muted)">' + SIAGA.esc(u.role_label || '') + '</div></td>'
+    + '<td>' + divisi + '</td>'
+    + '<td>' + email + atasan + '</td>'
+    + '<td class="gde-ctr">' + sertifikasi + '</td>'
+    + '<td class="gde-ctr"><span class="gde-status gde-status--' + (aktif ? 'green' : 'gray') + '">'
+    +   (aktif ? 'ACTIVE' : 'INACTIVE') + '</span></td>'
+    + '<td>'
+    + '  <div class="siaga-aksi">'
+    + '    <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" '
+    + '            data-mu-aksi="ubah" data-mu-kode="' + SIAGA.attr(kode) + '">Ubah</button>'
+    + '    <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" '
+    + '            data-mu-aksi="reset" data-mu-kode="' + SIAGA.attr(kode) + '" '
+    + '            title="Reset password ke Employee Code">Reset password</button>'
+    + '    <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" '
+    + '            data-mu-aksi="toggle" data-mu-kode="' + SIAGA.attr(kode) + '" '
+    + '            title="' + (aktif ? 'Nonaktifkan akun ini' : 'Aktifkan kembali akun ini') + '">'
+    +       (aktif ? 'Nonaktifkan' : 'Aktifkan') + '</button>'
+    + '    <button class="gde-btn gde-btn--outline-danger gde-btn--xs" type="button" '
+    + '            data-mu-aksi="hapus" data-mu-kode="' + SIAGA.attr(kode) + '"' + hapusAttr + '>Hapus</button>'
+    + '  </div>'
+    + '</td>'
+    + '</tr>';
+}
+
+function muPagerHtml(total) {
+  var per = MUState.perHalaman;
+  var maxHal = Math.max(1, Math.ceil(total / per));
+  var hal = MUState.halaman;
+  var dari = total ? ((hal - 1) * per + 1) : 0;
+  var sampai = Math.min(hal * per, total);
+
+  var awal = Math.max(1, hal - 2);
+  var akhir = Math.min(maxHal, awal + 4);
+  awal = Math.max(1, akhir - 4);
+
+  var nomor = '';
+  for (var i = awal; i <= akhir; i++) {
+    if (i === hal) nomor += '<span class="is-active">' + SIAGA.angka(i) + '</span>';
+    else nomor += '<a href="#" data-mu-hal="' + i + '">' + SIAGA.angka(i) + '</a>';
+  }
+
+  return '<div class="siaga-pager">'
+    + '<div class="siaga-pager__info">Menampilkan <b>' + SIAGA.angka(dari) + '–' + SIAGA.angka(sampai)
+    + '</b> dari <b>' + SIAGA.angka(total) + '</b> user · halaman ' + SIAGA.angka(hal) + ' / ' + SIAGA.angka(maxHal)
+    + '</div>'
+    + '<div class="gde-pagination">'
+    + '<a href="#" data-mu-hal="' + (hal - 1) + '"' + (hal <= 1 ? ' class="is-disabled"' : '') + '>Sebelumnya</a>'
+    + nomor
+    + '<a href="#" data-mu-hal="' + (hal + 1) + '"' + (hal >= maxHal ? ' class="is-disabled"' : '') + '>Berikutnya</a>'
+    + '</div></div>';
+}
+
+/* -------------------------------------------------------------- bantuan -- */
+function muCari(kode) {
+  for (var i = 0; i < MUState.baris.length; i++) {
+    if (String(MUState.baris[i].employee_code) === String(kode)) return MUState.baris[i];
+  }
+  return null;
+}
+
+function muBersihkan(obj) {
+  var out = {};
+  Object.keys(obj || {}).forEach(function (k) {
+    var v = obj[k];
+    out[k] = (typeof v === 'string') ? v.trim() : v;
+  });
+  return out;
+}
+
+function muEmailValid(v) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(v || '').trim());
+}
+
+/* Data user dari baris tabel — dipakai untuk simpan ulang (mis. ubah status).
+   Data ini disegarkan lewat apiGetUser sebelum dikirim, lihat muToggleStatus(). */
+function muDataDariBaris(u, statusBaru) {
+  return {
+    employee_code: u.employee_code,
+    nama_lengkap: u.nama_lengkap,
+    username: u.username,
+    role: u.role,
+    email_perusahaan: u.email_perusahaan,
+    email_pribadi: u.email_pribadi,
+    email_atasan: u.email_atasan,
+    divisi: u.divisi,
+    jabatan: u.jabatan,
+    lokasi_kerja: u.lokasi_kerja,
+    no_hp: u.no_hp,
+    status: statusBaru || u.status
+  };
+}
+
+/* ------------------------------------------------------------ form user -- */
+function bukaMuForm(mode, kode) {
+  var form = SIAGA.el('muForm');
+  if (!form) return;
+
+  SIAGA.resetForm(form);
+  SIAGA.bersihkanInvalid(form);
+  MUState.mode = mode;
+  MUState.kode = kode || '';
+
+  var judul = SIAGA.el('muModalJudul');
+  var inKode = SIAGA.el('muEmployeeCode');
+  var hintKode = SIAGA.el('muHintCode');
+  var passWrap = SIAGA.el('muPassWrap');
+
+  if (mode === 'ubah') {
+    var u = muCari(kode);
+    if (!u) { SIAGA.gagal('Data user tidak ditemukan pada tabel. Muat ulang halaman.'); return; }
+    if (judul) judul.textContent = 'Ubah user — ' + (u.nama_lengkap || u.employee_code);
+    if (inKode) inKode.disabled = true;
+    if (hintKode) {
+      hintKode.innerHTML = 'Employee Code tidak dapat diubah karena menjadi kunci data: <b>'
+        + SIAGA.esc(u.employee_code) + '</b>.';
+    }
+    if (passWrap) passWrap.classList.remove('gde-u-hide');
+    SIAGA.isiForm(form, u);
+    // Segarkan dari server: tabel bisa saja sudah usang bila HC lain mengubah data.
+    SIAGA.api('apiGetUser', [kode]).then(function (r) {
+      if (r && r.user && MUState.mode === 'ubah' && MUState.kode === kode) {
+        SIAGA.isiForm(form, r.user);
+      }
+    }).catch(function () { /* biarkan data tabel sebagai cadangan */ });
+  } else {
+    if (judul) judul.textContent = 'Tambah user';
+    if (inKode) inKode.disabled = false;
+    if (hintKode) hintKode.innerHTML = 'Dipakai sebagai password awal dan kunci data sertifikasi.';
+    if (passWrap) passWrap.classList.add('gde-u-hide');
+    SIAGA.isiForm(form, { role: 'EMP', status: 'ACTIVE' });
+  }
+
+  SIAGA.modalBuka('muModal');
+  setTimeout(function () {
+    try { if (inKode && !inKode.disabled) inKode.focus(); } catch (e) { }
+  }, 120);
+}
+
+function simpanMu() {
+  var form = SIAGA.el('muForm');
+  var btn = SIAGA.el('muSimpan');
+  if (!form) return;
+
+  SIAGA.bersihkanInvalid(form);
+  var data = muBersihkan(SIAGA.nilaiForm(form));
+  if (MUState.mode === 'ubah') data.employee_code = MUState.kode;
+
+  if (!data.employee_code) {
+    SIAGA.tandaiInvalid(SIAGA.el('muEmployeeCode'), 'Employee Code wajib diisi.'); return;
+  }
+  if (!/^[A-Za-z0-9\-_/.]+$/.test(data.employee_code)) {
+    SIAGA.tandaiInvalid(SIAGA.el('muEmployeeCode'),
+      'Employee Code hanya boleh berisi huruf, angka, tanda hubung, garis miring, dan titik.'); return;
+  }
+  if (!data.nama_lengkap) {
+    SIAGA.tandaiInvalid(SIAGA.el('muNama'), 'Nama lengkap wajib diisi.'); return;
+  }
+  if (data.email_perusahaan && !muEmailValid(data.email_perusahaan)) {
+    SIAGA.tandaiInvalid(SIAGA.el('muEmailPerusahaan'), 'Format email perusahaan tidak valid (contoh: nama@geodipa.co.id).'); return;
+  }
+  if (data.email_pribadi && !muEmailValid(data.email_pribadi)) {
+    SIAGA.tandaiInvalid(SIAGA.el('muEmailPribadi'), 'Format email pribadi tidak valid (contoh: nama@gmail.com).'); return;
+  }
+  if (data.email_atasan && !muEmailValid(data.email_atasan)) {
+    SIAGA.tandaiInvalid(SIAGA.el('muEmailAtasan'), 'Format email atasan tidak valid (contoh: atasan@geodipa.co.id).'); return;
+  }
+  if (data.status !== 'INACTIVE' && String(data.status).toUpperCase() !== 'ACTIVE') {
+    data.status = 'ACTIVE';
+  }
+  if (!data.password) delete data.password;
+
+  SIAGA.tombolSibuk(btn, true, 'Menyimpan...');
+  SIAGA.api('apiSaveUser', [data]).then(function (r) {
+    SIAGA.tombolSibuk(btn, false);
+    SIAGA.modalTutup('muModal');
+    var hasil = r || {};
+    if (hasil.mode === 'update') {
+      SIAGA.sukses('Data user ' + hasil.employee_code + ' (' + (hasil.username || '') + ') berhasil diperbarui.',
+        'Perubahan disimpan');
+    } else {
+      SIAGA.sukses('User ' + hasil.employee_code + ' dibuat dengan username "' + (hasil.username || '')
+        + '". Password awal = Employee Code: ' + (hasil.password_awal || hasil.employee_code)
+        + '. User wajib mengganti password saat login berikutnya.', 'User ditambahkan');
+    }
+    muatUser();
+  }).catch(function (e) {
+    SIAGA.tombolSibuk(btn, false);
+    SIAGA.gagal(e.message);
+  });
+}
+
+/* ------------------------------------------------- aksi per baris tabel -- */
+function muResetPassword(kode) {
+  var u = muCari(kode);
+  var nama = u ? (u.nama_lengkap || kode) : kode;
+  SIAGA.konfirmasi({
+    judul: 'Reset password',
+    pesan: 'Password akun ' + nama + ' (' + kode + ') akan dikembalikan ke Employee Code: '
+      + kode + '. Seluruh sesi aktifnya dicabut dan user wajib mengganti password saat login berikutnya.',
+    labelOk: 'Reset password',
+    bahaya: true
+  }).then(function (ya) {
+    if (!ya) return;
+    return SIAGA.api('apiResetPassword', [kode]).then(function (r) {
+      var d = r || {};
+      SIAGA.sukses('Password direset ke Employee Code: ' + (d.password_awal || kode)
+        + '. Sampaikan ke user bahwa ia wajib mengganti password saat login berikutnya.', 'Password direset');
+    });
+  }).catch(function (e) {
+    SIAGA.gagal(e.message);
+  });
+}
+
+function muToggleStatus(kode) {
+  var u = muCari(kode);
+  if (!u) { SIAGA.gagal('Data user tidak ditemukan pada tabel. Muat ulang halaman.'); return; }
+  var aktif = String(u.status || 'ACTIVE').toUpperCase() === 'ACTIVE';
+  var baru = aktif ? 'INACTIVE' : 'ACTIVE';
+
+  SIAGA.konfirmasi({
+    judul: aktif ? 'Nonaktifkan akun' : 'Aktifkan akun',
+    pesan: aktif
+      ? 'Akun ' + (u.nama_lengkap || kode) + ' (' + kode + ') akan dinonaktifkan sehingga tidak dapat login. '
+        + 'Data sertifikasinya tetap tersimpan.'
+      : 'Akun ' + (u.nama_lengkap || kode) + ' (' + kode + ') akan diaktifkan kembali dan dapat login.',
+    labelOk: aktif ? 'Nonaktifkan' : 'Aktifkan',
+    bahaya: aktif
+  }).then(function (ya) {
+    if (!ya) return;
+    // Ambil data terbaru dari server supaya perubahan status tidak menimpa
+    // perubahan yang dilakukan HC lain sejak tabel dimuat.
+    return SIAGA.api('apiGetUser', [kode]).then(function (r) {
+      var segar = (r && r.user) ? r.user : u;
+      return SIAGA.api('apiSaveUser', [muDataDariBaris(segar, baru)]);
+    }).then(function () {
+      SIAGA.sukses('Akun ' + kode + ' kini berstatus ' + baru + '.', 'Status diperbarui');
+      muatUser();
+    });
+  }).catch(function (e) {
+    SIAGA.gagal(e.message);
+  });
+}
+
+function muHapus(kode) {
+  var u = muCari(kode);
+  var nama = u ? (u.nama_lengkap || kode) : kode;
+  SIAGA.konfirmasi({
+    judul: 'Hapus akun user',
+    pesan: 'Akun ' + nama + ' (' + kode + ') akan dihapus permanen beserta seluruh sesinya. '
+      + 'Tindakan ini tidak dapat dibatalkan.',
+    labelOk: 'Hapus akun',
+    bahaya: true
+  }).then(function (ya) {
+    if (!ya) return;
+    return SIAGA.api('apiDeleteUser', [kode]).then(function () {
+      SIAGA.sukses('Akun ' + kode + ' telah dihapus.', 'Akun dihapus');
+      muatUser();
+    });
+  }).catch(function (e) {
+    SIAGA.gagal(e.message);
+  });
+}
+
+/* ------------------------------------------------------------- sinkron -- */
+function muSinkron() {
+  var btn = SIAGA.el('muSyncBtn');
+  SIAGA.konfirmasi({
+    judul: 'Sinkron user dari data sertifikasi',
+    pesan: 'Sistem akan membuat akun role EMP untuk setiap Employee Code yang muncul di data '
+      + 'sertifikasi tetapi belum punya akun di Master User. Akun yang sudah ada akan dilewati. '
+      + 'Nama akun baru sementara memakai Employee Code dan perlu dilengkapi di halaman ini.',
+    labelOk: 'Jalankan sinkron'
+  }).then(function (ya) {
+    if (!ya) return;
+    SIAGA.tombolSibuk(btn, true, 'Menyinkronkan...');
+    return SIAGA.api('apiSyncUsersFromFiles', []).then(function (r) {
+      SIAGA.tombolSibuk(btn, false);
+      muTampilkanHasilSinkron(r);
+      muatUser();
+    }).catch(function (e) {
+      SIAGA.tombolSibuk(btn, false);
+      SIAGA.gagal(e.message);
+    });
+  });
+}
+
+function muTampilkanHasilSinkron(r) {
+  var d = r || {};
+  var dibuat = SIAGA.num(d.dibuat);
+  var dilewati = SIAGA.num(d.dilewati);
+  var errors = d.errors || [];
+  var daftar = d.daftar || [];
+
+  var html = '<div class="gde-alert gde-alert--' + (errors.length ? 'warning' : 'success') + '">'
+    + '<i class="bi ' + (errors.length ? 'bi-exclamation-triangle-fill' : 'bi-check-circle-fill')
+    + ' gde-alert__icon"></i>'
+    + '<div class="gde-alert__body"><strong>Sinkron selesai</strong>'
+    + 'Akun dibuat: <b>' + SIAGA.angka(dibuat) + '</b> · dilewati (sudah ada): <b>' + SIAGA.angka(dilewati)
+    + '</b> · gagal: <b>' + SIAGA.angka(errors.length) + '</b>.'
+    + '</div></div>';
+
+  if (!dibuat && !errors.length) {
+    html += '<p class="siaga-inline-note siaga-mt-3">Semua Employee Code pada data sertifikasi sudah '
+      + 'memiliki akun. Tidak ada yang perlu ditambahkan.</p>';
+  }
+  if (daftar.length) html += muKotakDaftar('Akun baru yang dibuat', daftar, 'info');
+  if (errors.length) html += muKotakDaftar('Akun yang gagal dibuat', errors, 'danger');
+
+  SIAGA.el('muHasilIsi').innerHTML = html;
+  SIAGA.modalBuka('muHasil');
+
+  if (dibuat) {
+    SIAGA.sukses(SIAGA.angka(dibuat) + ' akun baru dibuat, ' + SIAGA.angka(dilewati)
+      + ' dilewati. Lengkapi nama dan data pekerjaannya di tabel.', 'Sinkron selesai');
+  } else {
+    SIAGA.info('Tidak ada akun baru. ' + SIAGA.angka(dilewati) + ' akun sudah ada sebelumnya.', 'Sinkron selesai');
+  }
+}
+
+/* --------------------------------------------------------------- impor -- */
+function bukaMuImpor() {
+  var teks = SIAGA.el('muImporTeks');
+  var ganti = SIAGA.el('muImporGanti');
+  var hasil = SIAGA.el('muImporHasil');
+  if (teks) teks.value = '';
+  if (ganti) ganti.checked = false;
+  if (hasil) hasil.innerHTML = '';
+  SIAGA.modalBuka('muImpor');
+  setTimeout(function () { try { if (teks) teks.focus(); } catch (e) { } }, 120);
+}
+
+function jalanMuImpor() {
+  var teks = String((SIAGA.el('muImporTeks') || {}).value || '');
+  var ganti = SIAGA.el('muImporGanti');
+  var btn = SIAGA.el('muImporJalan');
+  var hasil = SIAGA.el('muImporHasil');
+
+  if (!teks.trim()) {
+    SIAGA.ingat('Tempelkan data user terlebih dahulu sebelum menjalankan impor.', 'Data masih kosong');
+    return;
+  }
+
+  var opsi = { ganti_nama: !!(ganti && ganti.checked) };
+  SIAGA.tombolSibuk(btn, true, 'Mengimpor...');
+  SIAGA.api('apiImportUsers', [teks, opsi]).then(function (r) {
+    SIAGA.tombolSibuk(btn, false);
+    muTampilkanHasilImpor(r);
+    muatUser();
+  }).catch(function (e) {
+    SIAGA.tombolSibuk(btn, false);
+    if (hasil) {
+      hasil.innerHTML = '<div class="gde-alert gde-alert--danger siaga-mt-3">'
+        + '<i class="bi bi-x-octagon-fill gde-alert__icon"></i>'
+        + '<div class="gde-alert__body"><strong>Impor gagal</strong>' + SIAGA.esc(e.message) + '</div></div>';
+    }
+    SIAGA.gagal(e.message);
+  });
+}
+
+function muTampilkanHasilImpor(r) {
+  var d = r || {};
+  var gagal = SIAGA.num(d.gagal);
+  var pesan = d.pesan || [];
+
+  var html = '<div class="gde-alert gde-alert--' + (gagal ? 'warning' : 'success') + ' siaga-mt-3">'
+    + '<i class="bi ' + (gagal ? 'bi-exclamation-triangle-fill' : 'bi-check-circle-fill')
+    + ' gde-alert__icon"></i>'
+    + '<div class="gde-alert__body"><strong>Hasil impor</strong>'
+    + 'Dibuat: <b>' + SIAGA.angka(d.dibuat) + '</b> · diperbarui: <b>' + SIAGA.angka(d.diperbarui)
+    + '</b> · gagal: <b>' + SIAGA.angka(gagal) + '</b>.'
+    + '</div></div>';
+
+  if (pesan.length) html += muKotakDaftar('Catatan baris', pesan, gagal ? 'danger' : 'info');
+
+  SIAGA.el('muImporHasil').innerHTML = html;
+
+  if (gagal) {
+    SIAGA.ingat('Impor selesai dengan ' + SIAGA.angka(gagal)
+      + ' baris gagal. Periksa catatan di dalam jendela impor.', 'Impor sebagian berhasil');
+  } else {
+    SIAGA.sukses('Impor selesai: ' + SIAGA.angka(d.dibuat) + ' dibuat, '
+      + SIAGA.angka(d.diperbarui) + ' diperbarui.', 'Impor berhasil');
+  }
+}
+
+function muKotakDaftar(judul, arr, tone) {
+  var warna = tone === 'danger' ? 'var(--gde-red)' : 'var(--gde-blue)';
+  var isi = (arr && arr.length)
+    ? '<ul style="margin:0;padding-left:1.05rem">' + arr.map(function (x) {
+      return '<li style="font-size:.78rem;color:var(--gde-ink-2);margin-bottom:2px">' + SIAGA.esc(x) + '</li>';
+    }).join('') + '</ul>'
+    : '<span class="siaga-inline-note">—</span>';
+
+  return '<div class="siaga-mt-3">'
+    + '<div class="gde-u-between" style="margin-bottom:4px">'
+    + '<span class="siaga-inline-note">' + SIAGA.esc(judul) + '</span>'
+    + '<b style="font-size:.78rem;color:' + warna + '">' + SIAGA.angka((arr || []).length) + '</b>'
+    + '</div>'
+    + '<div class="siaga-scroll-y" style="border:1px solid var(--gde-line);border-radius:var(--gde-r-sm);'
+    + 'padding:.6rem .85rem;background:#fff">' + isi + '</div>'
+    + '</div>';
+}
+</script>

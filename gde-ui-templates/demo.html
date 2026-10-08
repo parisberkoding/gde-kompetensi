@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GDE UI Templates — Style Guide &amp; Demo Komponen</title>
+<meta name="description" content="Pustaka tampilan Geodipa: token, komponen, dan pemetaan kelas lama ke gaya baru.">
+<link rel="stylesheet" href="fonts/poppins.css">
+<link rel="stylesheet" href="icons/bootstrap-icons.css">
+<link rel="stylesheet" href="css/gde-tokens.css">
+<link rel="stylesheet" href="css/gde-base.css">
+<link rel="stylesheet" href="css/gde-components.css">
+<link rel="stylesheet" href="css/gde-app.css">
+<style>
+  /* Hanya untuk keperluan halaman demo ini */
+  .demo-hero {
+    background: linear-gradient(158deg, var(--gde-blue-d) 0%, var(--gde-blue) 62%, #1259AE 100%);
+    color: #fff; padding: 56px 0 60px; position: relative; overflow: hidden;
+  }
+  .demo-hero::before { content:''; position:absolute; inset:0;
+    background: radial-gradient(ellipse 52% 62% at 12% 8%, rgba(141,198,63,.20), transparent 62%),
+                radial-gradient(ellipse 46% 58% at 92% 88%, rgba(255,245,107,.12), transparent 66%); }
+  .demo-hero h1 { color: #fff; font-size: clamp(1.9rem, 3.4vw, 2.6rem); font-weight: 800; }
+  .demo-hero p { color: rgba(255,255,255,.78); max-width: 68ch; }
+  .demo-hero__inner { position: relative; z-index: 2; }
+  .demo-nav { position: sticky; top: 0; z-index: 40; background: rgba(255,255,255,.94);
+    backdrop-filter: blur(12px); border-bottom: 1px solid var(--gde-line); }
+  .demo-nav__inner { display:flex; gap: var(--gde-sp-2); overflow-x:auto; padding: var(--gde-sp-3) 0; }
+  .demo-nav a { font-size: var(--gde-fs-sm); font-weight: 600; color: var(--gde-muted);
+    padding: .35rem .8rem; border-radius: var(--gde-r-pill); white-space: nowrap; }
+  .demo-nav a:hover { background: var(--gde-green-l); color: var(--gde-green-d); text-decoration: none; }
+  .demo-section { padding: var(--gde-sp-10) 0; border-bottom: 1px solid var(--gde-line); }
+  .demo-section > h2 { font-size: var(--gde-fs-xl); margin-bottom: var(--gde-sp-2); }
+  .demo-section > p { color: var(--gde-muted); margin-bottom: var(--gde-sp-5); }
+  .demo-block { background: #fff; border: 1px solid var(--gde-line); border-radius: var(--gde-r-lg);
+    padding: var(--gde-sp-5); margin-bottom: var(--gde-sp-4); box-shadow: var(--gde-sh-1); }
+  .demo-block__label { font-size: var(--gde-fs-xs); font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--gde-muted-2); margin-bottom: var(--gde-sp-4); }
+  .swatch { border-radius: var(--gde-r-md); overflow: hidden; border: 1px solid var(--gde-line); }
+  .swatch__color { height: 76px; }
+  .swatch__meta { padding: .6rem .8rem; background: #fff; font-size: var(--gde-fs-xs); }
+  .swatch__meta b { display: block; font-size: var(--gde-fs-sm); }
+  .swatch__meta code { background: none; border: 0; padding: 0; color: var(--gde-muted); }
+  .demo-row { display: flex; flex-wrap: wrap; gap: var(--gde-sp-3); align-items: center; }
+  .demo-container { max-width: 1140px; margin: 0 auto; padding: 0 var(--gde-sp-5); }
+</style>
+</head>
+<body class="gde-body">
+
+<!-- ===================== TOPBAR ===================== -->
+<header class="gde-topbar">
+  <div class="gde-topbar__inner">
+    <a class="gde-brand" href="#">
+      <img class="gde-brand__logo" src="https://jojo-static-files-klfm7hjb.s3.ap-southeast-3.amazonaws.com/logo-geodipa-officeless.png" alt="Logo Geo Dipa">
+      <span>
+        <span class="gde-brand__name">GDE UI Templates</span>
+        <span class="gde-brand__sub">Pustaka tampilan Geodipa</span>
+      </span>
+    </a>
+    <span class="gde-brand__divider"></span>
+    <span class="gde-brand__section">Style Guide v1.0</span>
+    <span class="gde-topbar__spacer"></span>
+    <div class="gde-topbar__actions">
+      <button class="gde-icon-btn" data-gde-modal="#modalDemo" title="Contoh modal"><i class="bi bi-window-stack"></i></button>
+      <a class="gde-icon-btn" href="README.md" title="Aset &amp; lisensi"><i class="bi bi-file-text"></i></a>
+    </div>
+  </div>
+</header>
+
+<!-- ===================== HERO ===================== -->
+<section class="demo-hero">
+  <div class="demo-container demo-hero__inner">
+    <span class="gde-badge gde-badge--solid" style="margin-bottom:1rem;"><i class="bi bi-palette2"></i> Design System Internal</span>
+    <h1>GDE UI Templates</h1>
+    <p>Satu sumber gaya untuk seluruh antarmuka SIAGA: token warna Geodipa, tipografi Poppins,
+       dan komponen siap pakai. Halaman ini adalah rujukan visual sekaligus contoh kode —
+       semua elemen di bawah memakai kelas asli pustaka ini.</p>
+    <div class="demo-row" style="margin-top:1.5rem;">
+      <a href="#warna" class="gde-btn gde-btn--green"><i class="bi bi-droplet"></i> Lihat token</a>
+      <a href="#komponen" class="gde-btn gde-btn--outline" style="background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.24);"><i class="bi bi-grid"></i> Lihat komponen</a>
+      <a href="#jembatan" class="gde-btn gde-btn--outline" style="background:rgba(255,255,255,.14);color:#fff;border-color:rgba(255,255,255,.24);"><i class="bi bi-arrow-left-right"></i> Kelas lama → baru</a>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== NAV ===================== -->
+<nav class="demo-nav">
+  <div class="demo-container demo-nav__inner">
+    <a href="#pasang">Cara pasang</a>
+    <a href="#warna">Warna</a>
+    <a href="#tipografi">Tipografi</a>
+    <a href="#tombol">Tombol</a>
+    <a href="#badge">Badge &amp; chip</a>
+    <a href="#alert">Alert</a>
+    <a href="#kartu">Kartu</a>
+    <a href="#statistik">Statistik</a>
+    <a href="#tabel">Tabel</a>
+    <a href="#form">Form</a>
+    <a href="#navigasi">Tab &amp; paginasi</a>
+    <a href="#lainnya">Lainnya</a>
+    <a href="#jembatan">Kelas lama</a>
+  </div>
+</nav>
+
+<main class="demo-container">
+
+  <!-- ===================== CARA PASANG ===================== -->
+  <section class="demo-section" id="pasang">
+    <h2>Cara pasang</h2>
+    <p>Sertakan satu partial di dalam <code>&lt;head&gt;</code> dan satu sebelum <code>&lt;/body&gt;</code>.
+       Urutannya penting: pustaka ini harus dimuat <b>setelah</b> Bootstrap dan <code>style.css</code> NiceAdmin
+       agar lapisan jembatan dapat menimpanya.</p>
+
+    <div class="demo-block">
+      <div class="demo-block__label">Blade — di dalam &lt;head&gt;</div>
+<pre><code>&lt;!-- Vendor NiceAdmin --&gt;
+&lt;link href="{{ asset('DashboardTemplates/assets/vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet"&gt;
+&lt;link href="{{ asset('DashboardTemplates/assets/css/style.css') }}" rel="stylesheet"&gt;
+
+&lt;!-- GDE UI Templates (wajib paling akhir) --&gt;
+@include('partials.gde-head')</code></pre>
+    </div>
+
+    <div class="demo-block">
+      <div class="demo-block__label">Blade — sebelum &lt;/body&gt;</div>
+<pre><code>@include('partials.gde-scripts')</code></pre>
+    </div>
+
+    <div class="gde-alert gde-alert--info">
+      <span class="gde-alert__icon"><i class="bi bi-info-circle"></i></span>
+      <div class="gde-alert__body">
+        <strong>Tanpa CDN</strong>
+        Poppins, Bootstrap Icons, dan Mermaid sudah di-<em>self-host</em> di dalam folder ini.
+        Halaman tetap tampil benar pada jaringan internal yang tertutup.
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== WARNA ===================== -->
+  <section class="demo-section" id="warna">
+    <h2>Warna</h2>
+    <p>Palet resmi Geodipa beserta turunannya. Selalu pakai variabel (<code>var(--gde-*)</code>), jangan tulis kode heksa langsung di view.</p>
+
+    <div class="gde-grid gde-grid--4" style="margin-bottom:1.5rem;">
+      <div class="swatch"><div class="swatch__color" style="background:var(--gde-green);"></div><div class="swatch__meta"><b>Hijau</b><code>--gde-green #8DC63F</code></div></div>
+      <div class="swatch"><div class="swatch__color" style="background:var(--gde-yellow);"></div><div class="swatch__meta"><b>Kuning</b><code>--gde-yellow #FFF56B</code></div></div>
+      <div class="swatch"><div class="swatch__color" style="background:var(--gde-blue);"></div><div class="swatch__meta"><b>Biru</b><code>--gde-blue #0B50A1</code></div></div>
+      <div class="swatch"><div class="swatch__color" style="background:var(--gde-red);"></div><div class="swatch__meta"><b>Merah</b><code>--gde-red #ED1B2F</code></div></div>
+    </div>
+
+    <div class="gde-grid gde-grid--4" style="margin-bottom:1.5rem;">
+      <div class="swatch"><div class="swatch__color" style="background:var(--gde-green-d);"></div><div class="swatch__meta"><b>Hijau tua</b><code>--gde-green-d</code></div></div>
+      <div class="swatch"><div class="swatch__color" style="background:var(--gde-blue-d);"></div><div class="swatch__meta"><b>Biru tua</b><code>--gde-blue-d</code></div></div>
+      <div class="swatch"><div class="swatch__color" style="background:var(--gde-green-l);"></div><div class="swatch__meta"><b>Hijau muda</b><code>--gde-green-l</code></div></div>
+      <div class="swatch"><div class="swatch__color" style="background:var(--gde-blue-l);"></div><div class="swatch__meta"><b>Biru muda</b><code>--gde-blue-l</code></div></div>
+    </div>
+
+    <div class="demo-block">
+      <div class="demo-block__label">Netral, garis, dan permukaan</div>
+      <div class="gde-grid gde-grid--4">
+        <div class="swatch"><div class="swatch__color" style="background:var(--gde-ink);"></div><div class="swatch__meta"><b>Teks utama</b><code>--gde-ink</code></div></div>
+        <div class="swatch"><div class="swatch__color" style="background:var(--gde-muted);"></div><div class="swatch__meta"><b>Teks sekunder</b><code>--gde-muted</code></div></div>
+        <div class="swatch"><div class="swatch__color" style="background:var(--gde-line);"></div><div class="swatch__meta"><b>Garis</b><code>--gde-line</code></div></div>
+        <div class="swatch"><div class="swatch__color" style="background:var(--gde-surface-3);"></div><div class="swatch__meta"><b>Latar aplikasi</b><code>--gde-surface-3</code></div></div>
+      </div>
+    </div>
+
+    <div class="demo-block">
+      <div class="demo-block__label">Warna semantik (status)</div>
+      <div class="demo-row">
+        <span class="gde-badge gde-badge--dot">Sukses</span>
+        <span class="gde-badge gde-badge--blue gde-badge--dot">Info</span>
+        <span class="gde-badge gde-badge--yellow gde-badge--dot">Peringatan</span>
+        <span class="gde-badge gde-badge--red gde-badge--dot">Bahaya</span>
+        <span class="gde-badge gde-badge--gray gde-badge--dot">Netral</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== TIPOGRAFI ===================== -->
+  <section class="demo-section" id="tipografi">
+    <h2>Tipografi</h2>
+    <p>Satu keluarga huruf untuk semuanya: <b>Poppins</b> (di-<em>self-host</em>, 6 bobot). Skala ukuran memakai variabel <code>--gde-fs-*</code>.</p>
+
+    <div class="demo-block">
+      <h1 style="margin-bottom:.6rem;">Judul H1 — 30px / 800</h1>
+      <h2 style="margin-bottom:.6rem;">Judul H2 — 24px / 700</h2>
+      <h3 style="margin-bottom:.6rem;">Judul H3 — 20px / 700</h3>
+      <h4 style="margin-bottom:.6rem;">Judul H4 — 17px / 700</h4>
+      <p style="margin-bottom:.6rem;">Paragraf isi — 15px, tinggi baris 1,65. Gunakan untuk penjelasan dan narasi.</p>
+      <p class="text-muted" style="margin-bottom:.6rem;">Teks sekunder <code>--gde-muted</code> untuk keterangan pendukung.</p>
+      <p class="gde-u-eyebrow" style="margin-bottom:0;">Label huruf kapital kecil</p>
+    </div>
+  </section>
+
+  <!-- ===================== TOMBOL ===================== -->
+  <section class="demo-section" id="tombol">
+    <h2>Tombol</h2>
+    <p>Kelas <code>.gde-btn</code> dengan varian warna, ukuran, dan gaya.</p>
+
+    <div class="demo-block">
+      <div class="demo-block__label">Varian</div>
+      <div class="demo-row">
+        <button class="gde-btn gde-btn--primary">Primary</button>
+        <button class="gde-btn gde-btn--green">Green</button>
+        <button class="gde-btn gde-btn--danger">Danger</button>
+        <button class="gde-btn gde-btn--warning">Warning</button>
+        <button class="gde-btn gde-btn--dark">Dark</button>
+        <button class="gde-btn gde-btn--outline">Outline</button>
+        <button class="gde-btn gde-btn--outline-primary">Outline primary</button>
+        <button class="gde-btn gde-btn--ghost">Ghost</button>
+        <button class="gde-btn gde-btn--link">Tautan</button>
+      </div>
+    </div>
+
+    <div class="demo-block">
+      <div class="demo-block__label">Ukuran, ikon, dan keadaan</div>
+      <div class="demo-row">
+        <button class="gde-btn gde-btn--primary gde-btn--sm"><i class="bi bi-plus-lg"></i> Kecil</button>
+        <button class="gde-btn gde-btn--primary">Normal</button>
+        <button class="gde-btn gde-btn--primary gde-btn--lg">Besar</button>
+        <button class="gde-btn gde-btn--outline gde-btn--icon"><i class="bi bi-pencil"></i></button>
+        <button class="gde-btn gde-btn--primary" disabled>Nonaktif</button>
+        <button class="gde-btn gde-btn--primary"><span class="gde-spinner"></span> Memproses</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== BADGE ===================== -->
+  <section class="demo-section" id="badge">
+    <h2>Badge &amp; chip</h2>
+    <p>Untuk status, label, dan metadata singkat.</p>
+    <div class="demo-block">
+      <div class="demo-row" style="margin-bottom:1rem;">
+        <span class="gde-badge">Disetujui</span>
+        <span class="gde-badge gde-badge--yellow">Menunggu</span>
+        <span class="gde-badge gde-badge--red">Ditolak</span>
+        <span class="gde-badge gde-badge--blue">Diproses</span>
+        <span class="gde-badge gde-badge--gray">Arsip</span>
+        <span class="gde-badge gde-badge--solid-blue">Role: Superadmin</span>
+      </div>
+      <div class="demo-row">
+        <span class="gde-chip"><i class="bi bi-fuel-pump"></i> <b>BBM</b> 128 transaksi</span>
+        <span class="gde-chip"><i class="bi bi-envelope-paper"></i> <b>SPD</b> 24 surat</span>
+        <span class="gde-chip gde-chip--soft"><i class="bi bi-cup-hot"></i> <b>Katering</b> 312 porsi</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== ALERT ===================== -->
+  <section class="demo-section" id="alert">
+    <h2>Alert</h2>
+    <p>Pesan kontekstual dengan garis tebal di sisi kiri.</p>
+    <div class="demo-block">
+      <div class="gde-alert gde-alert--success" style="margin-bottom:1rem;">
+        <span class="gde-alert__icon"><i class="bi bi-check-circle"></i></span>
+        <div class="gde-alert__body"><strong>Permohonan tersimpan</strong>Voucher akan terbit setelah disetujui Admin GA.</div>
+      </div>
+      <div class="gde-alert gde-alert--info" style="margin-bottom:1rem;">
+        <span class="gde-alert__icon"><i class="bi bi-info-circle"></i></span>
+        <div class="gde-alert__body"><strong>Informasi</strong>Anda memiliki 3 permohonan aktif dari batas 5.</div>
+      </div>
+      <div class="gde-alert gde-alert--warning" style="margin-bottom:1rem;">
+        <span class="gde-alert__icon"><i class="bi bi-exclamation-triangle"></i></span>
+        <div class="gde-alert__body"><strong>Perhatian</strong>Laporan LPJ melewati tenggat 3 hari setelah kepulangan.</div>
+      </div>
+      <div class="gde-alert gde-alert--danger">
+        <span class="gde-alert__icon"><i class="bi bi-x-octagon"></i></span>
+        <div class="gde-alert__body"><strong>Gagal</strong>Autentikasi tidak sesuai. Sisa 4 percobaan sebelum dibatasi.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== KARTU ===================== -->
+  <section class="demo-section" id="kartu">
+    <h2>Kartu</h2>
+    <p>Wadah utama konten. Tersedia kepala berkepala merek, badan, dan kaki.</p>
+    <div class="gde-grid gde-grid--2">
+      <div class="gde-card">
+        <div class="gde-card__head">
+          <span class="gde-card__icon"><i class="bi bi-fuel-pump"></i></span>
+          <div>
+            <div class="gde-card__title">Kartu standar</div>
+            <p class="gde-card__sub">Kepala, badan, dan kaki</p>
+          </div>
+        </div>
+        <div class="gde-card__body">
+          <p style="margin-bottom:0;">Isi kartu dengan jarak 1,25rem. Gunakan untuk formulir, ringkasan, dan detail.</p>
+        </div>
+        <div class="gde-card__foot">
+          <button class="gde-btn gde-btn--primary gde-btn--sm">Simpan</button>
+          <button class="gde-btn gde-btn--outline gde-btn--sm">Batal</button>
+        </div>
+      </div>
+
+      <div class="gde-card">
+        <div class="gde-card__head gde-card__head--brand">
+          <span class="gde-card__icon" style="background:rgba(255,255,255,.14);color:#fff;"><i class="bi bi-shield-check"></i></span>
+          <div>
+            <div class="gde-card__title" style="color:#fff;">Kepala merek</div>
+            <p class="gde-card__sub" style="color:rgba(255,255,255,.7);">Gradasi biru Geodipa</p>
+          </div>
+        </div>
+        <div class="gde-card__body">
+          <p style="margin-bottom:0;">Dipakai untuk panel utama seperti formulir permohonan dan tabel persetujuan.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== STATISTIK ===================== -->
+  <section class="demo-section" id="statistik">
+    <h2>Kartu statistik</h2>
+    <p>Ringkasan angka di bagian atas dashboard.</p>
+    <div class="gde-grid gde-grid--4">
+      <div class="gde-stat">
+        <span class="gde-stat__icon"><i class="bi bi-hourglass-split"></i></span>
+        <div><div class="gde-stat__label">Menunggu</div><div class="gde-stat__value">12</div><div class="gde-stat__hint">Perlu persetujuan</div></div>
+      </div>
+      <div class="gde-stat gde-stat--green">
+        <span class="gde-stat__icon"><i class="bi bi-check2-circle"></i></span>
+        <div><div class="gde-stat__label">Disetujui</div><div class="gde-stat__value">48</div><div class="gde-stat__hint">Bulan ini</div></div>
+      </div>
+      <div class="gde-stat gde-stat--red">
+        <span class="gde-stat__icon"><i class="bi bi-x-circle"></i></span>
+        <div><div class="gde-stat__label">Ditolak</div><div class="gde-stat__value">3</div><div class="gde-stat__hint">Perlu perbaikan</div></div>
+      </div>
+      <div class="gde-stat gde-stat--yellow">
+        <span class="gde-stat__icon"><i class="bi bi-fuel-pump"></i></span>
+        <div><div class="gde-stat__label">Total liter</div><div class="gde-stat__value">1.284</div><div class="gde-stat__hint">Seluruh unit</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== TABEL ===================== -->
+  <section class="demo-section" id="tabel">
+    <h2>Tabel</h2>
+    <p>Kepala tabel huruf kapital kecil, baris bergaris tipis, dan sorotan saat kursor melewati.</p>
+    <div class="gde-table-wrap">
+      <table class="gde-table">
+        <caption>Contoh daftar permohonan BBM.</caption>
+        <thead>
+          <tr><th>Kode</th><th>Pemohon</th><th>Kendaraan</th><th class="gde-num">Nominal</th><th class="gde-ctr">Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="gde-u-mono">BBM-2608-011</td><td>Faris I.</td><td>PTH-014</td><td class="gde-num">Rp 750.000</td><td class="gde-ctr"><span class="gde-badge gde-badge--yellow">Menunggu</span></td></tr>
+          <tr><td class="gde-u-mono">BBM-2608-010</td><td>Rizal A.</td><td>PTH-022</td><td class="gde-num">Rp 900.000</td><td class="gde-ctr"><span class="gde-badge">Disetujui</span></td></tr>
+          <tr><td class="gde-u-mono">BBM-2608-009</td><td>Dewi S.</td><td>PMU-006</td><td class="gde-num">Rp 400.000</td><td class="gde-ctr"><span class="gde-badge gde-badge--blue">Selesai</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===================== FORM ===================== -->
+  <section class="demo-section" id="form">
+    <h2>Form</h2>
+    <p>Label tebal, kendali dengan sudut 10px, dan cincin fokus hijau.</p>
+    <div class="gde-grid gde-grid--2">
+      <div class="demo-block">
+        <div class="demo-block__label">Kendali dasar</div>
+        <div style="margin-bottom:1rem;">
+          <label class="gde-label" for="d1">Kendaraan / Alat <span class="gde-req">*</span></label>
+          <input class="gde-input" id="d1" placeholder="Ketik kode atau plat…">
+          <div class="gde-hint">Minimal 2 karakter untuk memunculkan saran.</div>
+        </div>
+        <div style="margin-bottom:1rem;">
+          <label class="gde-label" for="d2">Jenis BBM</label>
+          <select class="gde-select" id="d2"><option>Pertamina Dex</option><option>Pertamax</option></select>
+        </div>
+        <div>
+          <label class="gde-label" for="d3">Nominal</label>
+          <input class="gde-input is-invalid" id="d3" value="Rp 12.500">
+          <div class="gde-error">Nominal harus kelipatan Rp50.000.</div>
+        </div>
+      </div>
+
+      <div class="demo-block">
+        <div class="demo-block__label">Pilihan &amp; sakelar</div>
+        <label class="gde-check" style="margin-bottom:.9rem;"><input type="checkbox" checked> Aktifkan kendaraan</label><br>
+        <label class="gde-check" style="margin-bottom:1.4rem;"><input type="checkbox"> Kirim salinan ke atasan</label>
+        <label class="gde-switch" style="margin-bottom:1.4rem;">
+          <input type="checkbox" checked><span class="gde-switch__track"></span> Notifikasi email
+        </label>
+        <div>
+          <label class="gde-label">Pilih salah satu</label>
+          <div class="demo-row">
+            <label class="gde-check"><input type="radio" name="demo-radio" checked> Harian</label>
+            <label class="gde-check"><input type="radio" name="demo-radio"> Mingguan</label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== NAVIGASI ===================== -->
+  <section class="demo-section" id="navigasi">
+    <h2>Tab &amp; paginasi</h2>
+    <div class="demo-block">
+      <div class="demo-block__label">Pil tab</div>
+      <div class="gde-tabs" style="display:inline-flex; margin-bottom:1rem;">
+        <button class="gde-tab is-active">Semua</button>
+        <button class="gde-tab">Menunggu</button>
+        <button class="gde-tab">Disetujui</button>
+      </div>
+      <div class="gde-nav-pills" style="margin-bottom:1rem;">
+        <a href="#" class="is-active">Bulan ini</a>
+        <a href="#">Kuartal</a>
+        <a href="#">Tahun</a>
+      </div>
+      <div class="gde-pagination">
+        <span class="is-disabled"><i class="bi bi-chevron-left"></i></span>
+        <span class="is-active">1</span><a href="#">2</a><a href="#">3</a><span>…</span><a href="#">12</a>
+        <a href="#"><i class="bi bi-chevron-right"></i></a>
+      </div>
+    </div>
+
+    <div class="demo-block">
+      <div class="demo-block__label">Progres</div>
+      <div class="gde-meter"><span>Cakupan pengujian BBM</span><b>92%</b></div>
+      <div class="gde-progress" style="margin-bottom:1rem;"><span class="gde-progress__bar" style="width:92%"></span></div>
+      <div class="gde-meter"><span>SPD &amp; LPJ</span><b>85%</b></div>
+      <div class="gde-progress gde-progress--blue" style="margin-bottom:1rem;"><span class="gde-progress__bar" style="width:85%"></span></div>
+      <div class="gde-meter"><span>Pengecekan kendaraan</span><b>48%</b></div>
+      <div class="gde-progress gde-progress--red"><span class="gde-progress__bar" style="width:48%"></span></div>
+    </div>
+  </section>
+
+  <!-- ===================== LAINNYA ===================== -->
+  <section class="demo-section" id="lainnya">
+    <h2>Komponen lain</h2>
+
+    <div class="gde-grid gde-grid--2">
+      <div class="demo-block">
+        <div class="demo-block__label">Langkah</div>
+        <ol class="gde-steps">
+          <li><strong>Ajukan permohonan</strong><p>Pilih kendaraan, jenis BBM, dan nominal.</p></li>
+          <li><strong>Menunggu persetujuan</strong><p>Admin GA meninjau dan dapat menyesuaikan nominal.</p></li>
+          <li><strong>Realisasi</strong><p>Unggah struk dan foto odometer.</p></li>
+        </ol>
+      </div>
+
+      <div class="demo-block">
+        <div class="demo-block__label">Timeline</div>
+        <ul class="gde-timeline">
+          <li><div class="gde-timeline__date">7 Juli 2026</div><div class="gde-timeline__title">Redesain forecast &amp; distribusi</div><div class="gde-timeline__desc">Site, batch forecast, dan distribusi vendor.</div></li>
+          <li><div class="gde-timeline__date">13 Juli 2026</div><div class="gde-timeline__title">Modul katering mandiri</div><div class="gde-timeline__desc">Pemisahan dari modul kendaraan.</div></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="gde-grid gde-grid--2">
+      <div class="demo-block">
+        <div class="demo-block__label">Daftar kunci–nilai</div>
+        <ul class="gde-list">
+          <li><span class="gde-list__k">Peran terlibat</span><span class="gde-list__v">Requester, Admin GA</span></li>
+          <li><span class="gde-list__k">Prasyarat</span><span class="gde-list__v">Akun aktif</span></li>
+          <li><span class="gde-list__k">Hasil akhir</span><span class="gde-list__v">Status <em>Completed</em></span></li>
+        </ul>
+      </div>
+
+      <div class="demo-block">
+        <div class="demo-block__label">Tooltip, avatar, dan breadcrumb</div>
+        <div class="demo-row" style="margin-bottom:1.2rem;">
+          <span class="gde-tip">
+            <button class="gde-btn gde-btn--outline gde-btn--sm">Arahkan kursor</button>
+            <span class="gde-tip__bubble">Voucher berlaku 50 jam sejak diterbitkan</span>
+          </span>
+          <span class="gde-avatar">FI</span>
+          <span class="gde-avatar gde-avatar--sm gde-avatar--green">RA</span>
+          <span class="gde-avatar gde-avatar--sm gde-avatar--red">DS</span>
+        </div>
+        <ol class="gde-breadcrumb">
+          <li><a href="#">Beranda</a></li>
+          <li><a href="#">Permohonan BBM</a></li>
+          <li class="is-active">Voucher</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="gde-grid gde-grid--2">
+      <div class="demo-block">
+        <div class="demo-block__label">Keadaan kosong</div>
+        <div class="gde-empty">
+          <div class="gde-empty__icon"><i class="bi bi-inbox"></i></div>
+          <h4>Belum ada permohonan</h4>
+          <p>Data akan muncul setelah karyawan mengirim permohonan BBM pertama.</p>
+          <button class="gde-btn gde-btn--primary gde-btn--sm"><i class="bi bi-plus-lg"></i> Buat permohonan</button>
+        </div>
+      </div>
+      <div class="demo-block">
+        <div class="demo-block__label">Skeleton (sedang memuat)</div>
+        <div class="gde-skeleton" style="height:16px;width:60%;margin-bottom:.7rem;"></div>
+        <div class="gde-skeleton" style="height:16px;width:92%;margin-bottom:.7rem;"></div>
+        <div class="gde-skeleton" style="height:16px;width:78%;margin-bottom:1.4rem;"></div>
+        <div class="gde-skeleton" style="height:86px;width:100%;"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== JEMBATAN KELAS LAMA ===================== -->
+  <section class="demo-section" id="jembatan">
+    <h2>Kelas lama → gaya baru</h2>
+    <p>Lapisan <code>gde-compat.css</code> membuat markup NiceAdmin/Bootstrap yang <b>sudah ada</b>
+       otomatis tampil mengikuti gaya ini — tanpa mengubah satu baris Blade. Tabel di bawah
+       memperlihatkan pemetaannya.</p>
+
+    <div class="gde-table-wrap">
+      <table class="gde-table">
+        <thead><tr><th>Kelas lama</th><th>Hasil setelah jembatan</th></tr></thead>
+        <tbody>
+          <tr><td class="gde-u-mono">.sidebar</td><td>Gradasi biru Geodipa, lebar 264px, sudut menu 10px</td></tr>
+          <tr><td class="gde-u-mono">.sidebar-nav .nav-link.active</td><td>Latar hijau transparan + garis hijau di kiri</td></tr>
+          <tr><td class="gde-u-mono">.header</td><td>Tinggi 64px, putih transparan dengan blur, garis bawah tipis</td></tr>
+          <tr><td class="gde-u-mono">#main</td><td>Margin kiri 264px, latar <code>--gde-surface-3</code>, padding 24/32px</td></tr>
+          <tr><td class="gde-u-mono">.pagetitle h1</td><td>Poppins 24px/700, warna <code>--gde-ink</code></td></tr>
+          <tr><td class="gde-u-mono">.card</td><td>Sudut 18px, garis tipis, bayangan halus</td></tr>
+          <tr><td class="gde-u-mono">.card-title</td><td>Poppins 17px/600 + garis pemisah bawah</td></tr>
+          <tr><td class="gde-u-mono">.btn-primary</td><td>Biru Geodipa #0B50A1, sudut 10px</td></tr>
+          <tr><td class="gde-u-mono">.btn-success / .btn-danger</td><td>Hijau #5C8A24 / merah Geodipa</td></tr>
+          <tr><td class="gde-u-mono">.form-control, .form-select</td><td>Sudut 10px, cincin fokus hijau</td></tr>
+          <tr><td class="gde-u-mono">.table thead th</td><td>Huruf kapital kecil, latar <code>--gde-surface-2</code></td></tr>
+          <tr><td class="gde-u-mono">.badge</td><td>Pil 11px/700 dengan warna semantik Geodipa</td></tr>
+          <tr><td class="gde-u-mono">.alert-success/info/warning/danger</td><td>Warna muda + garis tebal kiri</td></tr>
+          <tr><td class="gde-u-mono">.modal-content</td><td>Sudut 18px, bayangan dalam, kepala/kaki terpisah</td></tr>
+          <tr><td class="gde-u-mono">.dropdown-menu</td><td>Sudut 14px, item tersorot hijau muda</td></tr>
+          <tr><td class="gde-u-mono">.info-card h6</td><td>Poppins 26px/800, angka biru Geodipa</td></tr>
+          <tr><td class="gde-u-mono">.swal2-popup (SweetAlert2)</td><td>Sudut 18px, Poppins, tombol Geodipa</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="gde-alert gde-alert--warning">
+      <span class="gde-alert__icon"><i class="bi bi-exclamation-triangle"></i></span>
+      <div class="gde-alert__body">
+        <strong>Yang tidak boleh dilakukan</strong>
+        Jangan tulis kode warna heksa langsung di view baru, dan jangan menaruh
+        <code>gde-compat.css</code> sebelum <code>style.css</code> — urutan pemuatan menentukan hasilnya.
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="gde-footer">
+  <div class="gde-footer__inner">
+    <p>&copy; <span data-gde-year>2026</span> PT Geo Dipa Energi (Persero) Unit Patuha — Divisi General Affairs.</p>
+    <div style="display:flex;gap:1rem;">
+      <a href="README.md">README</a>
+      <a href="PANDUAN-DESIGN-SYSTEM.md">Panduan design system</a>
+    </div>
+  </div>
+</footer>
+
+<!-- ===================== MODAL DEMO ===================== -->
+<div class="gde-modal" id="modalDemo" aria-hidden="true">
+  <div class="gde-modal__scrim"></div>
+  <div class="gde-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="modalDemoTitle">
+    <div class="gde-modal__head">
+      <h3 id="modalDemoTitle">Contoh modal</h3>
+      <button class="gde-modal__close" aria-label="Tutup">&times;</button>
+    </div>
+    <div class="gde-modal__body">
+      <p>Modal ditutup dengan tombol silang, klik latar, tombol <em>Tutup</em>, atau tombol <span class="kbd">Esc</span>.</p>
+      <label class="gde-label">Catatan authorizer</label>
+      <input class="gde-input" placeholder="Opsional…">
+    </div>
+    <div class="gde-modal__foot">
+      <button class="gde-btn gde-btn--outline" data-gde-close>Tutup</button>
+      <button class="gde-btn gde-btn--primary" data-gde-close>Simpan</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/gde-ui.js"></script>
+</body>
+</html>

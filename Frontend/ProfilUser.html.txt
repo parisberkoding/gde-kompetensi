@@ -1,0 +1,407 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — ProfilUser.html
+  Halaman: Profil Saya (Requirement 3.b).
+  Kiri  : kartu identitas (read-only) + ringkasan sertifikasi + akses cepat.
+  Kanan : data yang boleh diubah sendiri (no HP, email pribadi, email atasan)
+          dan, untuk HC/SA, data kepegawaian (divisi, jabatan, lokasi kerja).
+  KONTRAK API: apiGetEmployeeProfile, apiUpdateProfilSaya, apiGetMeta,
+               apiExportProfilPdf -> lihat subprocess.gs
+  ============================================================================
+-->
+<div id="puRoot">
+  <div class="siaga-loader"><div class="siaga-loader__ring"></div><p>Memuat profil...</p></div>
+</div>
+
+<script>
+/* ==========================================================================
+   KONTROLER PROFIL SAYA
+   ========================================================================== */
+var PuState = { data: null };
+
+function initProfilUser(param) {
+  'use strict';
+  puRenderKerangka();
+  puMuat();
+}
+
+/* --------------------------------------------------------------- kerangka -- */
+function puRenderKerangka() {
+  SIAGA.el('puRoot').innerHTML = ''
+    + '<div class="gde-page-head">'
+    + '  <div>'
+    + '    <div class="gde-u-eyebrow">Akun</div>'
+    + '    <h1>Profil Saya</h1>'
+    + '    <p>Identitas, kontak notifikasi, dan ringkasan sertifikasi Anda. '
+    + 'Pastikan nomor HP dan email selalu aktif agar pengingat masa berlaku tidak terlewat.</p>'
+    + '  </div>'
+    + '  <div class="gde-page-actions">'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="puMuatUlang">'
+    + '      <i class="bi bi-arrow-clockwise"></i> Segarkan</button>'
+    + '  </div>'
+    + '</div>'
+    + '<div id="puIsi">' + SIAGA.pemuatHtml('Memuat profil...') + '</div>';
+
+  var ulang = SIAGA.el('puMuatUlang');
+  if (ulang) ulang.addEventListener('click', function () { puMuat(); });
+}
+
+/* ---------------------------------------------------------------- pemuatan -- */
+function puMuat() {
+  var isi = SIAGA.el('puIsi');
+  if (!isi) return;
+  isi.innerHTML = SIAGA.pemuatHtml('Memuat profil...');
+
+  var kode = String(SIAGA.pengguna().employee_code || '');
+  SIAGA.api('apiGetEmployeeProfile', [kode]).then(function (d) {
+    PuState.data = d;
+    puRenderIsi(d);
+  }).catch(function (e) {
+    isi.innerHTML = SIAGA.galatHtml(e.message);
+  });
+}
+
+function puRenderIsi(d) {
+  var user = (d && d.user) || SIAGA.pengguna();
+  var ring = (d && d.ringkasan) || {};
+
+  if (!user || !user.employee_code) {
+    SIAGA.el('puIsi').innerHTML = SIAGA.kosongHtml('bi-person-x', 'Profil tidak ditemukan',
+      'Data karyawan tidak dapat dimuat. Hubungi Human Capital untuk memastikan akun Anda terdaftar.');
+    return;
+  }
+
+  SIAGA.el('puIsi').innerHTML = '<div class="siaga-2col">'
+    + puKolomKiri(user, ring)
+    + puKolomKanan(user)
+    + '</div>';
+
+  puPasangPerilaku(user);
+  puMuatDivisi();
+}
+
+/* ------------------------------------------------------------ kolom kiri -- */
+function puKolomKiri(user, ring) {
+  return ''
+    + '<div>'
+    + '  <div class="gde-card">'
+    + '    <div class="siaga-profil-hero">'
+    + '      <span class="gde-avatar">' + SIAGA.esc(SIAGA.inisial(user.nama_lengkap)) + '</span>'
+    + '      <div style="min-width:0">'
+    + '        <h2>' + SIAGA.esc(user.nama_lengkap || '-') + '</h2>'
+    + '        <p>' + SIAGA.esc(user.employee_code || '') + ' &middot; @' + SIAGA.esc(user.username || '') + '</p>'
+    + '        <div class="siaga-profil-hero__badges">'
+    + '          <span class="gde-chip">Role <b>' + SIAGA.esc(user.role_label || user.role || '-') + '</b></span>'
+    + '          <span class="gde-chip">Divisi <b>' + SIAGA.esc(user.divisi || '—') + '</b></span>'
+    + '          <span class="gde-chip">Jabatan <b>' + SIAGA.esc(user.jabatan || '—') + '</b></span>'
+    + '        </div>'
+    + '      </div>'
+    + '    </div>'
+    + '    <div class="gde-card__body">'
+    + '      <dl class="siaga-dl">'
+    + puBaris('Employee Code', user.employee_code)
+    + puBaris('Username', user.username)
+    + puBaris('Role', user.role_label || user.role)
+    + puBaris('Divisi', user.divisi)
+    + puBaris('Jabatan', user.jabatan)
+    + puBaris('Lokasi Kerja', user.lokasi_kerja)
+    + puBaris('Email Perusahaan', user.email_perusahaan)
+    + puBaris('Email Pribadi', user.email_pribadi)
+    + puBaris('No. HP', user.no_hp)
+    + puBaris('Email Atasan', user.email_atasan)
+    + puBaris('Login terakhir', user.login_terakhir ? SIAGA.waktuLalu(user.login_terakhir) : '')
+    + puBarisHtml('Status akun', puStatusAkun(user.status))
+    + '      </dl>'
+    + '    </div>'
+    + '    <div class="gde-card__foot">'
+    + '      <button class="gde-btn gde-btn--outline-primary" type="button" id="puKePekerja">'
+    + '        <i class="bi bi-person-vcard"></i> Buka Profil Pekerja</button>'
+    + (SIAGA.isHc() ? '      <button class="gde-btn gde-btn--outline" type="button" id="puExport">'
+      + '<i class="bi bi-file-earmark-pdf"></i> Ekspor PDF</button>' : '')
+    + '    </div>'
+    + '  </div>'
+    + puKartuRingkasan(ring)
+    + '</div>';
+}
+
+function puKartuRingkasan(ring) {
+  var total = SIAGA.num(ring.total, 0);
+  var ada = SIAGA.num(ring.ada_lampiran, 0);
+  var persen = SIAGA.num(ring.persen_lengkap, total ? Math.round((ada / total) * 100) : 0);
+
+  return ''
+    + '<div class="gde-card">'
+    + '  <div class="siaga-panel-head">'
+    + '    <i class="bi bi-clipboard-data-fill" style="color:var(--gde-blue)"></i>'
+    + '    <div><h3>Ringkasan sertifikasi</h3>'
+    + '    <div class="siaga-panel-head__sub">Data sertifikasi atas nama Anda</div></div>'
+    + '  </div>'
+    + '  <div class="gde-card__body">'
+    + '    <div class="gde-grid gde-grid--2" style="gap:.75rem">'
+    + puMini('Total sertifikasi', total, 'bi-award', 'blue')
+    + puMini('Kadaluarsa', ring.kadaluarsa, 'bi-x-octagon', 'dead')
+    + puMini('Mendesak', ring.mendesak, 'bi-exclamation-triangle', 'red')
+    + puMini('Aman', ring.aman, 'bi-check-circle', 'green')
+    + '    </div>'
+    + '    <div class="siaga-mt-4" style="border-top:1px dashed var(--gde-line);padding-top:1rem">'
+    + '      <div class="gde-u-between" style="margin-bottom:6px">'
+    + '        <span class="siaga-inline-note">Kelengkapan lampiran</span>'
+    + '        <b style="font-size:.85rem">' + SIAGA.angka(ada) + ' / ' + SIAGA.angka(total) + '</b>'
+    + '      </div>'
+    + '      <div class="gde-progress"><span class="gde-progress__bar" style="width:' + persen + '%"></span></div>'
+    + '      <div class="gde-hint">' + SIAGA.angka(persen) + '% data sertifikasi sudah memiliki lampiran.</div>'
+    + '    </div>'
+    + '  </div>'
+    + '</div>';
+}
+
+function puMini(label, nilai, ikon, tone) {
+  return '<div class="siaga-mini siaga-mini--' + SIAGA.attr(tone) + '">'
+    + '<div class="siaga-mini__icon"><i class="bi ' + SIAGA.attr(ikon) + '"></i></div>'
+    + '<div style="min-width:0">'
+    + '<div class="siaga-mini__label">' + SIAGA.esc(label) + '</div>'
+    + '<div class="siaga-mini__value">' + SIAGA.angka(nilai) + '</div>'
+    + '</div></div>';
+}
+
+function puBaris(k, v) {
+  var nilai = (v === null || v === undefined || String(v).trim() === '') ? '—' : String(v);
+  return '<dt>' + SIAGA.esc(k) + '</dt><dd>' + SIAGA.esc(nilai) + '</dd>';
+}
+
+function puBarisHtml(k, html) {
+  return '<dt>' + SIAGA.esc(k) + '</dt><dd>' + html + '</dd>';
+}
+
+function puStatusAkun(status) {
+  var s = String(status || 'ACTIVE').toUpperCase();
+  if (s === 'ACTIVE') {
+    return '<span class="gde-status gde-status--green"><i class="bi bi-check-circle-fill"></i>Aktif</span>';
+  }
+  if (s === 'INACTIVE') {
+    return '<span class="gde-status gde-status--gray"><i class="bi bi-dash-circle"></i>Nonaktif</span>';
+  }
+  return '<span class="gde-status gde-status--gray">' + SIAGA.esc(s) + '</span>';
+}
+
+/* ----------------------------------------------------------- kolom kanan -- */
+function puKolomKanan(user) {
+  var isHc = SIAGA.isHc();
+
+  return ''
+    + '<div>'
+    + '  <div class="gde-card">'
+    + '    <div class="siaga-panel-head">'
+    + '      <i class="bi bi-pencil-square" style="color:var(--gde-blue)"></i>'
+    + '      <div><h3>Data yang dapat saya ubah</h3>'
+    + '      <div class="siaga-panel-head__sub">Perubahan langsung tersimpan ke profil Anda</div></div>'
+    + '    </div>'
+    + '    <div class="gde-card__body">'
+    + '      <form id="puForm" autocomplete="off" novalidate>'
+    + '        <div class="siaga-formgrid">'
+
+    + '          <div class="span-2">'
+    + '            <label class="gde-label" for="puNoHp">No. HP</label>'
+    + '            <input class="gde-input" type="text" id="puNoHp" name="no_hp" '
+    + 'value="' + SIAGA.attr(user.no_hp || '') + '" placeholder="mis. 0812xxxxxxx">'
+    + '            <div class="gde-hint">Dipakai untuk keperluan koordinasi HC.</div>'
+    + '          </div>'
+
+    + '          <div>'
+    + '            <label class="gde-label" for="puEmailPribadi">Email pribadi</label>'
+    + '            <input class="gde-input" type="email" id="puEmailPribadi" name="email_pribadi" '
+    + 'value="' + SIAGA.attr(user.email_pribadi || '') + '" placeholder="nama@email.com">'
+    + '            <div class="gde-hint">Alamat email pribadi/alternatif.</div>'
+    + '          </div>'
+
+    + '          <div>'
+    + '            <label class="gde-label" for="puEmailAtasan">Email atasan</label>'
+    + '            <input class="gde-input" type="email" id="puEmailAtasan" name="email_atasan" '
+    + 'value="' + SIAGA.attr(user.email_atasan || '') + '" placeholder="atasan@geodipa.co.id">'
+    + '            <div class="gde-hint">Atasan menerima tembusan pengingat.</div>'
+    + '          </div>'
+
+    + (isHc ? ''
+      + '          <div>'
+      + '            <label class="gde-label" for="puNama">Nama lengkap</label>'
+      + '            <input class="gde-input" type="text" id="puNama" name="nama_lengkap" '
+      + 'value="' + SIAGA.attr(user.nama_lengkap || '') + '">'
+      + '          </div>'
+      + '          <div>'
+      + '            <label class="gde-label" for="puEmailPerusahaan">Email perusahaan</label>'
+      + '            <input class="gde-input" type="email" id="puEmailPerusahaan" name="email_perusahaan" '
+      + 'value="' + SIAGA.attr(user.email_perusahaan || '') + '" placeholder="nama@geodipa.co.id">'
+      + '          </div>'
+      + '          <div>'
+      + '            <label class="gde-label" for="puDivisi">Divisi</label>'
+      + '            <input class="gde-input" type="text" id="puDivisi" name="divisi" '
+      + 'value="' + SIAGA.attr(user.divisi || '') + '" list="puDivisiList" placeholder="mis. Human Capital">'
+      + '            <datalist id="puDivisiList"></datalist>'
+      + '          </div>'
+      + '          <div>'
+      + '            <label class="gde-label" for="puJabatan">Jabatan</label>'
+      + '            <input class="gde-input" type="text" id="puJabatan" name="jabatan" '
+      + 'value="' + SIAGA.attr(user.jabatan || '') + '">'
+      + '          </div>'
+      + '          <div class="span-2">'
+      + '            <label class="gde-label" for="puLokasi">Lokasi kerja</label>'
+      + '            <input class="gde-input" type="text" id="puLokasi" name="lokasi_kerja" '
+      + 'value="' + SIAGA.attr(user.lokasi_kerja || '') + '" placeholder="mis. Unit Patuha">'
+      + '          </div>' : '')
+
+    + '        </div>'
+    + '        <div class="gde-u-flex gde-u-items-center siaga-mt-4" style="gap:.5rem">'
+    + '          <button class="gde-btn gde-btn--primary" type="submit" id="puSubmit">'
+    + '            <i class="bi bi-save"></i> Simpan perubahan</button>'
+    + '          <button class="gde-btn gde-btn--outline" type="button" id="puReset">Batal</button>'
+    + '        </div>'
+    + '      </form>'
+    + '    </div>'
+    + '  </div>'
+
+    + '  <div class="gde-card">'
+    + '    <div class="siaga-panel-head">'
+    + '      <i class="bi bi-lightning-charge-fill" style="color:var(--gde-warning)"></i>'
+    + '      <div><h3>Akses cepat</h3><div class="siaga-panel-head__sub">Menu akun yang sering dipakai</div></div>'
+    + '    </div>'
+    + '    <div class="gde-card__body">'
+    + '      <div class="gde-u-flex gde-u-flex-wrap" style="gap:.5rem">'
+    + '        <button class="gde-btn gde-btn--outline" type="button" data-pu-nav="keamanan">'
+    + '          <i class="bi bi-shield-lock"></i> Username &amp; Password</button>'
+    + '        <button class="gde-btn gde-btn--outline" type="button" data-pu-nav="notifikasi">'
+    + '          <i class="bi bi-bell"></i> Notifikasi</button>'
+    + '        <button class="gde-btn gde-btn--outline" type="button" data-pu-nav="pekerja">'
+    + '          <i class="bi bi-person-vcard"></i> Profil Pekerja</button>'
+    + '        <button class="gde-btn gde-btn--outline" type="button" data-pu-nav="data">'
+    + '          <i class="bi bi-card-checklist"></i> Data Sertifikasi</button>'
+    + '      </div>'
+    + '    </div>'
+    + '  </div>'
+    + '</div>';
+}
+
+/* ------------------------------------------------------------ perilaku UI -- */
+function puPasangPerilaku(user) {
+  var form = SIAGA.el('puForm');
+  if (form) form.addEventListener('submit', function (e) { puSimpan(e, user); });
+
+  var reset = SIAGA.el('puReset');
+  if (reset) {
+    reset.addEventListener('click', function () {
+      puIsiForm(user);
+      SIAGA.bersihkanInvalid(form);
+      SIAGA.info('Perubahan yang belum disimpan dibatalkan.');
+    });
+  }
+
+  var kePekerja = SIAGA.el('puKePekerja');
+  if (kePekerja) {
+    kePekerja.addEventListener('click', function () {
+      SIAGA.state.paramPekerja = String(SIAGA.pengguna().employee_code || '');
+      SIAGA.navigasi('pekerja');
+    });
+  }
+
+  var expor = SIAGA.el('puExport');
+  if (expor) expor.addEventListener('click', puEksporPdf);
+
+  SIAGA.qsa('[data-pu-nav]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      SIAGA.navigasi(btn.getAttribute('data-pu-nav'));
+    });
+  });
+}
+
+function puIsiForm(user) {
+  var form = SIAGA.el('puForm');
+  if (!form) return;
+  SIAGA.isiForm(form, user);
+}
+
+function puMuatDivisi() {
+  if (!SIAGA.isHc()) return;
+  SIAGA.muatMeta().then(function (m) {
+    var list = SIAGA.el('puDivisiList');
+    if (!list) return;
+    list.innerHTML = ((m && m.divisi_options) || []).map(function (d) {
+      return '<option value="' + SIAGA.attr(d) + '"></option>';
+    }).join('');
+  }).catch(function () { });
+}
+
+/* --------------------------------------------------------------- validasi -- */
+function puEmailValid(nilai) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(nilai || '').trim());
+}
+
+function puCekEmail(input, nilai) {
+  if (!nilai) return true;                       // opsional
+  if (puEmailValid(nilai)) return true;
+  SIAGA.tandaiInvalid(input, 'Format email tidak valid.');
+  return false;
+}
+
+function puSimpan(e, user) {
+  e.preventDefault();
+  var form = SIAGA.el('puForm');
+  SIAGA.bersihkanInvalid(form);
+
+  var v = SIAGA.nilaiForm(form);
+  var data = {
+    no_hp: String(v.no_hp || '').trim(),
+    email_pribadi: String(v.email_pribadi || '').trim(),
+    email_atasan: String(v.email_atasan || '').trim()
+  };
+
+  if (data.no_hp && data.no_hp.replace(/[^0-9]/g, '').length < 8) {
+    SIAGA.tandaiInvalid(SIAGA.el('puNoHp'), 'Nomor HP minimal 8 digit angka.');
+    return;
+  }
+  if (!puCekEmail(SIAGA.el('puEmailPribadi'), data.email_pribadi)) return;
+  if (!puCekEmail(SIAGA.el('puEmailAtasan'), data.email_atasan)) return;
+
+  if (SIAGA.isHc()) {
+    data.nama_lengkap = String(v.nama_lengkap || '').trim();
+    data.email_perusahaan = String(v.email_perusahaan || '').trim();
+    data.divisi = String(v.divisi || '').trim();
+    data.jabatan = String(v.jabatan || '').trim();
+    data.lokasi_kerja = String(v.lokasi_kerja || '').trim();
+
+    if (!data.nama_lengkap) {
+      SIAGA.tandaiInvalid(SIAGA.el('puNama'), 'Nama lengkap wajib diisi.');
+      return;
+    }
+    if (!puCekEmail(SIAGA.el('puEmailPerusahaan'), data.email_perusahaan)) return;
+  }
+
+  var tombol = SIAGA.el('puSubmit');
+  SIAGA.tombolSibuk(tombol, true, 'Menyimpan...');
+
+  SIAGA.api('apiUpdateProfilSaya', [data]).then(function (r) {
+    SIAGA.tombolSibuk(tombol, false);
+    var baru = (r && r.user) || SIAGA.pengguna();
+
+    /* Selaraskan sesi + shell agar topbar/sidebar ikut berubah. */
+    SIAGA.simpanSesi(SIAGA.state.token, baru);
+    SIAGA.sukses('Profil Anda berhasil diperbarui.', 'Tersimpan');
+    SIAGA.renderShell();
+    SIAGA.muatView('profil');
+  }).catch(function (err) {
+    SIAGA.tombolSibuk(tombol, false);
+    SIAGA.gagal(err.message);
+  });
+}
+
+function puEksporPdf() {
+  var tombol = SIAGA.el('puExport');
+  SIAGA.tombolSibuk(tombol, true, 'Menyiapkan...');
+  SIAGA.api('apiExportProfilPdf', [SIAGA.pengguna().employee_code]).then(function (r) {
+    SIAGA.tombolSibuk(tombol, false);
+    SIAGA.sukses('Berkas PDF dibuat: ' + ((r && r.name) || 'profil') + '.', 'Ekspor selesai');
+    if (r && r.url) window.open(r.url, '_blank');
+  }).catch(function (err) {
+    SIAGA.tombolSibuk(tombol, false);
+    SIAGA.gagal(err.message);
+  });
+}
+</script>

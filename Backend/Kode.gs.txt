@@ -1,0 +1,1550 @@
+/**
+ * ============================================================================
+ * SIAGA SERTIFIKASI — Kode.gs  (MAIN PROCESS)
+ * Sistem Informasi & Pengingat Masa Berlaku Sertifikasi
+ * PT Geo Dipa Energi (Persero) — Unit Patuha
+ * ============================================================================
+ *
+ * CARA PASANG DI APPS SCRIPT
+ * ---------------------------------------------------------------------------
+ * Setiap berkas di folder Frontend/ dan Backend/ berekstensi .txt.
+ * Saat dipasang ke editor Apps Script, ekstensi .txt DIHAPUS, nama dipertahankan.
+ *   Backend/Kode.gs.txt        -> Kode.gs
+ *   Backend/subprocess.gs.txt  -> subprocess.gs
+ *   Frontend/Index.html.txt    -> Index.html
+ *   ... dst.
+ *
+ * ARSITEKTUR
+ * ---------------------------------------------------------------------------
+ *   Kode.gs        (berkas ini)  -> konstanta, skema, entry point, kickstarter,
+ *                                   helper DB/Drive/umum, menu, trigger.
+ *   subprocess.gs                -> seluruh logika bisnis: autentikasi, CRUD,
+ *                                   mesin status, dashboard, profil, export,
+ *                                   reminder email.
+ *
+ * Model komunikasi frontend<->backend: google.script.run memanggil fungsi
+ * `apiXxx` yang SELALU mengembalikan { ok:true, data:... } atau { ok:false, error:... }.
+ *
+ * ============================================================================
+ * KICKSTARTER (SETUP OTOMATIS)
+ * ============================================================================
+ * Saat pertama kali halaman dibuka (doGet), aplikasi otomatis:
+ *   1. mencari ID spreadsheet (konstanta -> Script Property -> spreadsheet aktif)
+ *   2. membuat sheet yang belum ada + merapikan header yang berubah
+ *   3. memastikan semua key Config default ada
+ *   4. membuat folder Drive untuk lampiran & hasil export
+ *   5. mengisi Master_Sertifikasi (69 jenis hasil normalisasi data lama)
+ *   6. membuat akun awal: superadmin + HC
+ *   7. menandai setup selesai (Script Property)
+ *
+ * Jalankan ulang paksa: buka URL web app + "?bootstrap=1"
+ * atau jalankan kickstartFromMenu_() dari editor.
+ */
+
+// ============================================================================
+// 1. KONSTANTA APLIKASI
+// ============================================================================
+
+var APP_NAME = 'SIAGA Sertifikasi';
+var APP_SUB = 'Sistem Informasi & Pengingat Masa Berlaku Sertifikasi';
+var APP_OWNER = 'PT Geo Dipa Energi (Persero) — Unit Patuha';
+var APP_VERSION = 'v1.0.0';
+var DEFAULT_TZ = 'Asia/Jakarta';
+
+/** ID Spreadsheet database. WAJIB diisi (hanya ID, bukan URL). */
+var SPREADSHEET_ID = '';
+
+/** Folder Drive lampiran. Kosong = dibuat otomatis ("SIAGA_Sertifikasi_Lampiran"). */
+var DRIVE_FOLDER_ID = '';
+
+/** Folder Drive khusus hasil export. Kosong = subfolder otomatis. */
+var DRIVE_FOLDER_EXPORT_ID = '';
+
+/** Email pengirim notifikasi. Kosong = akun yang men-deploy. */
+var EMAIL_PENGIRIM = '';
+
+// ---------- penanda bootstrap ----------
+var BOOTSTRAP_PROP_ = 'SIAGA_BOOTSTRAP';
+var BOOTSTRAP_VERSION_ = 'v1.0.0';
+
+// ---------- batas unggah ----------
+var MAX_UPLOAD_MB_ = 12;
+
+/**
+ * Format lampiran yang didukung: PDF, Excel, Gambar, Word.
+ * Dipakai untuk validasi di server (dan dicerminkan di frontend).
+ */
+var ALLOWED_MIME_ = {
+  'application/pdf': 'pdf',
+  'application/x-pdf': 'pdf',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/msword': 'doc',
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+  'image/heic': 'heic',
+  'image/tiff': 'tiff'
+};
+
+/** Ekstensi yang diterima walau MIME dari browser tidak standar. */
+var ALLOWED_EXT_ = ['pdf', 'xls', 'xlsx', 'csv', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'heic', 'tif', 'tiff'];
+
+/** Ikon Bootstrap Icons per ekstensi (dipakai frontend lewat apiGetMeta). */
+var FILE_ICON_ = {
+  pdf: 'bi-file-earmark-pdf',
+  xls: 'bi-file-earmark-excel',
+  xlsx: 'bi-file-earmark-excel',
+  csv: 'bi-file-earmark-spreadsheet',
+  doc: 'bi-file-earmark-word',
+  docx: 'bi-file-earmark-word',
+  png: 'bi-file-earmark-image',
+  jpg: 'bi-file-earmark-image',
+  jpeg: 'bi-file-earmark-image',
+  webp: 'bi-file-earmark-image',
+  gif: 'bi-file-earmark-image',
+  bmp: 'bi-file-earmark-image',
+  heic: 'bi-file-earmark-image',
+  tif: 'bi-file-earmark-image',
+  tiff: 'bi-file-earmark-image'
+};
+
+// ============================================================================
+// 2. CONFIG DEFAULT
+// ============================================================================
+
+var CONFIG_DEFAULTS = {
+  'app_name': APP_NAME,
+  'app_sub': APP_SUB,
+  'app_owner': APP_OWNER,
+  'app_version': APP_VERSION,
+  'zona_waktu': DEFAULT_TZ,
+  'unit_default': 'Patuha',
+
+  // ---------- ambang status (HARI) ----------
+  // > peringatan_hari                  -> MASIH BERLAKU      (hijau)
+  // perhatian_hari+1 .. peringatan_hari-> PERINGATAN         (kuning)
+  // segera_hari+1   .. perhatian_hari  -> PERLU PERHATIAN    (oranye)
+  // mendesak_hari+1 .. segera_hari     -> SEGERA PERPANJANG  (merah)
+  // 0               .. mendesak_hari   -> MENDEKATI KADALUARSA (hitam, teks putih)
+  // < 0                                -> KADALUARSA         (hitam/merah, teks putih)
+  'status_peringatan_hari': '270',   // 9 bulan
+  'status_perhatian_hari': '180',    // 6 bulan
+  'status_segera_hari': '90',        // 3 bulan
+  'status_mendesak_hari': '60',      // 2 bulan
+  'status_merah_hari': '30',         // 1 bulan (dipakai daftar prioritas)
+
+  // ---------- masa berlaku ----------
+  'masa_berlaku_default_bulan': '36',
+  'masa_berlaku_5_tahun_kata_kunci': 'CRMP,Infrared Thermography,CSRS',
+
+  // ---------- autentikasi ----------
+  'auth_session_jam': '10',
+  'password_wajib_ganti_default': 'FALSE',
+  'username_prefix_duplikat': 'TRUE',
+  'login_max_percobaan': '5',
+  'login_lock_menit': '15',
+
+  // ---------- reminder ----------
+  'reminder_enabled': 'TRUE',
+  'reminder_hari_kirim': '1',                 // 1=Senin ... 7=Minggu, 0=setiap hari
+  'reminder_level_bulan': '9,6,3,2,1,0',      // kapan email dikirim
+  'reminder_ke_karyawan': 'TRUE',
+  'reminder_ke_hc': 'TRUE',
+  'reminder_ke_atasan': 'TRUE',
+  'reminder_extra_emails': '',
+  'reminder_max_email_per_jalan': '90',
+  'reminder_ulang_kadaluarsa_hari': '7',
+  'email_pengirim': '',
+  'email_subject_prefix': '[SIAGA Sertifikasi]',
+  'email_footer': 'Email otomatis dari SIAGA Sertifikasi Unit Patuha. Mohon tidak membalas email ini.',
+
+  // ---------- tampilan ----------
+  'dashboard_prioritas_limit': '8',
+  'tabel_baris_per_halaman': '25',
+  'export_max_baris': '5000',
+
+  // ---------- infrastruktur ----------
+  'drive_folder_id': '',
+  'drive_folder_export_id': '',
+  'superadmin_email': 'superadmin@gde.co.id',
+  'hc_email': 'hc@gde.co.id',
+  'divisi_options': '',
+
+  // ---------- internal ----------
+  'bootstrap_auto_seed': 'TRUE',
+  'bootstrap_version': '',
+  'bootstrap_done_at': ''
+};
+
+// ============================================================================
+// 3. DEFINISI STATUS
+// ============================================================================
+/**
+ * Enam tingkat status. `key` disimpan di kolom Status (Master_File).
+ * `tone` dipakai frontend untuk memilih kelas badge GDE.
+ * Urutan array = urutan kepentingan (paling mendesak lebih dulu).
+ */
+var STATUS_DEFS = [
+  {
+    key: 'KADALUARSA', label: 'Kadaluarsa', short: 'EXP', tone: 'dead',
+    icon: 'bi-x-octagon-fill', prioritas: 1,
+    ket: 'Masa berlaku sudah habis. Wajib perpanjangan segera.'
+  },
+  {
+    key: 'MENDEKATI_KADALUARSA', label: 'Mendekati Kadaluarsa', short: 'MDK', tone: 'black',
+    icon: 'bi-exclamation-octagon-fill', prioritas: 2,
+    ket: 'Sisa masa berlaku 2 bulan atau kurang.'
+  },
+  {
+    key: 'SEGERA_PERPANJANG', label: 'Segera Perpanjang', short: 'SGR', tone: 'red',
+    icon: 'bi-exclamation-triangle-fill', prioritas: 3,
+    ket: 'Sisa masa berlaku 3 bulan atau kurang.'
+  },
+  {
+    key: 'PERLU_PERHATIAN', label: 'Perlu Perhatian', short: 'PRH', tone: 'orange',
+    icon: 'bi-exclamation-circle-fill', prioritas: 4,
+    ket: 'Sisa masa berlaku 6 bulan atau kurang.'
+  },
+  {
+    key: 'PERINGATAN', label: 'Peringatan', short: 'PRG', tone: 'yellow',
+    icon: 'bi-info-circle-fill', prioritas: 5,
+    ket: 'Sisa masa berlaku 9 bulan atau kurang.'
+  },
+  {
+    key: 'MASIH_BERLAKU', label: 'Masih Berlaku', short: 'OK', tone: 'green',
+    icon: 'bi-check-circle-fill', prioritas: 6,
+    ket: 'Sisa masa berlaku lebih dari 9 bulan.'
+  }
+];
+
+/** Peta key -> definisi, dibuat sekali. */
+var STATUS_MAP_ = (function () {
+  var m = {};
+  for (var i = 0; i < STATUS_DEFS.length; i++) m[STATUS_DEFS[i].key] = STATUS_DEFS[i];
+  return m;
+})();
+
+/** Role aplikasi. */
+var ROLES_ = {
+  SA: { key: 'SA', label: 'Super Admin', icon: 'bi-shield-lock' },
+  HC: { key: 'HC', label: 'Human Capital', icon: 'bi-people' },
+  EMP: { key: 'EMP', label: 'Employee', icon: 'bi-person-badge' }
+};
+
+var ROLE_LABEL_ = { SA: 'Super Admin', HC: 'Human Capital', EMP: 'Employee' };
+
+// ============================================================================
+// 4. SKEMA SHEET
+// ============================================================================
+/**
+ * Kolom bertanda [SPEC] adalah kolom yang diminta pada spesifikasi kebutuhan,
+ * dipertahankan persis (nama & urutan). Kolom sesudahnya adalah tambahan
+ * pendukung (upload, audit, verifikasi) — aman untuk diabaikan HC.
+ */
+var SCHEMAS = {
+  'Config': ['Key', 'Value'],
+
+  // ------------------------------------------------------------------ USERS
+  'Master_User': [
+    // ---- spesifikasi ----
+    'Employee_code',        // [SPEC] kunci utama, mis. 4122196-C
+    'Nama_Lengkap',         // [SPEC]
+    'Username',             // [SPEC] default = nama depan
+    'Password',             // [SPEC] disimpan sebagai hash sha256
+    'Role',                 // [SPEC] HC | EMP | SA
+    'Email_Perusahaan',     // [SPEC] tujuan notifikasi
+    'Email_Pribadi',        // [SPEC] tujuan notifikasi cadangan
+    // ---- tambahan ----
+    'Nama_Depan',
+    'Divisi',
+    'Jabatan',
+    'Lokasi_Kerja',
+    'No_HP',
+    'Email_Atasan',
+    'Status',               // ACTIVE | INACTIVE
+    'Must_Change_Password',
+    'Login_Terakhir',
+    'Gagal_Login',
+    'Terkunci_Sampai',
+    'Created_At',
+    'Updated_At',
+    'Created_By'
+  ],
+
+  // ------------------------------------------------------------------ FILES
+  'Master_File': [
+    // ---- spesifikasi ----
+    'Doc_id',                       // [SPEC] DOC-YYYYMM-XXXX
+    'Employee_id',                  // [SPEC] relasi ke Master_User.Employee_code
+    'Nama_Sertifikasi',             // [SPEC]
+    'Start_pelaksanaan',            // [SPEC] tanggal mulai pelaksanaan
+    'End_pelaksanaan',              // [SPEC] tanggal selesai pelaksanaan
+    'Tanggal_sertifikasi',          // [SPEC] nullable
+    'Tanggal_waktu_perpanjangan',   // [SPEC] nullable, diisi saat sudah diperpanjang
+    'Expired_at',                   // [SPEC] WAJIB
+    'Sisa_masa_berlaku_day',        // [SPEC] dihitung
+    'Sisa_masa_berlaku_by_month',   // [SPEC] dihitung
+    'Status',                       // [SPEC] dihitung dari ambang Config
+    'Link_file',                    // [SPEC] URL Drive
+    // ---- tambahan ----
+    'File_id',
+    'File_name',
+    'Mime_type',
+    'Ukuran_file',
+    'Masa_berlaku_bulan',
+    'Kategori',
+    'Penerbit',
+    'No_sertifikat',
+    'Status_Verifikasi',            // PENDING | VERIFIED | REJECTED
+    'Catatan',
+    'Verified_By',
+    'Verified_At',
+    'Created_At',
+    'Updated_At',
+    'Created_By'
+  ],
+
+  // ------------------------------------------------------------ MASTER JENIS
+  'Master_Sertifikasi': [
+    'Cert_id', 'Nama_Sertifikasi', 'Kategori', 'Masa_berlaku_bulan',
+    'Penerbit', 'Aktif', 'Jumlah_pemegang', 'Created_At', 'Updated_At'
+  ],
+
+  // ---------------------------------------------------------------- SESSION
+  'Session_Token': [
+    'Token', 'Employee_code', 'Username', 'Role', 'Valid_Until',
+    'Status', 'User_Agent', 'Created_At', 'Invalidated_At'
+  ],
+
+  // ------------------------------------------------------------ NOTIFIKASI
+  'T_Notifikasi': [
+    'Notif_id', 'Employee_code', 'Doc_id', 'Level', 'Status_key',
+    'Judul', 'Pesan', 'Is_Read', 'Read_At', 'Created_At'
+  ],
+
+  'T_Email_Log': [
+    'Log_id', 'Periode_key', 'Doc_id', 'Employee_code', 'Level',
+    'Penerima', 'Cc', 'Subject', 'Status', 'Error', 'Sent_At'
+  ],
+
+  'T_Audit_Trail': [
+    'Audit_id', 'Actor_code', 'Actor_username', 'Actor_role',
+    'Aksi', 'Ref_type', 'Ref_id', 'Detail', 'At'
+  ]
+};
+
+// ============================================================================
+// 5. SEED MASTER SERTIFIKASI
+// ============================================================================
+/**
+ * 69 jenis sertifikasi hasil normalisasi "Rekap Sertifikasi dan Masa Berlaku
+ * Patuha.xlsx". Varian nama yang duplikat/typo sudah digabung.
+ * `mbb` = masa berlaku bulan (36 = 3 tahun, 60 = 5 tahun).
+ * HC bebas mengubah/menambah lewat sheet Master_Sertifikasi.
+ */
+var SEED_SERTIFIKASI_ = [
+  ['Pengawas Operasional Pertama (POP)', 'K3 / Pengawas Operasional', 36],
+  ['Pengawas Operasional Madya (POM)', 'K3 / Pengawas Operasional', 36],
+  ['Pengawas Operasional Utama (POU)', 'K3 / Pengawas Operasional', 36],
+  ['SKKTK', 'Ketenagalistrikan', 36],
+  ['SKKTK Level 2', 'Ketenagalistrikan', 36],
+  ['SKKTK Level 3', 'Ketenagalistrikan', 36],
+  ['Teknik Listrik-Operator', 'Ketenagalistrikan', 36],
+  ['Teknisi K3 Listrik', 'Ketenagalistrikan', 36],
+  ['Ahli K3 Listrik', 'Ketenagalistrikan', 36],
+  ['Ahli K3 Umum', 'K3', 36],
+  ['Ahli K3 Lingkungan Kerja', 'K3', 36],
+  ['Ahli Muda K3 Konstruksi', 'K3', 36],
+  ['Ahli Muda K3 Lingkungan Kerja', 'K3', 36],
+  ['K3 Kimia', 'K3', 36],
+  ['K3 Teknisi Perancah', 'K3', 36],
+  ['Scaffolding', 'Teknik', 36],
+  ['Rigger (Juru Ikat)', 'Teknik', 36],
+  ['Operator Forklift', 'Operator Alat Berat', 36],
+  ['Operator Forklift Kelas II', 'Operator Alat Berat', 36],
+  ['Operator K3 Forklift Kelas II', 'Operator Alat Berat', 36],
+  ['Operator Crane Kelas II', 'Operator Alat Berat', 36],
+  ['Operator Pesawat Angkut (Forklift Kelas II)', 'Operator Alat Berat', 36],
+  ['Authorized Gas Tester', 'HSSE', 36],
+  ['Authorized Gas Tester & Petugas Penanganan Bahaya Gas H2S', 'HSSE', 36],
+  ['Petugas Penanganan Bahaya Gas H2S', 'HSSE', 36],
+  ['Petugas P3k', 'HSSE', 36],
+  ['Hiperkes Paramedis', 'HSSE', 36],
+  ['Kebakaran DCB', 'HSSE', 36],
+  ['Surat Keterangan Penunjukan (SKP) Koordinator Penanggulangan Kebakaran', 'HSSE', 36],
+  ['Accident Investigator', 'HSSE', 36],
+  ['PPPA', 'Lingkungan', 36],
+  ['PPPU', 'Lingkungan', 36],
+  ['POIPU', 'Lingkungan', 36],
+  ['Resertifikasi POIPU', 'Lingkungan', 36],
+  ['POPAL (Pengolahan Air Limbah)', 'Lingkungan', 36],
+  ['Re-sertifikasi Penanggungjawab Operasional Pengolahan Air Limbah (POPAL)', 'Lingkungan', 36],
+  ['Penanggung Jawab Pengelolaan Limbah B3', 'Lingkungan', 36],
+  ['3R Sampah/Limbah Padat Non B3', 'Lingkungan', 36],
+  ['Re-sertifikasi Pemantauan dan Pengelolaan Sampah/Limbah Padat Non B3', 'Lingkungan', 36],
+  ['Life Cycle Assessment', 'Lingkungan', 36],
+  ['Life Cycle Assessment (LCA)', 'Lingkungan', 36],
+  ['Auditor Energi', 'Energi', 36],
+  ['Manager Energy Industri', 'Energi', 36],
+  ['Certified Risk Management Officer (CRMO)', 'Manajemen Risiko', 36],
+  ['Certified Risk Management Professional (CRMP)', 'Manajemen Risiko', 60],
+  ['Certified Contract Management Specialist (CCMS)', 'Pengadaan', 36],
+  ['Procurement Specialist (CPSp)', 'Pengadaan', 36],
+  ['Pengadaan Barang/Jasa Pemerintah PBJ', 'Pengadaan', 36],
+  ['Certified Logistic Supervisor', 'Logistik', 36],
+  ['Certified Sustainability Reporting Specialist (CSRS)', 'Sustainability', 60],
+  ['CHRP', 'Human Capital', 36],
+  ['CHRPE', 'Human Capital', 36],
+  ['CHRPE For Manager', 'Human Capital', 36],
+  ['Human Capital Supervisor', 'Human Capital', 36],
+  ['Human Resource Staff', 'Human Capital', 36],
+  ['Skema Operator Steam Field Facilities Panas Bumi', 'Panas Bumi', 36],
+  ['IADC Well Control', 'Panas Bumi', 36],
+  ['Instrumentasi & Kalibrasi Tk1', 'Instrumentasi', 36],
+  ['Infrared Thermography Course and International Certification Level I', 'Instrumentasi', 60],
+  ['Certification Vibration Analyst ISO 18436-2 Category II', 'Instrumentasi', 36],
+  ['Ultrasonic Test Level II', 'NDT / Inspeksi', 36],
+  ['UT level 2', 'NDT / Inspeksi', 36],
+  ['Asesor Uji Alir', 'Panas Bumi', 36],
+  ['Geoteknik Pada Bangunan Infrastruktur dan Fasilitas Permukaan', 'Teknik Sipil', 36],
+  ['Skema Kromatografi', 'Laboratorium', 36],
+  ['Volumetri & Spektrofotometri', 'Laboratorium', 36],
+  ['Skema petugas pengambil Contoh Air', 'Laboratorium', 36],
+  ['MTCUME', 'Information Technology', 36],
+  ['MTCTCE', 'Information Technology', 36]
+];
+
+/** Daftar divisi/unit awal (dari data lama, sudah dinormalisasi). */
+var DIVISI_SEED_ = [
+  'General Manager Unit Patuha',
+  'Production Division',
+  'Maintenance Division',
+  'HSSE Division',
+  'HC, GA & Finance Division',
+  'Procurement Department'
+];
+
+// ============================================================================
+// 6. ENTRY POINT
+// ============================================================================
+
+function doGet(e) {
+  e = e || {};
+  var params = e.parameter || {};
+  var force = String(params.bootstrap || '') === '1';
+  var diagnose = String(params.diagnose || '') === '1';
+
+  // ---------- 1. KICKSTARTER ----------
+  var report = null;
+  try {
+    report = kickstart_(force);
+  } catch (err) {
+    return renderSetupPage_('Setup belum bisa dijalankan',
+      (err && err.message) ? err.message : String(err), null);
+  }
+
+  if (diagnose) return renderSetupPage_('Status aplikasi', 'Diagnosa kickstarter', report);
+
+  // ---------- 2. RENDER APLIKASI ----------
+  try {
+    var tpl = HtmlService.createTemplateFromFile('Index');
+    tpl.bootstrap = JSON.stringify({
+      appName: APP_NAME,
+      appSub: APP_SUB,
+      appOwner: APP_OWNER,
+      version: APP_VERSION,
+      execUrl: getExecUrl_(),
+      tz: getConfig_('zona_waktu') || DEFAULT_TZ,
+      statuses: STATUS_DEFS,
+      roles: ROLES_,
+      bootstrap: report
+    });
+
+    return tpl.evaluate()
+      .setTitle(APP_NAME + ' — Unit Patuha')
+      .setSandboxMode(HtmlService.SandboxMode.IFRAME)
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  } catch (err2) {
+    return renderSetupPage_('Gagal memuat halaman aplikasi',
+      (err2 && err2.message) ? err2.message : String(err2), report);
+  }
+}
+
+function doPost(e) { return doGet(e); }
+
+/** Dipakai frontend untuk memuat potongan HTML (view/partial). */
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+/** Dipakai frontend via google.script.run.getView('NamaView'). */
+function getView(name) {
+  try {
+    return HtmlService.createHtmlOutputFromFile(name).getContent();
+  } catch (e) {
+    return '';
+  }
+}
+
+function includeSafe_(name) {
+  try { return HtmlService.createHtmlOutputFromFile(name).getContent(); } catch (e) { return ''; }
+}
+
+function getExecUrl_() {
+  try { return ScriptApp.getService().getUrl() || ''; } catch (e) { return ''; }
+}
+
+// ============================================================================
+// 7. KICKSTARTER
+// ============================================================================
+
+function isBootstrapDone_() {
+  try {
+    return PropertiesService.getScriptProperties().getProperty(BOOTSTRAP_PROP_) === BOOTSTRAP_VERSION_;
+  } catch (e) { return false; }
+}
+
+/**
+ * Jalankan seluruh persiapan aplikasi.
+ * @param {boolean} force true = jalankan ulang walau sudah pernah selesai.
+ * @return {Object} laporan langkah.
+ */
+function kickstart_(force) {
+  var t0 = new Date();
+  var report = {
+    ok: true, version: BOOTSTRAP_VERSION_, app_version: APP_VERSION,
+    sudah_sebelumnya: false, spreadsheet_id: '', drive_folder_id: '',
+    steps: [], errors: [], durasi_ms: 0
+  };
+
+  if (!force && isBootstrapDone_()) {
+    report.sudah_sebelumnya = true;
+    try { report.spreadsheet_id = resolveSpreadsheetId_(); } catch (e) { }
+    report.steps.push('bootstrap sudah pernah selesai — dilewati');
+    return report;
+  }
+
+  // ---------- LANGKAH 1: spreadsheet ----------
+  var id = resolveSpreadsheetId_();
+  if (!id) {
+    throw new Error('Spreadsheet database belum ditentukan. Isi konstanta SPREADSHEET_ID di Kode.gs '
+      + '(hanya ID-nya, bukan URL), atau bind script ini ke spreadsheet, lalu buka halaman ini lagi.');
+  }
+  try { PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', id); } catch (e) { }
+  report.spreadsheet_id = id;
+  report.steps.push('spreadsheet ditemukan: ' + id);
+
+  // ---------- LANGKAH 2 & 3: sheet + config ----------
+  var initRes = initSheets_();
+  report.steps.push('sheet diperiksa: ' + (initRes.created || []).length + ' dibuat, '
+    + (initRes.repaired || []).length + ' header dirapikan');
+  report.steps.push('config default dipastikan lengkap');
+
+  // ---------- LANGKAH 4: folder Drive ----------
+  try {
+    report.drive_folder_id = ensureDriveFolder_();
+    report.steps.push('folder lampiran siap: ' + report.drive_folder_id);
+  } catch (eDrive) {
+    report.errors.push('Folder Drive: ' + errMsg_(eDrive));
+    report.steps.push('folder Drive BELUM siap (unggah lampiran bisa gagal)');
+  }
+
+  // ---------- LANGKAH 5: seed jenis sertifikasi ----------
+  try {
+    var seedCert = seedMasterSertifikasi_();
+    report.steps.push(seedCert.created > 0
+      ? ('master jenis sertifikasi diisi ' + seedCert.created + ' baris')
+      : 'master jenis sertifikasi sudah terisi');
+  } catch (eCert) {
+    report.errors.push('Seed sertifikasi: ' + errMsg_(eCert));
+  }
+
+  // ---------- LANGKAH 6: akun awal ----------
+  if (String(getConfig_('bootstrap_auto_seed') || 'TRUE').toUpperCase() !== 'FALSE') {
+    try {
+      var seeded = seedAwal_();
+      report.seed = seeded;
+      report.steps.push('akun awal disiapkan: ' + (seeded.akun || []).join(', '));
+    } catch (eSeed) {
+      report.errors.push('Seeder: ' + errMsg_(eSeed));
+    }
+  }
+
+  // ---------- LANGKAH 7: tandai selesai ----------
+  try {
+    setConfig_('bootstrap_version', BOOTSTRAP_VERSION_);
+    setConfig_('bootstrap_done_at', nowStr_());
+  } catch (e) { }
+  try {
+    PropertiesService.getScriptProperties().setProperty(BOOTSTRAP_PROP_, BOOTSTRAP_VERSION_);
+  } catch (e) {
+    report.errors.push('Tidak bisa menyimpan penanda bootstrap: ' + errMsg_(e));
+  }
+
+  report.durasi_ms = (new Date()).getTime() - t0.getTime();
+  report.steps.push('bootstrap selesai dalam ' + report.durasi_ms + ' ms');
+  try { logAudit_('SYSTEM', 'system', 'SA', 'BOOTSTRAP', 'APP', BOOTSTRAP_VERSION_, report.steps.join(' | ')); } catch (e) { }
+
+  report.ok = report.errors.length === 0;
+  return report;
+}
+
+function kickstartFromMenu_() {
+  var r = kickstart_(true);
+  try {
+    SpreadsheetApp.getUi().alert('Kickstart selesai.\n\n' + (r.steps || []).join('\n')
+      + ((r.errors && r.errors.length) ? '\n\nERROR:\n' + r.errors.join('\n') : ''));
+  } catch (e) { Logger.log(JSON.stringify(r)); }
+  return r;
+}
+
+function resetBootstrap_() {
+  try { PropertiesService.getScriptProperties().deleteProperty(BOOTSTRAP_PROP_); } catch (e) { }
+  try {
+    SpreadsheetApp.getUi().alert('Penanda bootstrap dihapus. Buka ulang web app untuk setup ulang.');
+  } catch (e) { }
+  return { ok: true, msg: 'Penanda bootstrap dihapus' };
+}
+
+function bootstrapStatus_() {
+  var s = {
+    app_version: APP_VERSION,
+    bootstrap_version: BOOTSTRAP_VERSION_,
+    sudah_setup: isBootstrapDone_(),
+    spreadsheet_id: resolveSpreadsheetId_(),
+    drive_folder_id: ''
+  };
+  try { s.drive_folder_id = getConfig_('drive_folder_id'); } catch (e) { }
+  Logger.log(JSON.stringify(s, null, 2));
+  return s;
+}
+
+// ============================================================================
+// 8. INIT / REPAIR SHEET
+// ============================================================================
+
+function initSheets_() {
+  var db = getDb_();
+  var created = [];
+  var repaired = [];
+
+  Object.keys(SCHEMAS).forEach(function (name) {
+    try {
+      var sh = db.getSheetByName(name);
+      var header = SCHEMAS[name];
+
+      if (!sh) {
+        sh = db.insertSheet(name);
+        styleHeader_(sh, header);
+        created.push(name);
+      } else {
+        var lastCol = Math.max(sh.getLastColumn(), header.length);
+        var cur = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (s) { return String(s).trim(); });
+        cur = cur.slice(0, header.length);
+        var need = cur.length < header.length;
+        for (var i = 0; i < header.length && !need; i++) { if (cur[i] !== header[i]) need = true; }
+        if (need) {
+          styleHeader_(sh, header);
+          repaired.push(name);
+        }
+      }
+      sh.setFrozenRows(1);
+    } catch (e) {
+      Logger.log('initSheets ' + name + ' gagal: ' + errMsg_(e));
+    }
+  });
+
+  seedConfigSheet_();
+
+  // Kolom tanggal & kode dipaksa teks agar Sheets tidak mengubah format
+  // (mis. "4122196-C" aman, tetapi tanggal tetap ditulis sebagai Date).
+  try { forceTextColumns_('Master_User', ['Employee_code', 'No_HP']); } catch (e) { }
+  try { forceTextColumns_('Master_File', ['Doc_id', 'Employee_id', 'No_sertifikat']); } catch (e) { }
+  try { forceTextColumns_(null, null); } catch (e) { }
+
+  try { ensureDriveFolder_(); } catch (e) { Logger.log('drive folder: ' + errMsg_(e)); }
+  try { ensureExportFolder_(); } catch (e) { Logger.log('export folder: ' + errMsg_(e)); }
+
+  return { ok: true, created: created, repaired: repaired };
+}
+
+/**
+ * Paksa kolom tertentu berformat TEKS.
+ * @param {string} sheetName nama sheet (null = tidak melakukan apa-apa)
+ * @param {string[]} cols daftar nama kolom
+ */
+function forceTextColumns_(sheetName, cols) {
+  if (!sheetName || !cols || !cols.length) return false;
+  var sh = getSheet_(sheetName);
+  if (!sh) return false;
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function (h) { return String(h).trim(); });
+  cols.forEach(function (c) {
+    var idx = header.indexOf(c);
+    if (idx === -1) return;
+    try { sh.getRange(2, idx + 1, Math.max(sh.getMaxRows() - 1, 1), 1).setNumberFormat('@'); } catch (e) { }
+  });
+  return true;
+}
+
+function styleHeader_(sh, header) {
+  var r = sh.getRange(1, 1, 1, header.length);
+  r.setValues([header])
+    .setFontWeight('bold')
+    .setBackground('#093D7D')
+    .setFontColor('#FFFFFF')
+    .setVerticalAlignment('middle');
+  try { sh.setColumnWidths(1, header.length, 140); } catch (e) { }
+  try { sh.setRowHeight(1, 30); } catch (e) { }
+  try { if (!sh.getFilter()) r.createFilter(); } catch (e) { }
+}
+
+function seedConfigSheet_() {
+  var sh = getSheet_('Config');
+  if (!sh) return;
+  var vals = sh.getDataRange().getValues();
+  var exist = {};
+  for (var i = 1; i < vals.length; i++) {
+    var k = String(vals[i][0]).trim();
+    if (k) exist[k] = true;
+  }
+  var toAdd = [];
+  Object.keys(CONFIG_DEFAULTS).forEach(function (k) {
+    if (!exist[k]) toAdd.push([k, CONFIG_DEFAULTS[k]]);
+  });
+  if (toAdd.length) sh.getRange(vals.length + 1, 1, toAdd.length, 2).setValues(toAdd);
+}
+
+/** Isi Master_Sertifikasi dari SEED_SERTIFIKASI_ (hanya kalau masih kosong). */
+function seedMasterSertifikasi_() {
+  var sh = getSheet_('Master_Sertifikasi');
+  if (!sh) return { created: 0 };
+  var count = Math.max(sh.getLastRow() - 1, 0);
+  if (count > 0) return { created: 0, skipped: true };
+
+  var now = nowStr_();
+  var rows = SEED_SERTIFIKASI_.map(function (item, i) {
+    return [
+      'CERT-' + pad_(i + 1, 4), item[0], item[1], item[2], '', 'TRUE', 0, now, now
+    ];
+  });
+  if (rows.length) sh.getRange(2, 1, rows.length, SCHEMAS['Master_Sertifikasi'].length).setValues(rows);
+  return { created: rows.length };
+}
+
+/** Buat akun awal: Super Admin + HC. */
+function seedAwal_() {
+  var sh = getSheet_('Master_User');
+  if (!sh) throw new Error('Sheet Master_User tidak ditemukan');
+  var hasil = { akun: [], dibuat: 0, dilewati: 0 };
+
+  var daftar = [
+    {
+      code: 'SA0001', nama: 'Super Admin', username: 'superadmin', role: 'SA',
+      email: getConfig_('superadmin_email') || CONFIG_DEFAULTS.superadmin_email,
+      jabatan: 'Administrator Sistem', divisi: 'Information Technology'
+    },
+    {
+      code: 'HC0001', nama: 'Human Capital Patuha', username: 'hc', role: 'HC',
+      email: getConfig_('hc_email') || CONFIG_DEFAULTS.hc_email,
+      jabatan: 'Human Capital Officer', divisi: 'HC, GA & Finance Division'
+    }
+  ];
+
+  daftar.forEach(function (u) {
+    if (userExists_(u.code)) { hasil.dilewati++; return; }
+    var idBentrok = findUserByUsername_(u.username);
+    if (idBentrok) u.username = u.username + '_' + String(u.code).toLowerCase();
+    appendObject_('Master_User', {
+      Employee_code: u.code,
+      Nama_Lengkap: u.nama,
+      Username: u.username,
+      Password: hashPassword_(u.code),
+      Role: u.role,
+      Email_Perusahaan: u.email,
+      Email_Pribadi: '',
+      Nama_Depan: u.username,
+      Divisi: u.divisi,
+      Jabatan: u.jabatan,
+      Lokasi_Kerja: getConfig_('unit_default') || 'Patuha',
+      No_HP: '',
+      Email_Atasan: '',
+      Status: 'ACTIVE',
+      Must_Change_Password: 'FALSE',
+      Login_Terakhir: '',
+      Gagal_Login: 0,
+      Terkunci_Sampai: '',
+      Created_At: nowStr_(),
+      Updated_At: nowStr_(),
+      Created_By: 'SYSTEM'
+    });
+    hasil.dibuat++;
+    hasil.akun.push(u.username + ' / ' + u.code);
+  });
+
+  seedDivisiConfig_();
+  return hasil;
+}
+
+function seedDivisiConfig_() {
+  try {
+    if (String(getConfig_('divisi_options') || '').trim()) return;
+    var divs = DIVISI_SEED_.slice();
+    var sh = getSheet_('Master_User');
+    if (sh && sh.getLastRow() > 1) {
+      var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(function (h) { return String(h).trim(); });
+      var idx = header.indexOf('Divisi');
+      if (idx !== -1) {
+        var vals = sh.getRange(2, idx + 1, sh.getLastRow() - 1, 1).getValues();
+        vals.forEach(function (r) {
+          var v = String(r[0] || '').trim();
+          if (v && divs.indexOf(v) === -1) divs.push(v);
+        });
+      }
+    }
+    setConfig_('divisi_options', divs.join('|'));
+  } catch (e) { Logger.log('seedDivisiConfig_: ' + errMsg_(e)); }
+}
+
+// ============================================================================
+// 9. MENU SPREADSHEET
+// ============================================================================
+
+function onOpen() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu('SIAGA Sertifikasi')
+      .addItem('0. Kickstart / Setup Awal', 'kickstartFromMenu_')
+      .addItem('1. Init / Repair Sheet', 'initSheets_')
+      .addItem('2. Set Spreadsheet ID ke Properties', 'setupSpreadsheetId_')
+      .addSeparator()
+      .addItem('3. Hitung Ulang Semua Status', 'menuHitungUlangStatus_')
+      .addItem('4. Sinkronkan User dari Data Sertifikasi', 'menuSinkronUser_')
+      .addSeparator()
+      .addItem('5. Buat Trigger Reminder Harian', 'createDailyReminderTrigger')
+      .addItem('6. Hapus Trigger Reminder', 'deleteDailyReminderTrigger')
+      .addItem('7. Kirim Reminder Sekarang (uji)', 'menuKirimReminderSekarang_')
+      .addSeparator()
+      .addItem('8. Bersihkan Password (lihat hash)', 'menuInfoPassword_')
+      .addItem('9. Reset Bootstrap', 'resetBootstrap_')
+      .addToUi();
+  } catch (e) { /* standalone: tidak ada UI */ }
+}
+
+function menuHitungUlangStatus_() {
+  var r = recalcAllStatus_();
+  alertOrLog_('Hitung ulang status selesai.\n' + r.diubah + ' baris diperbarui dari ' + r.total + ' baris.');
+  return r;
+}
+
+function menuSinkronUser_() {
+  var r = syncUsersFromFiles_('SYSTEM');
+  alertOrLog_('Sinkron user selesai.\nDibuat: ' + r.dibuat + '\nDilewati: ' + r.dilewati
+    + (r.daftar && r.daftar.length ? '\n\n' + r.daftar.join('\n') : ''));
+  return r;
+}
+
+function menuKirimReminderSekarang_() {
+  var r = jalankanReminder_(true);
+  alertOrLog_('Reminder dijalankan.\nTarget: ' + r.target + '\nEmail terkirim: ' + r.terkirim
+    + '\nGagal: ' + r.gagal);
+  return r;
+}
+
+function menuInfoPassword_() {
+  alertOrLog_('Password disimpan sebagai hash SHA-256 (tidak bisa dibaca).\n'
+    + 'Password awal setiap karyawan = Employee_code miliknya.\n'
+    + 'HC dapat me-reset password user dari halaman Master User.');
+}
+
+function alertOrLog_(msg) {
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { Logger.log(msg); }
+}
+
+// ============================================================================
+// 10. HELPER DATABASE
+// ============================================================================
+
+function resolveSpreadsheetId_() {
+  var constId = sanitizeDriveId_(SPREADSHEET_ID);
+  if (constId) return constId;
+
+  var propId = '';
+  try { propId = sanitizeDriveId_(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')); } catch (e) { }
+  if (propId) return propId;
+
+  try {
+    var active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) return active.getId();
+  } catch (e) { }
+  return '';
+}
+
+function setupSpreadsheetId_() {
+  var id = resolveSpreadsheetId_();
+  if (!id) {
+    try { id = sanitizeDriveId_(SpreadsheetApp.getActiveSpreadsheet().getId()); } catch (e) { id = ''; }
+  }
+  if (!id) throw new Error('SPREADSHEET_ID belum diisi dan tidak ada spreadsheet aktif.');
+  PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', id);
+  try { PropertiesService.getScriptProperties().deleteProperty(BOOTSTRAP_PROP_); } catch (e) { }
+  alertOrLog_('SPREADSHEET_ID tersimpan: ' + id);
+  return id;
+}
+
+function getDb_() {
+  var id = resolveSpreadsheetId_();
+  if (!id) {
+    throw new Error('SPREADSHEET_ID belum di-set. Isi konstanta SPREADSHEET_ID di Kode.gs '
+      + 'atau jalankan setupSpreadsheetId_().');
+  }
+  try {
+    var propId = sanitizeDriveId_(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'));
+    if (propId !== id) PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', id);
+  } catch (e) { }
+
+  try {
+    return SpreadsheetApp.openById(id);
+  } catch (e) {
+    throw new Error('Tidak bisa membuka spreadsheet "' + id + '". Pastikan ID benar '
+      + '(tanpa URL / tanda "/"), spreadsheet masih ada, dan akun deploy punya akses. Detail: ' + errMsg_(e));
+  }
+}
+
+function getSheet_(name) {
+  var db = getDb_();
+  return db.getSheetByName(name);
+}
+
+// ---------- config CRUD ----------
+
+function getAllConfig_() {
+  var out = {};
+  Object.keys(CONFIG_DEFAULTS).forEach(function (k) { out[k] = CONFIG_DEFAULTS[k]; });
+  try {
+    var sh = getSheet_('Config');
+    if (!sh) return out;
+    var vals = sh.getDataRange().getValues();
+    for (var i = 1; i < vals.length; i++) {
+      var k = String(vals[i][0]).trim();
+      if (!k) continue;
+      var v = vals[i][1];
+      out[k] = (v === null || v === undefined) ? '' : String(v).trim();
+      if (out[k] === '' && CONFIG_DEFAULTS[k] !== undefined && CONFIG_DEFAULTS[k] !== '') {
+        out[k] = CONFIG_DEFAULTS[k];
+      }
+    }
+  } catch (e) { Logger.log('getAllConfig_: ' + errMsg_(e)); }
+  return out;
+}
+
+function getConfig_(key) {
+  var sh;
+  try { sh = getSheet_('Config'); } catch (e) { return CONFIG_DEFAULTS[key] || ''; }
+  if (!sh) return CONFIG_DEFAULTS[key] || '';
+  var vals = sh.getDataRange().getValues();
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][0]).trim() === key) {
+      var v = vals[i][1];
+      v = (v === null || v === undefined) ? '' : String(v).trim();
+      if (v !== '') return v;
+      return CONFIG_DEFAULTS[key] || '';
+    }
+  }
+  return CONFIG_DEFAULTS[key] || '';
+}
+
+function getConfigNum_(key, def) {
+  var v = parseFloat(String(getConfig_(key)).replace(',', '.'));
+  return isNaN(v) ? (def === undefined ? 0 : def) : v;
+}
+
+function getConfigBool_(key, def) {
+  var v = String(getConfig_(key)).trim().toUpperCase();
+  if (v === '') return !!def;
+  return v === 'TRUE' || v === '1' || v === 'YA' || v === 'YES';
+}
+
+function setConfig_(key, value) {
+  var sh = getSheet_('Config');
+  if (!sh) return false;
+  var vals = sh.getDataRange().getValues();
+  for (var i = 1; i < vals.length; i++) {
+    if (String(vals[i][0]).trim() === key) {
+      sh.getRange(i + 1, 2).setValue(value);
+      return true;
+    }
+  }
+  sh.appendRow([key, value]);
+  return true;
+}
+
+// ---------- helper baris generik ----------
+
+/** Susun array nilai sesuai urutan kolom SCHEMAS. */
+function rowArrBySchema_(sheetName, obj) {
+  var header = SCHEMAS[sheetName];
+  if (!header) throw new Error('Skema tidak dikenal: ' + sheetName);
+  return header.map(function (col) {
+    var v = obj[col];
+    return (v === undefined || v === null) ? '' : v;
+  });
+}
+
+/** Ambil semua baris sheet sebagai array objek (header -> nilai). */
+function sheetToObjects_(sheetName) {
+  var sh = getSheet_(sheetName);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var values = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  var header = values[0].map(function (h) { return String(h).trim(); });
+  var out = [];
+  for (var r = 1; r < values.length; r++) {
+    var row = values[r];
+    var kosong = true;
+    for (var c = 0; c < header.length; c++) {
+      if (row[c] !== '' && row[c] !== null && row[c] !== undefined) { kosong = false; break; }
+    }
+    if (kosong) continue;
+    var obj = { __row: r + 1 };
+    for (var i = 0; i < header.length; i++) {
+      if (!header[i]) continue;
+      obj[header[i]] = row[i] === null || row[i] === undefined ? '' : row[i];
+    }
+    out.push(obj);
+  }
+  return out;
+}
+
+/** Nilai satu baris sebagai objek. */
+function rowToObject_(sheetName, rowIndex) {
+  var sh = getSheet_(sheetName);
+  if (!sh) return null;
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  var row = sh.getRange(rowIndex, 1, 1, header.length).getValues()[0];
+  var obj = { __row: rowIndex };
+  for (var i = 0; i < header.length; i++) {
+    if (!header[i]) continue;
+    obj[header[i]] = row[i] === null || row[i] === undefined ? '' : row[i];
+  }
+  return obj;
+}
+
+/** Cari nomor baris pertama yang kolom `col` nilainya sama dengan `val`. */
+function findRowByCol_(sheetName, col, val) {
+  var sh = getSheet_(sheetName);
+  if (!sh || sh.getLastRow() < 2) return -1;
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  var idx = header.indexOf(col);
+  if (idx === -1) throw new Error('Kolom "' + col + '" tidak ada di sheet ' + sheetName);
+  var values = sh.getRange(2, idx + 1, sh.getLastRow() - 1, 1).getValues();
+  var target = String(val).trim().toLowerCase();
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][0]).trim().toLowerCase() === target) return i + 2;
+  }
+  return -1;
+}
+
+/** Tulis objek ke baris yang sudah ada (hanya kolom yang ada di objek). */
+function updateRowByCol_(sheetName, rowIndex, obj) {
+  var sh = getSheet_(sheetName);
+  if (!sh) return false;
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  var changed = false;
+  Object.keys(obj).forEach(function (k) {
+    var idx = header.indexOf(k);
+    if (idx === -1) return;
+    sh.getRange(rowIndex, idx + 1).setValue(obj[k]);
+    changed = true;
+  });
+  return changed;
+}
+
+function deleteRowByCol_(sheetName, col, val) {
+  var row = findRowByCol_(sheetName, col, val);
+  if (row === -1) return false;
+  getSheet_(sheetName).deleteRow(row);
+  return true;
+}
+
+function appendObject_(sheetName, obj) {
+  var sh = getSheet_(sheetName);
+  if (!sh) throw new Error('Sheet tidak ditemukan: ' + sheetName);
+  sh.appendRow(rowArrBySchema_(sheetName, obj));
+  return sh.getLastRow();
+}
+
+/** Pastikan kolom ada; kalau belum, tambahkan di kanan. */
+function ensureColumns_(sheetName, cols) {
+  var sh = getSheet_(sheetName);
+  if (!sh) return [];
+  var lastCol = Math.max(sh.getLastColumn(), 1);
+  var header = sh.getRange(1, 1, 1, lastCol).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  var added = [];
+  cols.forEach(function (c) {
+    if (header.indexOf(c) !== -1) return;
+    lastCol = sh.getLastColumn() + 1;
+    sh.getRange(1, lastCol).setValue(c).setFontWeight('bold')
+      .setBackground('#093D7D').setFontColor('#FFFFFF');
+    header.push(c);
+    added.push(c);
+  });
+  if (added.length && SCHEMAS[sheetName]) {
+    added.forEach(function (c) { if (SCHEMAS[sheetName].indexOf(c) === -1) SCHEMAS[sheetName].push(c); });
+  }
+  return added;
+}
+
+// ============================================================================
+// 11. HELPER DRIVE
+// ============================================================================
+
+function ensureDriveFolder_() {
+  var konstanta = sanitizeDriveId_(typeof DRIVE_FOLDER_ID !== 'undefined' ? DRIVE_FOLDER_ID : '');
+  if (konstanta) {
+    try {
+      DriveApp.getFolderById(konstanta);
+      if (getConfig_('drive_folder_id') !== konstanta) setConfig_('drive_folder_id', konstanta);
+      return konstanta;
+    } catch (e) { Logger.log('DRIVE_FOLDER_ID tidak valid: ' + errMsg_(e)); }
+  }
+  var cfg = sanitizeDriveId_(getConfig_('drive_folder_id'));
+  if (cfg) {
+    try { DriveApp.getFolderById(cfg); return cfg; } catch (e) { /* dibuat ulang */ }
+  }
+  var name = 'SIAGA_Sertifikasi_Lampiran';
+  var it = DriveApp.getFoldersByName(name);
+  var folder = it.hasNext() ? it.next() : DriveApp.createFolder(name);
+  setConfig_('drive_folder_id', folder.getId());
+  return folder.getId();
+}
+
+function ensureExportFolder_() {
+  var konstanta = sanitizeDriveId_(typeof DRIVE_FOLDER_EXPORT_ID !== 'undefined' ? DRIVE_FOLDER_EXPORT_ID : '');
+  if (konstanta) {
+    try {
+      DriveApp.getFolderById(konstanta);
+      if (getConfig_('drive_folder_export_id') !== konstanta) setConfig_('drive_folder_export_id', konstanta);
+      return konstanta;
+    } catch (e) { }
+  }
+  var cfg = sanitizeDriveId_(getConfig_('drive_folder_export_id'));
+  if (cfg) {
+    try { DriveApp.getFolderById(cfg); return cfg; } catch (e) { }
+  }
+  var parent;
+  try { parent = DriveApp.getFolderById(ensureDriveFolder_()); } catch (e) { parent = null; }
+  var name = 'Export';
+  var folder = null;
+  if (parent) {
+    var it = parent.getFoldersByName(name);
+    folder = it.hasNext() ? it.next() : parent.createFolder(name);
+  } else {
+    var it2 = DriveApp.getFoldersByName('SIAGA_Sertifikasi_Export');
+    folder = it2.hasNext() ? it2.next() : DriveApp.createFolder('SIAGA_Sertifikasi_Export');
+  }
+  setConfig_('drive_folder_export_id', folder.getId());
+  return folder.getId();
+}
+
+/**
+ * Unggah lampiran ke folder Drive.
+ * Nama berkas: <uuid:6char>_<employeecode>_<Nama Sertifikasi>.<ext>
+ * @param {Object} file { name, mimeType, base64 }
+ * @param {string} employeeCode
+ * @param {string} certName
+ * @return {Object} { fileId, url, name, mime, size, icon }
+ */
+function uploadAttachment_(file, employeeCode, certName) {
+  if (!file || !file.base64) throw new Error('Berkas lampiran kosong.');
+
+  var mime = String(file.mimeType || '').trim();
+  var sizeBytes = Math.round(String(file.base64).length * 3 / 4);
+  var maxBytes = MAX_UPLOAD_MB_ * 1024 * 1024;
+  if (sizeBytes > maxBytes) {
+    throw new Error('Ukuran berkas ' + humanSize_(sizeBytes) + ' melebihi batas ' + MAX_UPLOAD_MB_ + ' MB.');
+  }
+
+  var ext = extFromName_(file.name);
+  var okMime = !!ALLOWED_MIME_[mime];
+  var okExt = ext && ALLOWED_EXT_.indexOf(ext) !== -1;
+  if (!okMime && !okExt) {
+    throw new Error('Jenis berkas tidak didukung (' + (mime || ext || 'tidak dikenal')
+      + '). Format yang diterima: PDF, Excel, Word, dan gambar.');
+  }
+  if (!mime || !ALLOWED_MIME_[mime]) mime = mimeFromExt_(ext);
+
+  var fileName = buildFileName_(employeeCode, certName, ext);
+  var blob = Utilities.newBlob(Utilities.base64Decode(file.base64), mime, fileName);
+  var folder = DriveApp.getFolderById(ensureDriveFolder_());
+  var created = folder.createFile(blob);
+  try { created.setDescription('Lampiran sertifikasi ' + certName + ' — ' + employeeCode); } catch (e) { }
+
+  return {
+    fileId: created.getId(),
+    url: created.getUrl(),
+    name: fileName,
+    mime: mime,
+    size: sizeBytes,
+    ext: ext,
+    icon: FILE_ICON_[ext] || 'bi-file-earmark'
+  };
+}
+
+/**
+ * Nama berkas tersimpan: <uuid:6char>_<employeecode>_<Nama Sertifikasi>.<ext>
+ * Karakter terlarang dibersihkan, panjang dibatasi 140 karakter.
+ */
+function buildFileName_(employeeCode, certName, ext) {
+  var kode = String(employeeCode || 'TANPA-KODE').trim();
+  var nama = String(certName || 'Sertifikasi').trim();
+  nama = nama.replace(/[\\\/:*?"<>|#%]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!nama) nama = 'Sertifikasi';
+  var base = uuid6_() + '_' + kode + '_' + nama;
+  if (base.length > 140) base = base.substring(0, 140).trim();
+  return base + (ext ? ('.' + ext) : '');
+}
+
+// ============================================================================
+// 12. AUDIT TRAIL
+// ============================================================================
+
+function logAudit_(actorCode, actorUsername, actorRole, aksi, refType, refId, detail) {
+  try {
+    appendObject_('T_Audit_Trail', {
+      Audit_id: generateId_('AUD'),
+      Actor_code: actorCode || '',
+      Actor_username: actorUsername || '',
+      Actor_role: actorRole || '',
+      Aksi: aksi || '',
+      Ref_type: refType || '',
+      Ref_id: refId || '',
+      Detail: typeof detail === 'string' ? detail : JSON.stringify(detail || ''),
+      At: nowStr_()
+    });
+  } catch (e) { Logger.log('logAudit_ gagal: ' + errMsg_(e)); }
+}
+
+// ============================================================================
+// 13. API WRAPPER
+// ============================================================================
+
+function apiSuccess(data) { return { ok: true, data: data === undefined ? null : data }; }
+
+function apiError(msg) {
+  var m = (msg && msg.message) ? msg.message : String(msg);
+  return { ok: false, error: m };
+}
+
+function ping() { return apiSuccess({ time: nowStr_(), version: APP_VERSION }); }
+
+/** Dipakai halaman tanpa login untuk menampilkan status setup. */
+function apiGetBootstrapStatus() {
+  var s = { sudah_setup: false, version: BOOTSTRAP_VERSION_, app_version: APP_VERSION, app_name: APP_NAME };
+  try {
+    s.sudah_setup = isBootstrapDone_();
+    s.sudah_isi_spreadsheet = !!resolveSpreadsheetId_();
+  } catch (e) { }
+  return apiSuccess(s);
+}
+
+function apiGetExecUrl() { return apiSuccess({ url: getExecUrl_() }); }
+
+// ============================================================================
+// 14. UTILITAS UMUM
+// ============================================================================
+
+function errMsg_(e) {
+  if (!e) return 'Kesalahan tidak diketahui';
+  return (e.message ? e.message : String(e));
+}
+
+var BULAN_ID_ = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+  'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+var BULAN_SINGKAT_ID_ = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
+  'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+var HARI_ID_ = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+
+function tz_() {
+  try { return Session.getScriptTimeZone() || DEFAULT_TZ; } catch (e) { return DEFAULT_TZ; }
+}
+
+function nowDate_() { return new Date(); }
+
+function nowStr_() { return Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm:ss'); }
+
+function todayDate_() {
+  var d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+function toBool_(v) {
+  var s = String(v === null || v === undefined ? '' : v).trim().toUpperCase();
+  return s === 'TRUE' || s === '1' || s === 'YA' || s === 'YES' || s === 'Y';
+}
+
+function pad_(n, len) {
+  var s = String(n);
+  while (s.length < (len || 2)) s = '0' + s;
+  return s;
+}
+
+/** ID umum: PREFIX-YYYYMMDD-HHMMSS-XXXX */
+function generateId_(prefix) {
+  var d = new Date();
+  return (prefix || 'ID') + '-' + Utilities.formatDate(d, tz_(), 'yyyyMMdd-HHmmss')
+    + '-' + pad_(Math.floor(Math.random() * 10000), 4);
+}
+
+/** 6 karakter acak untuk nama berkas: <uuid:6char>_<employeecode>_<sertifikasi> */
+function uuid6_() {
+  var chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  var s = '';
+  for (var i = 0; i < 6; i++) s += chars.charAt(Math.floor(Math.random() * chars.length));
+  return s;
+}
+
+function sanitizeDriveId_(v) {
+  var s = String(v === null || v === undefined ? '' : v).trim();
+  if (!s) return '';
+  var m = s.match(/[-\w]{25,}/);
+  if (m) s = m[0];
+  s = s.replace(/[\/?#].*$/, '').trim();
+  return s;
+}
+
+/** Ambil nama depan, buang gelar/tanda baca. Dipakai sebagai username awal. */
+function namaDepan_(namaLengkap) {
+  var s = String(namaLengkap || '').trim();
+  if (!s) return '';
+  var bersih = s.replace(/[^A-Za-zÀ-ÿ' ]/g, ' ').replace(/\s+/g, ' ').trim();
+  var bagian = bersih.split(' ');
+  var depan = bagian[0] || '';
+  return depan.toLowerCase();
+}
+
+/** Username: huruf kecil, tanpa spasi/tanda baca. */
+function slugUsername_(s) {
+  return String(s || '').toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '')
+    .replace(/^[._-]+|[._-]+$/g, '')
+    .substring(0, 40);
+}
+
+function extFromName_(name) {
+  var s = String(name || '');
+  var i = s.lastIndexOf('.');
+  if (i === -1) return '';
+  return s.substring(i + 1).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function mimeFromExt_(ext) {
+  var map = {
+    pdf: 'application/pdf',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    csv: 'text/csv',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+    gif: 'image/gif', bmp: 'image/bmp', heic: 'image/heic', tif: 'image/tiff', tiff: 'image/tiff'
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
+function humanSize_(bytes) {
+  var b = Number(bytes) || 0;
+  if (b < 1024) return b + ' B';
+  if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+  return (b / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+// ---------- tanggal ----------
+
+/** Normalisasi nilai apa pun menjadi Date (00:00) atau null. */
+function toDate_(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (v instanceof Date) {
+    if (isNaN(v.getTime())) return null;
+    return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  }
+  var s = String(v).trim();
+  if (!s) return null;
+
+  // ISO yyyy-mm-dd
+  var iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return new Date(+iso[1], +iso[2] - 1, +iso[3]);
+
+  // dd/mm/yyyy atau dd-mm-yyyy
+  var dmy = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})/);
+  if (dmy) {
+    var d1 = +dmy[1], m1 = +dmy[2], y1 = +dmy[3];
+    if (d1 > 12 && m1 <= 12) return new Date(y1, m1 - 1, d1);
+    return new Date(y1, m1 - 1, d1);
+  }
+  var t = new Date(s);
+  if (!isNaN(t.getTime())) return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+  return null;
+}
+
+function fmtDate_(v, pola) {
+  var d = toDate_(v);
+  if (!d) return '';
+  return Utilities.formatDate(d, tz_(), pola || 'yyyy-MM-dd');
+}
+
+/**
+ * Normalisasi menjadi Date DENGAN jam-menit-detik (untuk kolom seperti
+ * Valid_Until / Terkunci_Sampai). Menerima "yyyy-MM-dd HH:mm:ss".
+ */
+function toDateTime_(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  var s = String(v).trim();
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+  var d = toDate_(v);
+  return d;
+}
+
+function fmtTanggalIndo_(v) {
+  var d = toDate_(v);
+  if (!d) return '';
+  return d.getDate() + ' ' + BULAN_ID_[d.getMonth()] + ' ' + d.getFullYear();
+}
+
+function addMonths_(date, months) {
+  var d = toDate_(date);
+  if (!d) return null;
+  var m = d.getMonth() + Number(months || 0);
+  var y = d.getFullYear() + Math.floor(m / 12);
+  m = ((m % 12) + 12) % 12;
+  var hariTerakhir = new Date(y, m + 1, 0).getDate();
+  var dd = Math.min(d.getDate(), hariTerakhir);
+  return new Date(y, m, dd);
+}
+
+function diffDays_(a, b) {
+  var d1 = toDate_(a), d2 = toDate_(b);
+  if (!d1 || !d2) return null;
+  return Math.round((d1.getTime() - d2.getTime()) / 86400000);
+}
+
+// ---------- password ----------
+
+/**
+ * Hash password: "sha256$<salt>$<hex>".
+ * Nilai lama yang masih plaintext (mis. Employee_code) tetap diterima
+ * oleh verifyPassword_ lalu otomatis di-upgrade.
+ */
+function hashPassword_(plain, salt) {
+  var s = salt || uuid6_() + uuid6_();
+  var raw = s + '::' + String(plain);
+  var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, raw, Utilities.Charset.UTF_8);
+  return 'sha256$' + s + '$' + digest.map(function (b) {
+    var v = (b < 0 ? b + 256 : b).toString(16);
+    return v.length === 1 ? '0' + v : v;
+  }).join('');
+}
+
+function isHashed_(stored) {
+  return String(stored || '').indexOf('sha256$') === 0;
+}
+
+function verifyPassword_(plain, stored) {
+  var s = String(stored || '');
+  if (!s) return false;
+  if (isHashed_(s)) {
+    var bagian = s.split('$');
+    if (bagian.length < 3) return false;
+    return hashPassword_(plain, bagian[1]) === s;
+  }
+  // mode lama: plaintext
+  return String(plain) === s;
+}
+
+// ---------- objek/array ----------
+
+function clone_(o) { return JSON.parse(JSON.stringify(o)); }
+
+function pick_(obj, keys) {
+  var out = {};
+  (keys || []).forEach(function (k) { if (obj[k] !== undefined) out[k] = obj[k]; });
+  return out;
+}
+
+function uniq_(arr) {
+  var seen = {}, out = [];
+  (arr || []).forEach(function (v) {
+    var k = String(v);
+    if (!seen[k]) { seen[k] = 1; out.push(v); }
+  });
+  return out;
+}
+
+function isEmail_(s) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(s || '').trim());
+}
+
+// ============================================================================
+// 15. HALAMAN SETUP / ERROR
+// ============================================================================
+
+function renderSetupPage_(title, message, report) {
+  var steps = (report && report.steps) ? report.steps : [];
+  var errors = (report && report.errors) ? report.errors : [];
+
+  var html = '<!DOCTYPE html><html lang="id"><head><meta charset="utf-8">'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1">'
+    + '<title>' + APP_NAME + ' — Setup</title>'
+    + '<style>'
+    + 'body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;'
+    + 'background:#F4F7FB;font-family:Poppins,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#16202E;padding:24px}'
+    + '.card{background:#fff;border:1px solid #E4E9F0;border-radius:18px;max-width:760px;width:100%;'
+    + 'padding:28px;box-shadow:0 18px 48px rgba(9,61,125,.14)}'
+    + '.logo{width:44px;height:44px;border-radius:12px;background:#0B50A1;color:#fff;display:flex;'
+    + 'align-items:center;justify-content:center;font-weight:800;font-size:18px;margin-bottom:14px}'
+    + 'h1{font-size:20px;margin:0 0 8px}'
+    + 'p{font-size:14px;color:#5B6B80;line-height:1.65;margin:0 0 14px}'
+    + 'ol{font-size:14px;color:#33465C;line-height:1.9;padding-left:20px;margin:0 0 16px}'
+    + 'code{background:#F4F7FB;border:1px solid #E4E9F0;border-radius:6px;padding:2px 6px;font-size:12.5px}'
+    + '.box{border:1px solid #E4E9F0;border-radius:12px;padding:12px 16px;font-size:13px;margin-bottom:14px;background:#F8FAFC}'
+    + '.box.err{background:#FDECEE;border-color:#FAD5D9;color:#93131F}'
+    + '.box.ok{background:#F2F9E8;border-color:#E4F3CE;color:#3F6120}'
+    + '.muted{font-size:12px;color:#8494A8}'
+    + 'a.btn{display:inline-block;background:#0B50A1;color:#fff;text-decoration:none;padding:11px 20px;'
+    + 'border-radius:100px;font-size:13px;font-weight:600}'
+    + '</style></head><body><div class="card">'
+    + '<div class="logo">S</div>'
+    + '<h1>' + title + '</h1>'
+    + '<p>' + (message || '') + '</p>';
+
+  if (steps.length) html += '<div class="box"><b>Langkah kickstarter:</b><br>' + steps.join('<br>') + '</div>';
+  if (errors.length) html += '<div class="box err"><b>Ada yang gagal:</b><br>' + errors.join('<br>') + '</div>';
+
+  html += '<div class="box ok"><b>Yang perlu dilakukan</b><ol>'
+    + '<li>Buka <code>Kode.gs</code>, isi <code>var SPREADSHEET_ID = \'...\';</code> dengan ID spreadsheet '
+    + 'database (hanya ID, bukan URL).</li>'
+    + '<li>Pastikan akun yang men-deploy punya akses ke spreadsheet tersebut.</li>'
+    + '<li>Muat ulang halaman ini — kickstarter akan membuat sheet, mengisi Config, menyiapkan folder Drive, '
+    + 'mengisi master jenis sertifikasi, dan membuat akun awal.</li>'
+    + '<li>Akun awal: <code>superadmin / SA0001</code> dan <code>hc / HC0001</code>. '
+    + 'Segera ganti password setelah login pertama.</li>'
+    + '</ol></div>'
+    + '<p class="muted">Halaman ini tidak memerlukan login. Setelah setup berhasil, halaman aplikasi tampil otomatis.</p>'
+    + '<p><a class="btn" href="?bootstrap=1">Jalankan ulang setup</a></p>'
+    + '</div></body></html>';
+
+  return HtmlService.createHtmlOutput(html)
+    .setTitle(APP_NAME + ' — Setup')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}

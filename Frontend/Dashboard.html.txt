@@ -1,0 +1,393 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — Dashboard.html
+  Halaman 1: Dashboard overview.
+  Menampilkan KPI, sebaran status, tren 12 bulan, daftar prioritas,
+  rekap per divisi, jenis sertifikasi terbanyak, dan pekerja paling kritis.
+  KONTRAK API: apiGetDashboard(token, filter) -> lihat subprocess.gs
+  ============================================================================
+-->
+<div id="dashRoot">
+  <div class="siaga-loader"><div class="siaga-loader__ring"></div><p>Menghitung ringkasan...</p></div>
+</div>
+
+<script>
+/* ==========================================================================
+   KONTROLER DASHBOARD
+   ========================================================================== */
+var DashState = { divisi: '', data: null };
+
+function initDashboard(param) {
+  'use strict';
+  DashState.divisi = DashState.divisi || '';
+  renderDashKerangka();
+  muatDashboard();
+  if (param) {
+    var q = String(param);
+    if (q.indexOf('divisi=') === 0) {
+      DashState.divisi = decodeURIComponent(q.substring(7));
+    }
+  }
+}
+
+/* -------------------------------------------------------------- kerangka -- */
+function renderDashKerangka() {
+  var isHc = SIAGA.isHc();
+  SIAGA.el('dashRoot').innerHTML = ''
+    + '<div class="gde-page-head">'
+    + '  <div>'
+    + '    <div class="gde-u-eyebrow">Ringkasan</div>'
+    + '    <h1>Dashboard Sertifikasi</h1>'
+    + '    <p>Pantau masa berlaku sertifikasi seluruh karyawan dan lihat mana yang perlu ditindaklanjuti.</p>'
+    + '  </div>'
+    + '  <div class="gde-page-actions">'
+    + '    <select class="gde-select" id="dashDivisi" style="min-width:210px">'
+    + '      <option value="">Semua divisi</option>'
+    + '    </select>'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="dashRefresh">'
+    + '      <i class="bi bi-arrow-clockwise"></i> Segarkan</button>'
+    + (isHc ? '    <button class="gde-btn gde-btn--outline-primary" type="button" id="dashExportPdf">'
+      + '      <i class="bi bi-file-earmark-pdf"></i> Ekspor PDF</button>'
+      + '    <button class="gde-btn gde-btn--primary" type="button" id="dashReminder">'
+      + '      <i class="bi bi-send"></i> Kirim reminder</button>' : '')
+    + '  </div>'
+    + '</div>'
+    + '<div id="dashIsi"></div>';
+
+  var sel = SIAGA.el('dashDivisi');
+  if (sel) {
+    sel.value = DashState.divisi;
+    sel.addEventListener('change', function () {
+      DashState.divisi = sel.value;
+      muatDashboard();
+    });
+  }
+  var ref = SIAGA.el('dashRefresh');
+  if (ref) ref.addEventListener('click', function () { muatDashboard(true); });
+
+  var ex = SIAGA.el('dashExportPdf');
+  if (ex) {
+    ex.addEventListener('click', function () {
+      SIAGA.tombolSibuk(ex, true, 'Menyiapkan...');
+      SIAGA.api('apiExportPdf', [{
+        divisi: DashState.divisi,
+        judul: 'Rekap Sertifikasi & Masa Berlaku'
+      }]).then(function (r) {
+        SIAGA.tombolSibuk(ex, false);
+        SIAGA.sukses('PDF dibuat: ' + r.name + ' (' + r.jumlah + ' baris).', 'Ekspor selesai');
+        window.open(r.url, '_blank');
+      }).catch(function (e) {
+        SIAGA.tombolSibuk(ex, false);
+        SIAGA.gagal(e.message);
+      });
+    });
+  }
+
+  var rem = SIAGA.el('dashReminder');
+  if (rem) {
+    rem.addEventListener('click', function () {
+      SIAGA.konfirmasi({
+        judul: 'Kirim reminder sekarang',
+        pesan: 'Sistem akan memeriksa seluruh sertifikasi dan mengirim email pengingat '
+          + 'ke karyawan, HC, dan atasan sesuai tingkat statusnya. Email yang sudah pernah '
+          + 'dikirim untuk tingkat yang sama tidak akan dikirim ulang.',
+        labelOk: 'Kirim sekarang'
+      }).then(function (ya) {
+        if (!ya) return;
+        SIAGA.tombolSibuk(rem, true, 'Mengirim...');
+        SIAGA.api('apiRunReminderNow', []).then(function (r) {
+          SIAGA.tombolSibuk(rem, false);
+          SIAGA.sukses('Target ' + r.target + ' · terkirim ' + r.terkirim + ' · gagal ' + r.gagal + '.',
+            'Reminder selesai');
+          muatDashboard(true);
+        }).catch(function (e) {
+          SIAGA.tombolSibuk(rem, false);
+          SIAGA.gagal(e.message);
+        });
+      });
+    });
+  }
+}
+
+/* ------------------------------------------------------------- pemuatan -- */
+function muatDashboard(paksa) {
+  SIAGA.el('dashIsi').innerHTML = SIAGA.pemuatHtml('Menghitung ringkasan...');
+  SIAGA.api('apiGetDashboard', [{ divisi: DashState.divisi }]).then(function (d) {
+    DashState.data = d;
+    isiPilihanDivisi(d.divisi_options || []);
+    renderDashIsi(d);
+  }).catch(function (e) {
+    SIAGA.el('dashIsi').innerHTML = SIAGA.galatHtml(e.message);
+  });
+  if (paksa) SIAGA.perbaruiBadgeNotifikasi();
+}
+
+function isiPilihanDivisi(opsi) {
+  var sel = SIAGA.el('dashDivisi');
+  if (!sel) return;
+  var nilai = DashState.divisi;
+  sel.innerHTML = '<option value="">Semua divisi</option>'
+    + opsi.map(function (o) {
+      return '<option value="' + SIAGA.attr(o) + '"' + (o === nilai ? ' selected' : '') + '>'
+        + SIAGA.esc(o) + '</option>';
+    }).join('');
+}
+
+/* --------------------------------------------------------------- render -- */
+function renderDashIsi(d) {
+  var k = d.kpi || {};
+  var isHc = SIAGA.isHc();
+
+  var html = '';
+
+  /* ---------- 1. KPI ---------- */
+  html += '<div class="gde-grid gde-grid--4 siaga-mb-4">'
+    + kpiCard('total_pekerja', 'Pekerja terdaftar', k.total_pekerja, 'bi-people', 'blue')
+    + kpiCard('total_sertifikasi', 'Total sertifikasi', k.total_sertifikasi, 'bi-award', 'blue')
+    + kpiCard('kadaluarsa', 'Sudah kadaluarsa', k.kadaluarsa, 'bi-x-octagon', 'dead')
+    + kpiCard('mendesak', 'Perlu ditindaklanjuti', k.mendesak, 'bi-exclamation-triangle', 'red')
+    + '</div>';
+
+  /* ---------- 2. baris kedua: donut + tren ---------- */
+  html += '<div class="siaga-2col siaga-mb-4">';
+  html += '<div class="gde-card"><div class="siaga-panel-head">'
+    + '<i class="bi bi-pie-chart-fill" style="color:var(--gde-blue)"></i>'
+    + '<div><h3>Sebaran Status</h3><div class="siaga-panel-head__sub">'
+    + SIAGA.angka(k.total_sertifikasi) + ' sertifikasi terpantau</div></div></div>'
+    + '<div class="gde-card__body">'
+    + '<div style="display:flex;gap:1.5rem;align-items:center;flex-wrap:wrap">'
+    + donutHtml(d.sebaran, k.total_sertifikasi)
+    + '<div style="flex:1;min-width:200px">' + legendaHtml(d.sebaran) + '</div>'
+    + '</div>'
+    + '<div class="siaga-mt-4" style="border-top:1px dashed var(--gde-line);padding-top:1rem">'
+    + '<div class="gde-u-between" style="margin-bottom:6px">'
+    + '<span class="siaga-inline-note">Kelengkapan lampiran</span>'
+    + '<b style="font-size:.85rem">' + SIAGA.angka(k.ada_lampiran) + ' / ' + SIAGA.angka(k.total_sertifikasi) + '</b></div>'
+    + '<div class="gde-progress"><span class="gde-progress__bar" style="width:'
+    + (k.total_sertifikasi ? Math.round((k.ada_lampiran / k.total_sertifikasi) * 100) : 0) + '%"></span></div>'
+    + '</div>'
+    + '</div></div>';
+
+  html += '<div class="gde-card"><div class="siaga-panel-head">'
+    + '<i class="bi bi-bar-chart-fill" style="color:var(--gde-blue)"></i>'
+    + '<div><h3>Jadwal Kedaluwarsa 12 Bulan</h3><div class="siaga-panel-head__sub">'
+    + 'Jumlah sertifikasi yang berakhir tiap bulan</div></div></div>'
+    + '<div class="gde-card__body">' + barsHtml(d.tren) + '</div></div>';
+
+  html += '</div>';
+
+  /* ---------- 3. prioritas + pekerja kritis ---------- */
+  html += '<div class="siaga-2col siaga-mb-4">';
+
+  html += '<div class="gde-card"><div class="siaga-panel-head">'
+    + '<i class="bi bi-exclamation-triangle-fill" style="color:var(--gde-red)"></i>'
+    + '<div><h3>Perlu Segera Ditindaklanjuti</h3><div class="siaga-panel-head__sub">'
+    + SIAGA.angka(d.prioritas_total) + ' sertifikasi berstatus merah/hitam</div></div>'
+    + '<div class="siaga-panel-head__actions">'
+    + '<button class="gde-btn gde-btn--outline gde-btn--sm" type="button" data-view="data">Lihat semua</button>'
+    + '</div></div>';
+  if (!d.prioritas || !d.prioritas.length) {
+    html += '<div class="gde-card__body">' + SIAGA.kosongHtml('bi-check2-circle', 'Semua aman',
+      'Tidak ada sertifikasi yang berstatus mendesak saat ini.') + '</div>';
+  } else {
+    html += '<div class="gde-table-wrap"><table class="gde-table gde-table--compact">'
+      + '<thead><tr><th>Pemegang</th><th>Sertifikasi</th><th class="gde-ctr">Berakhir</th>'
+      + '<th class="gde-ctr">Sisa</th><th class="gde-ctr">Status</th></tr></thead><tbody>'
+      + d.prioritas.map(function (r) {
+        return '<tr style="cursor:pointer" data-dash-pekerja="' + SIAGA.attr(r.employee_id) + '">'
+          + '<td class="siaga-td-nama"><strong>' + SIAGA.esc(r.nama_pemegang || '-') + '</strong>'
+          + '<span>' + SIAGA.esc(r.employee_id) + ' · ' + SIAGA.esc(r.divisi || '-') + '</span></td>'
+          + '<td class="siaga-td-sert"><strong>' + SIAGA.esc(r.nama_sertifikasi) + '</strong>'
+          + '<span>' + SIAGA.esc(r.kategori || '-') + '</span></td>'
+          + '<td class="gde-ctr">' + SIAGA.esc(SIAGA.tglSingkat(r.expired_at)) + '</td>'
+          + '<td class="gde-ctr siaga-sisa" style="color:' + warnaSisa(r.sisa_hari) + '">'
+          + SIAGA.esc(SIAGA.sisaTeks(r.sisa_hari)) + '</td>'
+          + '<td class="gde-ctr">' + SIAGA.statusBadge(r.status, r.status_label, r.status_tone, r.status_icon) + '</td>'
+          + '</tr>';
+      }).join('')
+      + '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  html += '<div class="gde-card"><div class="siaga-panel-head">'
+    + '<i class="bi bi-person-exclamation" style="color:var(--gde-warning)"></i>'
+    + '<div><h3>Pekerja Paling Kritis</h3><div class="siaga-panel-head__sub">'
+    + 'Diurutkan dari jumlah sertifikasi kadaluarsa</div></div></div>'
+    + '<div class="gde-card__body">';
+
+  if (!d.pekerja_kritis || !d.pekerja_kritis.length) {
+    html += SIAGA.kosongHtml('bi-emoji-smile', 'Tidak ada temuan',
+      'Belum ada pekerja dengan sertifikasi kadaluarsa atau mendesak.');
+  } else {
+    html += '<ul class="siaga-rank">' + d.pekerja_kritis.map(function (p) {
+      return '<li style="cursor:pointer" data-dash-pekerja="' + SIAGA.attr(p.employee_code) + '">'
+        + '<span class="siaga-rank__no">' + SIAGA.angka(p.skor) + '</span>'
+        + '<span class="gde-avatar gde-avatar--sm">' + SIAGA.esc(SIAGA.inisial(p.nama)) + '</span>'
+        + '<div class="siaga-rank__meta">'
+        + '<span class="siaga-rank__nama">' + SIAGA.esc(p.nama || p.employee_code) + '</span>'
+        + '<span class="siaga-rank__sub">' + SIAGA.esc(p.divisi || '-') + ' · '
+        + SIAGA.angka(p.total) + ' sertifikasi · ' + SIAGA.angka(p.kadaluarsa) + ' kadaluarsa</span>'
+        + '</div>'
+        + '<i class="bi bi-chevron-right" style="color:var(--gde-muted-2)"></i>'
+        + '</li>';
+    }).join('') + '</ul>';
+  }
+  html += '</div></div>';
+  html += '</div>';
+
+  /* ---------- 4. per divisi + jenis ---------- */
+  html += '<div class="siaga-2col">';
+
+  html += '<div class="gde-card"><div class="siaga-panel-head">'
+    + '<i class="bi bi-diagram-3-fill" style="color:var(--gde-blue)"></i>'
+    + '<div><h3>Rekap per Divisi</h3><div class="siaga-panel-head__sub">'
+    + 'Sebaran sertifikasi dan statusnya</div></div></div>'
+    + '<div class="gde-table-wrap"><table class="gde-table gde-table--compact">'
+    + '<thead><tr><th>Divisi</th><th class="gde-ctr">Pekerja</th><th class="gde-ctr">Total</th>'
+    + '<th class="gde-ctr">Kadaluarsa</th><th class="gde-ctr">Mendesak</th><th class="gde-ctr">Berlaku</th></tr></thead><tbody>';
+
+  if (!d.per_divisi || !d.per_divisi.length) {
+    html += '<tr><td colspan="6" class="gde-ctr" style="padding:1.5rem;color:var(--gde-muted)">Belum ada data.</td></tr>';
+  } else {
+    html += d.per_divisi.map(function (x) {
+      return '<tr>'
+        + '<td><b style="font-size:.82rem">' + SIAGA.esc(x.divisi) + '</b></td>'
+        + '<td class="gde-ctr">' + SIAGA.angka(x.jumlah_pekerja) + '</td>'
+        + '<td class="gde-ctr">' + SIAGA.angka(x.total) + '</td>'
+        + '<td class="gde-ctr"' + (x.kadaluarsa ? ' style="color:#7F1D1D;font-weight:700"' : '') + '>'
+        + SIAGA.angka(x.kadaluarsa) + '</td>'
+        + '<td class="gde-ctr"' + (x.mendesak ? ' style="color:#C4142A;font-weight:700"' : '') + '>'
+        + SIAGA.angka(x.mendesak) + '</td>'
+        + '<td class="gde-ctr" style="color:#3F6B18;font-weight:700">' + SIAGA.angka(x.aman) + '</td>'
+        + '</tr>';
+    }).join('');
+  }
+  html += '</tbody></table></div></div>';
+
+  html += '<div class="gde-card"><div class="siaga-panel-head">'
+    + '<i class="bi bi-tags-fill" style="color:var(--gde-blue)"></i>'
+    + '<div><h3>Jenis Sertifikasi Terbanyak</h3><div class="siaga-panel-head__sub">'
+    + '10 jenis dengan pemegang terbanyak</div></div></div>'
+    + '<div class="gde-card__body">';
+
+  if (!d.per_jenis || !d.per_jenis.length) {
+    html += SIAGA.kosongHtml('bi-award', 'Belum ada data', 'Data sertifikasi masih kosong.');
+  } else {
+    var maxJ = d.per_jenis[0].total || 1;
+    html += d.per_jenis.map(function (j) {
+      var persen = Math.round((j.total / maxJ) * 100);
+      return '<div style="margin-bottom:.85rem">'
+        + '<div class="gde-u-between" style="margin-bottom:4px">'
+        + '<span style="font-size:.78rem;font-weight:600;color:var(--gde-ink-2)">' + SIAGA.esc(j.nama) + '</span>'
+        + '<span style="font-size:.72rem;color:var(--gde-muted)">' + SIAGA.angka(j.total)
+        + (j.kadaluarsa ? (' · <span style="color:#C4142A">' + SIAGA.angka(j.kadaluarsa) + ' kadaluarsa</span>') : '')
+        + '</span></div>'
+        + '<div class="gde-progress"><span class="gde-progress__bar" style="width:' + persen + '%"></span></div>'
+        + '</div>';
+    }).join('');
+  }
+  html += '</div></div>';
+  html += '</div>';
+
+  /* ---------- 5. catatan kaki ---------- */
+  html += '<p style="margin-top:1.5rem;font-size:.7rem;color:var(--gde-muted-2)">'
+    + 'Data dihitung pada ' + SIAGA.esc(d.pada) + ' (' + SIAGA.esc(d.zona_waktu || '') + '). '
+    + 'Ambang status: kadaluarsa &lt; 0 hari · mendekati kadaluarsa ≤ 2 bulan · '
+    + 'segera perpanjang ≤ 3 bulan · perlu perhatian ≤ 6 bulan · peringatan ≤ 9 bulan.'
+    + '</p>';
+
+  SIAGA.el('dashIsi').innerHTML = html;
+
+  /* klik baris -> profil pekerja */
+  SIAGA.on(SIAGA.el('dashIsi'), 'click', '[data-dash-pekerja]', function (e, t) {
+    var kode = t.getAttribute('data-dash-pekerja');
+    SIAGA.state.paramPekerja = kode;
+    SIAGA.navigasi('pekerja');
+  });
+}
+
+/* ------------------------------------------------------------------ KPI -- */
+function kpiCard(key, label, nilai, ikon, tone) {
+  return '<div class="siaga-mini siaga-mini--' + tone + '">'
+    + '<div class="siaga-mini__icon"><i class="bi ' + ikon + '"></i></div>'
+    + '<div style="min-width:0">'
+    + '<div class="siaga-mini__label">' + SIAGA.esc(label) + '</div>'
+    + '<div class="siaga-mini__value">' + SIAGA.angka(nilai) + '</div>'
+    + '</div></div>';
+}
+
+function warnaSisa(hari) {
+  if (hari === null || hari === undefined || hari === '') return 'var(--gde-muted)';
+  var h = SIAGA.num(hari);
+  if (h < 0) return '#7F1D1D';
+  if (h <= 60) return '#1B2430';
+  if (h <= 90) return '#C4142A';
+  if (h <= 180) return '#8A4B00';
+  if (h <= 270) return '#6B5F00';
+  return '#3F6B18';
+}
+
+/* ---------------------------------------------------------------- donut -- */
+function donutHtml(sebaran, total) {
+  var warna = {
+    green: '#8DC63F', yellow: '#FFF56B', orange: '#E07B14',
+    red: '#ED1B2F', black: '#1B2430', dead: '#7F1D1D', gray: '#94A3B8'
+  };
+  var t = SIAGA.num(total);
+  var stops = [];
+  var jalan = 0;
+  (sebaran || []).forEach(function (s) {
+    if (!s.jumlah) return;
+    var porsi = t ? (s.jumlah / t) * 100 : 0;
+    var dari = jalan;
+    jalan += porsi;
+    stops.push((warna[s.tone] || '#94A3B8') + ' ' + dari.toFixed(2) + '% ' + jalan.toFixed(2) + '%');
+  });
+  var latar = stops.length
+    ? 'conic-gradient(' + stops.join(',') + ')'
+    : 'conic-gradient(#E4E9F0 0% 100%)';
+
+  return '<div class="siaga-donut" style="background:' + latar + '">'
+    + '<div class="siaga-donut__center"><b>' + SIAGA.angka(t) + '</b><span>sertifikasi</span></div>'
+    + '</div>';
+}
+
+function legendaHtml(sebaran) {
+  return '<div style="display:grid;gap:.55rem">'
+    + (sebaran || []).map(function (s) {
+      return '<div class="gde-u-between" style="gap:.5rem">'
+        + '<span style="display:flex;align-items:center;gap:8px;font-size:.76rem;color:var(--gde-muted)">'
+        + '<span class="gde-dot gde-dot--' + s.tone + '"></span>' + SIAGA.esc(s.label) + '</span>'
+        + '<b style="font-size:.78rem;color:var(--gde-ink)">' + SIAGA.angka(s.jumlah) + '</b>'
+        + '</div>';
+    }).join('')
+    + '</div>';
+}
+
+/* ----------------------------------------------------------------- bars -- */
+function barsHtml(tren) {
+  var data = tren || [];
+  var max = 1;
+  data.forEach(function (t) { if (t.jumlah > max) max = t.jumlah; });
+
+  if (!data.length) return SIAGA.kosongHtml('bi-bar-chart', 'Belum ada data', '');
+
+  return '<div class="siaga-bars">'
+    + data.map(function (t) {
+      var tinggi = Math.max(Math.round((t.jumlah / max) * 128), 3);
+      var warna = t.jumlah === 0 ? '#E4E9F0'
+        : (t.jumlah >= max * 0.66 ? '#ED1B2F' : (t.jumlah >= max * 0.33 ? '#0B50A1' : '#8DC63F'));
+      return '<div class="siaga-bars__col" title="' + SIAGA.attr(t.label + ': ' + t.jumlah + ' sertifikasi') + '">'
+        + '<span class="siaga-bars__val">' + (t.jumlah || '') + '</span>'
+        + '<div class="siaga-bars__bar" style="height:' + tinggi + 'px;background:' + warna + '"></div>'
+        + '<span class="siaga-bars__label">' + SIAGA.esc(t.label) + '</span>'
+        + '</div>';
+    }).join('')
+    + '</div>'
+    + '<div class="siaga-legend">'
+    + '<span class="siaga-legend__item"><span class="gde-dot gde-dot--red"></span> bulan terpadat</span>'
+    + '<span class="siaga-legend__item"><span class="gde-dot gde-dot--blue"></span> sedang</span>'
+    + '<span class="siaga-legend__item"><span class="gde-dot gde-dot--green"></span> sedikit</span>'
+    + '</div>';
+}
+</script>

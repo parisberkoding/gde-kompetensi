@@ -1,0 +1,525 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — Notifikasi.html
+  Halaman notifikasi: riwayat pengingat in-app, status reminder otomatis,
+  dan penjalanan reminder manual (HC/SA).
+  KONTRAK API: apiListNotifications, apiMarkNotificationRead,
+               apiMarkAllNotificationRead, apiRunReminderNow,
+               apiRingkasanReminder — lihat subprocess.gs bagian 8.
+  ============================================================================
+-->
+<div id="ntRoot">
+  <div class="siaga-loader"><div class="siaga-loader__ring"></div><p>Memuat notifikasi...</p></div>
+</div>
+
+<script>
+/* ==========================================================================
+   KONTROLER NOTIFIKASI
+   ========================================================================== */
+var NtState = {
+  semua: [],        // seluruh baris notifikasi dari server
+  ringkasan: null,  // apiRingkasanReminder (HC/SA)
+  filter: { belum: false, level: '', pemegang: '', q: '' },
+  sibuk: false
+};
+
+/* Label & tone badge per level reminder (mengikuti LEVEL_REMINDER_ di backend) */
+var NT_LEVEL = {
+  H270: { label: 'H-270', tone: 'yellow', tl: 'tl-yellow' },
+  H180: { label: 'H-180', tone: 'orange', tl: 'tl-orange' },
+  H90: { label: 'H-90', tone: 'red', tl: 'tl-red' },
+  H60: { label: 'H-60', tone: 'black', tl: 'tl-black' },
+  H30: { label: 'H-30', tone: 'black', tl: 'tl-black' },
+  EXPIRED: { label: 'Sudah kadaluarsa', tone: 'dead', tl: 'tl-dead' }
+};
+
+var NT_HARI = { 0: 'Setiap hari', 1: 'Senin', 2: 'Selasa', 3: 'Rabu', 4: 'Kamis', 5: 'Jumat', 6: 'Sabtu', 7: 'Minggu' };
+
+function initNotifikasi(param) {
+  'use strict';
+  NtState.semua = [];
+  NtState.ringkasan = null;
+  NtState.filter = { belum: false, level: '', pemegang: '', q: '' };
+  renderNtKerangka();
+  muatNotifikasi();
+}
+
+/* -------------------------------------------------------------- kerangka -- */
+function renderNtKerangka() {
+  var isHc = SIAGA.isHc();
+
+  SIAGA.el('ntRoot').innerHTML = ''
+    + '<div class="gde-page-head">'
+    + '  <div>'
+    + '    <div class="gde-u-eyebrow">Pengingat</div>'
+    + '    <h1>Notifikasi</h1>'
+    + '    <p>Riwayat pengingat masa berlaku sertifikasi yang dikirim sistem kepada '
+    + (isHc ? 'karyawan, Human Capital, dan atasan.' : 'Anda beserta atasan dan Human Capital.') + '</p>'
+    + '  </div>'
+    + '  <div class="gde-page-actions">'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="ntTandaiSemua">'
+    + '      <i class="bi bi-check2-all"></i> Tandai semua sudah dibaca</button>'
+    + (isHc ? '    <button class="gde-btn gde-btn--outline" type="button" id="ntSegarkan">'
+      + '      <i class="bi bi-arrow-clockwise"></i> Segarkan</button>'
+      + '    <button class="gde-btn gde-btn--primary" type="button" id="ntKirim">'
+      + '      <i class="bi bi-send"></i> Kirim reminder sekarang</button>' : '')
+    + '  </div>'
+    + '</div>'
+    + '<div id="ntKpi" class="gde-grid gde-grid--4 siaga-mb-4"></div>'
+    + (isHc ? '<div id="ntStatusReminder" class="siaga-mb-4"></div>' : '')
+    + '<div class="gde-card">'
+    + '  <div class="siaga-toolbar">'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="ntBelum">Status baca</label>'
+    + '      <label class="gde-switch" for="ntBelum">'
+    + '        <input type="checkbox" id="ntBelum" name="ntBelum">'
+    + '        <span class="gde-switch__track"></span>'
+    + '        <span>Hanya yang belum dibaca</span>'
+    + '      </label>'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="ntLevel">Level pengingat</label>'
+    + '      <select class="gde-select" id="ntLevel">'
+    + '        <option value="">Semua level</option>'
+    + '        <option value="H270">H-270 (9 bulan)</option>'
+    + '        <option value="H180">H-180 (6 bulan)</option>'
+    + '        <option value="H90">H-90 (3 bulan)</option>'
+    + '        <option value="H60">H-60 (2 bulan)</option>'
+    + '        <option value="H30">H-30 (1 bulan)</option>'
+    + '        <option value="EXPIRED">Sudah kadaluarsa</option>'
+    + '      </select>'
+    + '    </div>'
+    + (isHc ? '    <div class="siaga-toolbar__field">'
+      + '      <label class="gde-label" for="ntPemegang">Pemegang sertifikasi</label>'
+      + '      <select class="gde-select" id="ntPemegang">'
+      + '        <option value="">Semua pemegang</option>'
+      + '      </select>'
+      + '    </div>' : '    <div class="siaga-toolbar__field siaga-toolbar__field--grow">'
+      + '      <label class="gde-label" for="ntCari">Cari</label>'
+      + '      <input class="gde-input" type="text" id="ntCari" placeholder="Cari judul atau isi pengingat...">'
+      + '    </div>')
+    + '    <div class="siaga-toolbar__field gde-u-grow gde-u-text-right">'
+    + '      <span class="siaga-inline-note" id="ntInfoFilter">—</span>'
+    + '    </div>'
+    + '  </div>'
+    + '  <div class="gde-card__body" id="ntDaftar"></div>'
+    + '</div>';
+
+  /* ---------- aksi header ---------- */
+  var semua = SIAGA.el('ntTandaiSemua');
+  if (semua) semua.addEventListener('click', tandaiSemuaNotifikasi);
+
+  var kirim = SIAGA.el('ntKirim');
+  if (kirim) kirim.addEventListener('click', kirimReminderSekarang);
+
+  var seg = SIAGA.el('ntSegarkan');
+  if (seg) seg.addEventListener('click', function () { muatNotifikasi(true); });
+
+  /* ---------- filter ---------- */
+  var belum = SIAGA.el('ntBelum');
+  if (belum) belum.addEventListener('change', function () {
+    NtState.filter.belum = !!belum.checked;
+    renderNtDaftar();
+  });
+
+  var level = SIAGA.el('ntLevel');
+  if (level) level.addEventListener('change', function () {
+    NtState.filter.level = level.value;
+    renderNtDaftar();
+  });
+
+  var pemegang = SIAGA.el('ntPemegang');
+  if (pemegang) pemegang.addEventListener('change', function () {
+    NtState.filter.pemegang = pemegang.value;
+    renderNtDaftar();
+  });
+
+  var cari = SIAGA.el('ntCari');
+  if (cari) {
+    cari.addEventListener('input', SIAGA.debounce(function () {
+      NtState.filter.q = String(cari.value || '').trim().toLowerCase();
+      renderNtDaftar();
+    }, 260));
+  }
+}
+
+/* ------------------------------------------------------------- pemuatan -- */
+function muatNotifikasi(segarkanKpi) {
+  var isHc = SIAGA.isHc();
+
+  if (segarkanKpi) {
+    if (SIAGA.el('ntKpi')) SIAGA.el('ntKpi').innerHTML = SIAGA.pemuatHtml('Memuat ringkasan...');
+    if (isHc && SIAGA.el('ntStatusReminder')) {
+      SIAGA.el('ntStatusReminder').innerHTML = SIAGA.pemuatHtml('Memuat status reminder...');
+    }
+  }
+  if (SIAGA.el('ntDaftar')) SIAGA.el('ntDaftar').innerHTML = SIAGA.pemuatHtml('Memuat notifikasi...');
+
+  /* daftar notifikasi — limit besar agar filter klien mencakup seluruh riwayat */
+  SIAGA.api('apiListNotifications', [{ limit: 300 }]).then(function (d) {
+    NtState.semua = (d && d.rows) || [];
+    isiPilihanPemegang();
+    renderNtKpi(d);
+    renderNtDaftar();
+  }).catch(function (e) {
+    if (SIAGA.el('ntKpi')) SIAGA.el('ntKpi').innerHTML = '';
+    if (SIAGA.el('ntDaftar')) SIAGA.el('ntDaftar').innerHTML = SIAGA.galatHtml(e.message);
+  });
+
+  /* ringkasan reminder — hanya HC/SA */
+  if (!isHc) {
+    if (SIAGA.el('ntStatusReminder')) SIAGA.el('ntStatusReminder').innerHTML = '';
+    return;
+  }
+  SIAGA.api('apiRingkasanReminder', []).then(function (r) {
+    NtState.ringkasan = r || {};
+    renderNtStatusReminder(NtState.ringkasan);
+    renderNtKpi({ total: NtState.semua.length, belum_dibaca: hitungBelumDibaca() });
+  }).catch(function (e) {
+    if (SIAGA.el('ntStatusReminder')) {
+      SIAGA.el('ntStatusReminder').innerHTML = ''
+        + '<div class="gde-alert gde-alert--warning">'
+        + '<i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>'
+        + '<div class="gde-alert__body"><strong>Ringkasan reminder tidak tersedia</strong>'
+        + SIAGA.esc(e.message) + '</div></div>';
+    }
+  });
+}
+
+function hitungBelumDibaca() {
+  var n = 0;
+  NtState.semua.forEach(function (r) { if (!r.is_read) n++; });
+  return n;
+}
+
+/* ------------------------------------------------------- pilihan pemegang -- */
+function isiPilihanPemegang() {
+  var sel = SIAGA.el('ntPemegang');
+  if (!sel) return;
+  var peta = {};
+  NtState.semua.forEach(function (r) {
+    var kode = String(r.employee_code || '');
+    if (!kode) return;
+    if (!peta[kode]) peta[kode] = String(r.nama || '');
+  });
+  var kode = Object.keys(peta).sort();
+  var lama = NtState.filter.pemegang;
+  sel.innerHTML = '<option value="">Semua pemegang</option>'
+    + kode.map(function (k) {
+      var label = k + (peta[k] ? ' — ' + peta[k] : '');
+      return '<option value="' + SIAGA.attr(k) + '"' + (k === lama ? ' selected' : '') + '>'
+        + SIAGA.esc(label) + '</option>';
+    }).join('');
+}
+
+/* ------------------------------------------------------------------ KPI -- */
+function renderNtKpi(d) {
+  var wadah = SIAGA.el('ntKpi');
+  if (!wadah) return;
+  var belum = (d && d.belum_dibaca !== undefined) ? SIAGA.num(d.belum_dibaca) : hitungBelumDibaca();
+  var total = (d && d.total !== undefined) ? SIAGA.num(d.total) : NtState.semua.length;
+  var r = NtState.ringkasan;
+  var sudah = Math.max(total - belum, 0);
+
+  var html = ''
+    + kpiNotif('Total notifikasi', total, 'bi-bell-fill', 'blue')
+    + kpiNotif('Belum dibaca', belum, 'bi-envelope-exclamation', belum ? 'red' : 'green')
+    + kpiNotif('Sudah dibaca', sudah, 'bi-envelope-open', 'green');
+
+  if (SIAGA.isHc()) {
+    html += kpiNotif('Email terkirim', r ? SIAGA.num(r.total_terkirim) : 0, 'bi-send-check', 'blue');
+  }
+  wadah.innerHTML = html;
+}
+
+function kpiNotif(label, nilai, ikon, tone) {
+  return '<div class="siaga-mini siaga-mini--' + tone + '">'
+    + '<div class="siaga-mini__icon"><i class="bi ' + ikon + '"></i></div>'
+    + '<div style="min-width:0">'
+    + '<div class="siaga-mini__label">' + SIAGA.esc(label) + '</div>'
+    + '<div class="siaga-mini__value">' + SIAGA.angka(nilai) + '</div>'
+    + '</div></div>';
+}
+
+/* ----------------------------------------------------- status reminder -- */
+function hariIndo(n) {
+  var h = SIAGA.num(n, 0);
+  return NT_HARI[h] !== undefined ? NT_HARI[h] : ('Hari ke-' + h);
+}
+
+function levelAktifTeks(level) {
+  var bagian = String(level || '').split(',').map(function (x) { return String(x).trim(); })
+    .filter(function (x) { return x !== ''; });
+  if (!bagian.length) return '—';
+  return bagian.map(function (b) { return b + ' bulan'; }).join(', ');
+}
+
+function renderNtStatusReminder(r) {
+  var wadah = SIAGA.el('ntStatusReminder');
+  if (!wadah) return;
+  var s = r || {};
+  var aktif = s.enabled === true || String(s.enabled).toUpperCase() === 'TRUE';
+
+  var chip = '';
+  if (s.email_hc && s.email_hc.length) {
+    chip = s.email_hc.map(function (e) {
+      return '<span class="gde-chip"><i class="bi bi-envelope"></i> ' + SIAGA.esc(e) + '</span>';
+    }).join(' ');
+  } else {
+    chip = '<span class="siaga-inline-note">Belum ada alamat email penerima.</span>';
+  }
+
+  wadah.innerHTML = ''
+    + '<div class="gde-card">'
+    + '  <div class="siaga-panel-head">'
+    + '    <i class="bi bi-alarm-fill" style="color:var(--gde-blue)"></i>'
+    + '    <div><h3>Status reminder</h3><div class="siaga-panel-head__sub">'
+    + 'Konfigurasi pengingat otomatis yang sedang berlaku</div></div>'
+    + '    <div class="siaga-panel-head__actions">'
+    + '      <a class="gde-btn gde-btn--outline-primary gde-btn--sm" href="#/pengaturan" data-view="pengaturan">'
+    + '        <i class="bi bi-sliders"></i> Ubah di Pengaturan</a>'
+    + '    </div>'
+    + '  </div>'
+    + '  <div class="gde-card__body">'
+    + '    <dl class="siaga-dl">'
+    + '      <dt>Status pengingat</dt><dd>' + (aktif
+      ? '<span class="gde-status gde-status--green"><i class="bi bi-check-circle-fill"></i>Aktif</span>'
+      : '<span class="gde-status gde-status--gray"><i class="bi bi-slash-circle"></i>Nonaktif</span>') + '</dd>'
+    + '      <dt>Jadwal kirim</dt><dd>' + SIAGA.esc(hariIndo(s.jadwal_hari)) + '</dd>'
+    + '      <dt>Level aktif</dt><dd>' + SIAGA.esc(levelAktifTeks(s.level_aktif)) + '</dd>'
+    + '      <dt>Terakhir kirim</dt><dd>' + SIAGA.esc(s.terakhir_kirim ? SIAGA.waktuLalu(s.terakhir_kirim) : 'Belum pernah') + '</dd>'
+    + '      <dt>Total terkirim</dt><dd>' + SIAGA.angka(s.total_terkirim) + ' email</dd>'
+    + '      <dt>Total gagal</dt><dd' + (SIAGA.num(s.total_gagal) ? ' style="color:#C4142A"' : '') + '>'
+    + SIAGA.angka(s.total_gagal) + ' email</dd>'
+    + '      <dt>Penerima HC/SA</dt><dd><div class="gde-u-flex gde-u-flex-wrap siaga-gap-2">' + chip + '</div></dd>'
+    + '    </dl>'
+    + (!aktif ? '    <div class="gde-alert gde-alert--warning siaga-mt-4">'
+      + '<i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>'
+      + '<div class="gde-alert__body"><strong>Pengingat otomatis nonaktif</strong>'
+      + 'Notifikasi tidak akan dikirim otomatis oleh trigger harian. Aktifkan kembali di halaman Pengaturan.</div></div>' : '')
+    + '  </div>'
+    + '</div>';
+}
+
+/* --------------------------------------------------------------- daftar -- */
+function barisTersaring() {
+  var f = NtState.filter;
+  return NtState.semua.filter(function (r) {
+    if (f.belum && r.is_read) return false;
+    if (f.level && String(r.level || '').toUpperCase() !== f.level) return false;
+    if (f.pemegang && String(r.employee_code || '') !== f.pemegang) return false;
+    if (f.q) {
+      var teks = [r.judul, r.pesan, r.employee_code, r.nama, r.level].join(' ').toLowerCase();
+      if (teks.indexOf(f.q) === -1) return false;
+    }
+    return true;
+  });
+}
+
+function renderNtDaftar() {
+  var wadah = SIAGA.el('ntDaftar');
+  if (!wadah) return;
+  var rows = barisTersaring();
+
+  var info = SIAGA.el('ntInfoFilter');
+  if (info) {
+    info.textContent = 'Menampilkan ' + SIAGA.angka(rows.length) + ' dari '
+      + SIAGA.angka(NtState.semua.length) + ' notifikasi';
+  }
+
+  if (!rows.length) {
+    if (!NtState.semua.length) {
+      wadah.innerHTML = SIAGA.kosongHtml('bi-bell-slash', 'Tidak ada notifikasi',
+        'Belum ada pengingat yang tercatat untuk Anda. Notifikasi akan muncul menjelang masa berlaku sertifikasi berakhir.');
+    } else {
+      wadah.innerHTML = SIAGA.kosongHtml('bi-check2-circle', 'Tidak ada notifikasi',
+        'Semua notifikasi sudah dibaca atau tidak ada yang cocok dengan filter yang dipilih.');
+    }
+    return;
+  }
+
+  wadah.innerHTML = '<ul class="siaga-tl">' + rows.map(itemNotifikasiHtml).join('') + '</ul>';
+
+  /* Delegasi klik dipasang pada wadah baru setiap render agar tidak menumpuk. */
+  var isiBaru = wadah.firstElementChild;
+  SIAGA.on(isiBaru, 'click', '[data-nt-baca]', function (e, t) {
+    e.stopPropagation();
+    tandaiSatuNotifikasi(t.getAttribute('data-nt-baca'), t);
+  });
+  SIAGA.on(isiBaru, 'click', '[data-nt-doc]', function (e, t) {
+    var docId = t.getAttribute('data-nt-doc');
+    if (!docId) return;
+    SIAGA.state.paramDoc = docId;
+    SIAGA.navigasi('data');
+  });
+}
+
+function itemNotifikasiHtml(r) {
+  var level = String(r.level || '').toUpperCase();
+  var def = NT_LEVEL[level] || { label: level || 'Info', tone: 'gray', tl: '' };
+  var isHc = SIAGA.isHc();
+  var kode = String(r.employee_code || '');
+  var nama = String(r.nama || '');
+
+  var sub = SIAGA.esc(r.pesan || '');
+  if (isHc && (kode || nama)) {
+    sub += '<br><span class="siaga-inline-note"><i class="bi bi-person-badge"></i> '
+      + SIAGA.esc(kode) + (nama ? (' · ' + SIAGA.esc(nama)) : '') + '</span>';
+  }
+
+  return '<li class="' + def.tl + '" data-nt-item="' + SIAGA.attr(r.notif_id) + '">'
+    + '<div class="gde-u-between">'
+    + '  <div class="gde-u-grow">'
+    + '    <div class="siaga-tl__tgl">' + SIAGA.esc(SIAGA.waktuLalu(r.created_at)) + '</div>'
+    + '    <div class="siaga-tl__judul">' + SIAGA.esc(r.judul || 'Pengingat sertifikasi') + '</div>'
+    + '    <div class="siaga-tl__sub">' + sub + '</div>'
+    + '    <div class="gde-u-flex gde-u-flex-wrap siaga-gap-2 siaga-mt-3">'
+    + '      <span class="gde-status gde-status--' + def.tone + '">' + SIAGA.esc(def.label) + '</span>'
+    + (r.is_read ? '      <span class="gde-status gde-status--gray"><i class="bi bi-check2"></i>Sudah dibaca</span>'
+      : '      <span class="gde-status gde-status--black"><i class="bi bi-dot"></i>Belum dibaca</span>')
+    + '    </div>'
+    + '  </div>'
+    + '  <div class="gde-u-text-right gde-u-nowrap">'
+    + (r.is_read ? ''
+      : '    <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" data-nt-baca="'
+      + SIAGA.attr(r.notif_id) + '"><i class="bi bi-check2"></i> Tandai dibaca</button>')
+    + (r.doc_id ? '    <button class="gde-btn gde-btn--ghost gde-btn--xs siaga-mt-3" type="button" data-nt-doc="'
+      + SIAGA.attr(r.doc_id) + '"><i class="bi bi-box-arrow-up-right"></i> Lihat data</button>' : '')
+    + '  </div>'
+    + '</div>'
+    + '</li>';
+}
+
+/* --------------------------------------------------------- ubah status -- */
+function tandaiSatuNotifikasi(notifId, tombol) {
+  if (!notifId || NtState.sibuk) return;
+  NtState.sibuk = true;
+  SIAGA.tombolSibuk(tombol, true, '...');
+  SIAGA.api('apiMarkNotificationRead', [notifId]).then(function () {
+    NtState.sibuk = false;
+    NtState.semua.forEach(function (r) { if (String(r.notif_id) === String(notifId)) r.is_read = true; });
+    SIAGA.sukses('Notifikasi ditandai sudah dibaca.');
+    renderNtKpi(null);
+    renderNtDaftar();
+    SIAGA.perbaruiBadgeNotifikasi();
+  }).catch(function (e) {
+    NtState.sibuk = false;
+    SIAGA.tombolSibuk(tombol, false);
+    SIAGA.gagal(e.message);
+  });
+}
+
+function tandaiSemuaNotifikasi() {
+  var belum = hitungBelumDibaca();
+  if (!belum) { SIAGA.info('Semua notifikasi sudah dibaca.'); return; }
+
+  SIAGA.konfirmasi({
+    judul: 'Tandai semua sudah dibaca',
+    pesan: 'Sebanyak ' + SIAGA.angka(belum) + ' notifikasi akan ditandai sudah dibaca. '
+      + 'Tindakan ini tidak menghapus riwayat pengingat.',
+    labelOk: 'Tandai semua'
+  }).then(function (ya) {
+    if (!ya) return;
+    var tombol = SIAGA.el('ntTandaiSemua');
+    SIAGA.tombolSibuk(tombol, true, 'Memproses...');
+    SIAGA.api('apiMarkAllNotificationRead', []).then(function (r) {
+      SIAGA.tombolSibuk(tombol, false);
+      NtState.semua.forEach(function (x) { x.is_read = true; });
+      SIAGA.sukses(SIAGA.angka((r && r.diubah) || 0) + ' notifikasi ditandai sudah dibaca.', 'Selesai');
+      renderNtKpi(null);
+      renderNtDaftar();
+      SIAGA.perbaruiBadgeNotifikasi();
+    }).catch(function (e) {
+      SIAGA.tombolSibuk(tombol, false);
+      SIAGA.gagal(e.message);
+    });
+  });
+}
+
+/* ------------------------------------------------------ kirim reminder -- */
+function kirimReminderSekarang() {
+  if (!SIAGA.isHc()) { SIAGA.gagal('Hanya Human Capital yang dapat menjalankan reminder.'); return; }
+
+  SIAGA.konfirmasi({
+    judul: 'Kirim reminder sekarang',
+    pesan: 'Sistem akan memeriksa seluruh sertifikasi dan mengirim email pengingat '
+      + 'ke karyawan, Human Capital, dan atasan sesuai tingkat statusnya. '
+      + 'Email yang sudah pernah dikirim untuk tingkat yang sama tidak akan dikirim ulang.',
+    labelOk: 'Kirim sekarang'
+  }).then(function (ya) {
+    if (!ya) return;
+    var tombol = SIAGA.el('ntKirim');
+    SIAGA.tombolSibuk(tombol, true, 'Mengirim...');
+    SIAGA.api('apiRunReminderNow', []).then(function (r) {
+      SIAGA.tombolSibuk(tombol, false);
+      tampilkanRingkasanReminder(r || {});
+      SIAGA.sukses('Target ' + SIAGA.angka(r.target) + ' · terkirim ' + SIAGA.angka(r.terkirim)
+        + ' · gagal ' + SIAGA.angka(r.gagal) + '.', 'Reminder selesai');
+      muatNotifikasi(true);
+    }).catch(function (e) {
+      SIAGA.tombolSibuk(tombol, false);
+      SIAGA.gagal(e.message);
+    });
+  });
+}
+
+function tampilkanRingkasanReminder(r) {
+  var lama = SIAGA.el('ntModalHasil');
+  if (lama) lama.parentNode.removeChild(lama);
+
+  var detail = r.detail || [];
+  var adaIsi = detail.length > 0;
+
+  var wrap = document.createElement('div');
+  wrap.className = 'gde-modal is-open';
+  wrap.id = 'ntModalHasil';
+  wrap.innerHTML = ''
+    + '<div class="gde-modal__scrim" data-tutup></div>'
+    + '<div class="gde-modal__dialog gde-modal__dialog--lg" role="dialog" aria-modal="true">'
+    + '  <div class="gde-modal__head">'
+    + '    <i class="bi bi-send-check" style="color:var(--gde-green-d)"></i>'
+    + '    <h3>Ringkasan pengiriman reminder</h3>'
+    + '    <button class="gde-modal__close" type="button" data-tutup aria-label="Tutup">&times;</button>'
+    + '  </div>'
+    + '  <div class="gde-modal__body">'
+    + '    <div class="gde-grid gde-grid--4 siaga-mb-4">'
+    + kotakHasil('Target', r.target, 'bi-bullseye', 'blue')
+    + kotakHasil('Terkirim', r.terkirim, 'bi-check2-circle', 'green')
+    + kotakHasil('Gagal', r.gagal, 'bi-x-circle', 'red')
+    + kotakHasil('Dilewati', r.dilewati, 'bi-dash-circle', 'yellow')
+    + '    </div>'
+    + '    <div class="gde-u-between" style="margin-bottom:.5rem">'
+    + '      <strong style="font-size:.85rem">Rincian pengiriman</strong>'
+    + '      <span class="siaga-inline-note">Durasi '
+    + SIAGA.angka(Math.max(Math.round(SIAGA.num(r.durasi_ms) / 1000), 0)) + ' detik</span>'
+    + '    </div>'
+    + (adaIsi
+      ? '    <div class="siaga-scroll-y"><ul class="gde-list">' + detail.map(function (t) {
+        return '<li><i class="bi bi-dot" style="color:var(--gde-blue)"></i>'
+          + '<span style="font-size:.78rem;word-break:break-word">' + SIAGA.esc(t) + '</span></li>';
+      }).join('') + '</ul></div>'
+      : SIAGA.kosongHtml('bi-inbox', 'Tidak ada rincian', 'Tidak ada email yang perlu diproses pada penjalanan ini.'))
+    + '    <p class="siaga-inline-note siaga-mt-4">Dijalankan pada '
+    + SIAGA.esc(r.pada ? SIAGA.tglIndo(r.pada, true) : '—') + '.</p>'
+    + '  </div>'
+    + '  <div class="gde-modal__foot">'
+    + '    <button class="gde-btn gde-btn--primary" type="button" data-tutup>Tutup</button>'
+    + '  </div>'
+    + '</div>';
+
+  document.body.appendChild(wrap);
+  document.body.style.overflow = 'hidden';
+  SIAGA.qsa('[data-tutup]', wrap).forEach(function (b) {
+    b.addEventListener('click', function () { SIAGA.modalTutup('ntModalHasil'); });
+  });
+}
+
+function kotakHasil(label, nilai, ikon, tone) {
+  return '<div class="siaga-mini siaga-mini--' + tone + '">'
+    + '<div class="siaga-mini__icon"><i class="bi ' + ikon + '"></i></div>'
+    + '<div style="min-width:0">'
+    + '<div class="siaga-mini__label">' + SIAGA.esc(label) + '</div>'
+    + '<div class="siaga-mini__value">' + SIAGA.angka(nilai) + '</div>'
+    + '</div></div>';
+}
+</script>

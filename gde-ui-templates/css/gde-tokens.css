@@ -1,0 +1,156 @@
+/* ==========================================================================
+   GDE UI TEMPLATES — 01. DESIGN TOKENS
+   PT Geo Dipa Energi (Persero) — Unit Patuha
+   Sumber kebenaran tunggal untuk warna, tipografi, jarak, radius, bayangan.
+   Dimuat PALING AWAL, sebelum berkas GDE lainnya.
+   Lisensi internal. Palet mengikuti Geodipa Color Palette.
+   ========================================================================== */
+
+:root {
+  /* ---------- 1. WARNA MEREK (palet resmi) ---------- */
+  --gde-green:      #8DC63F;   /* hijau Geodipa  */
+  --gde-yellow:     #FFF56B;   /* kuning Geodipa */
+  --gde-blue:       #0B50A1;   /* biru Geodipa   */
+  --gde-red:        #ED1B2F;   /* merah Geodipa  */
+  --gde-black:      #000000;
+
+  /* ---------- 2. TURUNAN MEREK (tint & shade) ---------- */
+  --gde-green-d:    #71A62F;
+  --gde-green-d2:   #5C8A24;
+  --gde-green-l:    #F2F9E8;
+  --gde-green-l2:   #E4F3CE;
+
+  --gde-blue-d:     #093D7D;
+  --gde-blue-d2:    #062E5E;
+  --gde-blue-l:     #EAF1FA;
+  --gde-blue-l2:    #D3E2F5;
+
+  --gde-yellow-d:   #D8CE3A;
+  --gde-yellow-l:   #FFFDE8;
+  --gde-yellow-l2:  #FFF9C4;
+
+  --gde-red-d:      #C4142A;
+  --gde-red-l:      #FDECEE;
+  --gde-red-l2:     #FAD5D9;
+
+  /* ---------- 3. NETRAL ---------- */
+  --gde-ink:        #16202E;
+  --gde-ink-2:      #33465C;
+  --gde-muted:      #5B6B80;   /* digelapkan agar teks kecil lolos kontras AA */
+  --gde-muted-2:    #8494A8;
+  --gde-line:       #E4E9F0;
+  --gde-line-2:     #F1F5F9;
+  --gde-surface:    #FFFFFF;
+  --gde-surface-2:  #F8FAFC;
+  --gde-surface-3:  #F4F7FB;
+  --gde-scrim:      rgba(9, 20, 35, .45);
+
+  /* ---------- 4. WARNA SEMANTIK ---------- */
+  --gde-success:    var(--gde-green-d);
+  --gde-success-l:  var(--gde-green-l);
+  --gde-info:       var(--gde-blue);
+  --gde-info-l:     var(--gde-blue-l);
+  --gde-warning:    #B8860B;
+  --gde-warning-l:  var(--gde-yellow-l);
+  --gde-danger:     var(--gde-red);
+  --gde-danger-l:   var(--gde-red-l);
+
+  /* ---------- 5. AKSEN PER MODUL (untuk ikon/badge kontekstual) ---------- */
+  --gde-mod-bbm:    #FF771D;
+  --gde-mod-spd:    #4154F1;
+  --gde-mod-chk:    #2ECA6A;
+  --gde-mod-lnc:    #9747FF;
+
+  /* ---------- 6. TIPOGRAFI ---------- */
+  --gde-font: 'Poppins', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --gde-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --gde-fs-xs:   .6875rem;  /* 11px */
+  --gde-fs-sm:   .75rem;    /* 12px */
+  --gde-fs-base: .875rem;   /* 14px */
+  --gde-fs-md:   .9375rem;  /* 15px */
+  --gde-fs-lg:   1.0625rem; /* 17px */
+  --gde-fs-xl:   1.25rem;   /* 20px */
+  --gde-fs-2xl:  1.5rem;    /* 24px */
+  --gde-fs-3xl:  1.875rem;  /* 30px */
+  --gde-fs-4xl:  2.25rem;   /* 36px */
+
+  --gde-fw-light: 300;
+  --gde-fw-normal: 400;
+  --gde-fw-medium: 500;
+  --gde-fw-semibold: 600;
+  --gde-fw-bold: 700;
+  --gde-fw-extrabold: 800;
+
+  --gde-lh-tight: 1.2;
+  --gde-lh-snug: 1.4;
+  --gde-lh-base: 1.65;
+  --gde-ls-tight: -.02em;
+  --gde-ls-wide: .06em;
+
+  /* ---------- 7. RUANG (kelipatan 4) ---------- */
+  --gde-sp-1: .25rem;
+  --gde-sp-2: .5rem;
+  --gde-sp-3: .75rem;
+  --gde-sp-4: 1rem;
+  --gde-sp-5: 1.25rem;
+  --gde-sp-6: 1.5rem;
+  --gde-sp-8: 2rem;
+  --gde-sp-10: 2.5rem;
+  --gde-sp-12: 3rem;
+  --gde-sp-16: 4rem;
+
+  /* ---------- 8. RADIUS ---------- */
+  --gde-r-xs: 8px;
+  --gde-r-sm: 10px;
+  --gde-r-md: 14px;
+  --gde-r-lg: 18px;
+  --gde-r-xl: 24px;
+  --gde-r-pill: 100px;
+  --gde-r-circle: 50%;
+
+  /* ---------- 9. BAYANGAN ---------- */
+  --gde-sh-1: 0 1px 2px rgba(16, 32, 46, .04), 0 2px 8px rgba(16, 32, 46, .04);
+  --gde-sh-2: 0 4px 12px rgba(16, 32, 46, .06), 0 12px 32px rgba(16, 32, 46, .06);
+  --gde-sh-3: 0 18px 48px rgba(9, 61, 125, .14);
+  --gde-sh-inset: inset 0 1px 0 rgba(255, 255, 255, .6);
+  --gde-ring-green: 0 0 0 4px rgba(141, 198, 63, .22);
+  --gde-ring-blue: 0 0 0 4px rgba(11, 80, 161, .15);
+  --gde-ring-danger: 0 0 0 4px rgba(237, 27, 47, .16);
+
+  /* ---------- 10. TRANSISI ---------- */
+  --gde-t-fast: .15s ease;
+  --gde-t-base: .2s ease;
+  --gde-t-slow: .3s cubic-bezier(.4, 0, .2, 1);
+
+  /* ---------- 11. TATA LETAK ---------- */
+  --gde-sidebar-w: 264px;
+  --gde-sidebar-w-collapsed: 76px;
+  --gde-topbar-h: 64px;
+  --gde-content-max: 1440px;
+
+  /* ---------- 12. Z-INDEX ---------- */
+  --gde-z-sidebar: 1030;
+  --gde-z-topbar: 1020;
+  --gde-z-scrim: 1025;
+  --gde-z-dropdown: 1040;
+  --gde-z-modal: 1060;
+  --gde-z-toast: 1080;
+}
+
+/* Tema gelap untuk sidebar (dipakai shell aplikasi) */
+:root {
+  --gde-sidebar-bg: linear-gradient(180deg, #0A4189 0%, var(--gde-blue-d) 100%);
+  --gde-sidebar-fg: rgba(255, 255, 255, .78);
+  --gde-sidebar-fg-strong: #FFFFFF;
+  --gde-sidebar-fg-dim: rgba(255, 255, 255, .45);
+  --gde-sidebar-hover: rgba(255, 255, 255, .08);
+  --gde-sidebar-active-bg: rgba(141, 198, 63, .20);
+  --gde-sidebar-active-fg: #FFFFFF;
+  --gde-sidebar-line: rgba(255, 255, 255, .10);
+}
+
+/* Fallback bila Poppins belum termuat: tetap sans-serif sistem, tanpa FOUT kasar */
+@supports not (font-variation-settings: normal) {
+  :root { --gde-font: system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif; }
+}

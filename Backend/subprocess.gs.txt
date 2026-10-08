@@ -1,0 +1,2778 @@
+/**
+ * ============================================================================
+ * SIAGA SERTIFIKASI — subprocess.gs  (SUBPROCESS / LOGIKA BISNIS)
+ * PT Geo Dipa Energi (Persero) — Unit Patuha
+ * ============================================================================
+ *
+ * Berkas ini berisi SELURUH logika bisnis aplikasi. Kode.gs hanya berisi
+ * konstanta, skema, entry point, kickstarter, dan helper umum.
+ *
+ * DAFTAR ISI
+ * ---------------------------------------------------------------------------
+ *   1.  MESIN STATUS (perhitungan sisa masa berlaku & tingkat status)
+ *   2.  AUTENTIKASI & SESI  (login, logout, ganti username/password)
+ *   3.  MASTER USER         (CRUD, impor, sinkron dari data sertifikasi)
+ *   4.  MASTER SERTIFIKASI  (jenis sertifikasi + masa berlaku)
+ *   5.  MASTER FILE         (CRUD data sertifikasi + unggah lampiran)
+ *   6.  PROFIL PEKERJA      (profil + daftar sertifikasi + lampiran)
+ *   7.  DASHBOARD           (KPI, sebaran status, prioritas, tren)
+ *   8.  NOTIFIKASI & REMINDER (in-app, email, trigger harian)
+ *   9.  EXPORT              (Excel & PDF)
+ *  10.  META & PENGATURAN
+ *  11.  HELPER INTERNAL
+ *
+ * Pola setiap endpoint publik:
+ *   function apiXxx(token, ...) { return apiGuard_(function () { ... }); }
+ *   apiGuard_ membungkus hasil menjadi { ok:true, data:... } atau { ok:false, error:... }.
+ */
+
+// ============================================================================
+// 1. MESIN STATUS
+// ============================================================================
+
+/** Ambang batas status dalam HARI (diambil dari sheet Config). */
+function ambangHari_() {
+  return {
+    peringatan: getConfigNum_('status_peringatan_hari', 270),  // 9 bulan
+    perhatian: getConfigNum_('status_perhatian_hari', 180),    // 6 bulan
+    segera: getConfigNum_('status_segera_hari', 90),           // 3 bulan
+    mendesak: getConfigNum_('status_mendesak_hari', 60),       // 2 bulan
+    merah: getConfigNum_('status_merah_hari', 30)              // 1 bulan
+  };
+}
+
+/**
+ * Tentukan definisi status dari sisa hari.
+ * @param {number} sisaHari
+ * @return {Object} salah satu STATUS_DEFS
+ */
+function statusDariSisaHari_(sisaHari) {
+  var h = Number(sisaHari);
+  if (isNaN(h)) return null;
+  var a = ambangHari_();
+  if (h < 0) return STATUS_MAP_['KADALUARSA'];
+  if (h <= a.mendesak) return STATUS_MAP_['MENDEKATI_KADALUARSA'];
+  if (h <= a.segera) return STATUS_MAP_['SEGERA_PERPANJANG'];
+  if (h <= a.perhatian) return STATUS_MAP_['PERLU_PERHATIAN'];
+  if (h <= a.peringatan) return STATUS_MAP_['PERINGATAN'];
+  return STATUS_MAP_['MASIH_BERLAKU'];
+}
+
+/**
+ * Hitung sisa hari + sisa bulan + status untuk sebuah tanggal kedaluwarsa.
+ * @param {*} expiredAt tanggal kedaluwarsa
+ * @param {*} refDate tanggal acuan (default hari ini)
+ */
+function hitungMasaBerlaku_(expiredAt, refDate) {
+  var exp = toDate_(expiredAt);
+  if (!exp) {
+    return { sisa_hari: '', sisa_bulan: '', status: '', status_label: 'Belum ada tanggal', ada_tanggal: false };
+  }
+  var ref = refDate ? toDate_(refDate) : todayDate_();
+  var sisaHari = Math.round((exp.getTime() - ref.getTime()) / 86400000);
+  var sisaBulan = Math.round((sisaHari / 30) * 10) / 10;
+  var def = statusDariSisaHari_(sisaHari);
+  return {
+    sisa_hari: sisaHari,
+    sisa_bulan: sisaBulan,
+    status: def ? def.key : '',
+    status_label: def ? def.label : '',
+    status_tone: def ? def.tone : 'gray',
+    ada_tanggal: true,
+    expired_at: fmtDate_(exp, 'yyyy-MM-dd')
+  };
+}
+
+/**
+ * Hitung expired_at otomatis = End_pelaksanaan + masa berlaku.
+ * @param {*} endPelaksanaan
+ * @param {number} masaBulan
+ */
+function deriveExpiredAt_(endPelaksanaan, masaBulan) {
+  var dasar = toDate_(endPelaksanaan);
+  if (!dasar) return null;
+  var bulan = Number(masaBulan);
+  if (isNaN(bulan) || bulan <= 0) bulan = getConfigNum_('masa_berlaku_default_bulan', 36);
+  return addMonths_(dasar, bulan);
+}
+
+/**
+ * Tebak masa berlaku (bulan) dari nama sertifikasi.
+ * Sebagian sertifikasi berlaku 5 tahun (lihat Config
+ * `masa_berlaku_5_tahun_kata_kunci`), sisanya default 36 bulan.
+ */
+function masaBerlakuDariNama_(namaSertifikasi) {
+  var def = getConfigNum_('masa_berlaku_default_bulan', 36);
+
+  // 1. cek master jenis sertifikasi
+  try {
+    var master = findCertType_(namaSertifikasi);
+    if (master && Number(master.Masa_berlaku_bulan) > 0) return Number(master.Masa_berlaku_bulan);
+  } catch (e) { }
+
+  // 2. cek kata kunci 5 tahun
+  var kunci = String(getConfig_('masa_berlaku_5_tahun_kata_kunci') || '').split(',');
+  var nama = String(namaSertifikasi || '').toLowerCase();
+  for (var i = 0; i < kunci.length; i++) {
+    var k = String(kunci[i]).trim().toLowerCase();
+    if (k && nama.indexOf(k) !== -1) return 60;
+  }
+  return def;
+}
+
+/** Susun ulang kolom turunan (sisa hari/bulan/status) untuk sebuah objek file. */
+function lengkapiKolomHitung_(obj, refDate) {
+  var hit = hitungMasaBerlaku_(obj.Expired_at, refDate);
+  obj.Sisa_masa_berlaku_day = hit.ada_tanggal ? hit.sisa_hari : '';
+  obj.Sisa_masa_berlaku_by_month = hit.ada_tanggal ? hit.sisa_bulan : '';
+  obj.Status = hit.status;
+  return obj;
+}
+
+/** Hitung ulang SELURUH baris Master_File. */
+function recalcAllStatus_() {
+  var sh = getSheet_('Master_File');
+  if (!sh || sh.getLastRow() < 2) return { ok: true, total: 0, diubah: 0 };
+
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  var iExp = header.indexOf('Expired_at');
+  var iDay = header.indexOf('Sisa_masa_berlaku_day');
+  var iMon = header.indexOf('Sisa_masa_berlaku_by_month');
+  var iSta = header.indexOf('Status');
+  if (iExp === -1 || iDay === -1 || iSta === -1) {
+    throw new Error('Kolom Master_File tidak lengkap (butuh Expired_at, Sisa_masa_berlaku_day, Status).');
+  }
+
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  var out = [];
+  var diubah = 0;
+  for (var r = 0; r < vals.length; r++) {
+    var exp = vals[r][iExp];
+    var hit = hitungMasaBerlaku_(exp);
+    var baru = vals[r].slice();
+    var nDay = hit.ada_tanggal ? hit.sisa_hari : '';
+    var nMon = hit.ada_tanggal ? hit.sisa_bulan : '';
+    var nSta = hit.status;
+    if (String(vals[r][iDay]) !== String(nDay) || String(vals[r][iMon]) !== String(nMon)
+      || String(vals[r][iSta]) !== String(nSta)) diubah++;
+    baru[iDay] = nDay;
+    if (iMon !== -1) baru[iMon] = nMon;
+    baru[iSta] = nSta;
+    out.push(baru);
+  }
+  if (out.length) sh.getRange(2, 1, out.length, out[0].length).setValues(out);
+  return { ok: true, total: out.length, diubah: diubah, pada: nowStr_() };
+}
+
+// ============================================================================
+// 2. AUTENTIKASI & SESI
+// ============================================================================
+
+/** Bungkus hasil endpoint menjadi { ok, data } / { ok, error }. */
+function apiGuard_(fn) {
+  try {
+    return apiSuccess(fn());
+  } catch (e) {
+    return apiError(e);
+  }
+}
+
+function authError_(msg) {
+  var e = new Error(msg || 'Sesi tidak valid. Silakan login kembali.');
+  e.code = 'AUTH';
+  return e;
+}
+
+function cariUser_(employeeCode) {
+  var row = findRowByCol_('Master_User', 'Employee_code', employeeCode);
+  if (row === -1) return null;
+  return rowToObject_('Master_User', row);
+}
+
+function cariUserByUsername_(username) {
+  var target = String(username || '').trim().toLowerCase();
+  if (!target) return null;
+  var semua = sheetToObjects_('Master_User');
+  for (var i = 0; i < semua.length; i++) {
+    if (String(semua[i].Username || '').trim().toLowerCase() === target) return semua[i];
+    // username lama yang mungkin masih memakai email
+    if (String(semua[i].Email_Perusahaan || '').trim().toLowerCase() === target) return semua[i];
+  }
+  return null;
+}
+
+function userExists_(employeeCode) {
+  return findRowByCol_('Master_User', 'Employee_code', employeeCode) !== -1;
+}
+
+function findUserByUsername_(username) { return cariUserByUsername_(username); }
+
+/** Buang kolom sensitif sebelum dikirim ke frontend. */
+function userPublic_(u) {
+  if (!u) return null;
+  return {
+    employee_code: String(u.Employee_code || ''),
+    nama_lengkap: String(u.Nama_Lengkap || ''),
+    username: String(u.Username || ''),
+    role: String(u.Role || 'EMP'),
+    role_label: ROLE_LABEL_[String(u.Role || 'EMP')] || 'Employee',
+    email_perusahaan: String(u.Email_Perusahaan || ''),
+    email_pribadi: String(u.Email_Pribadi || ''),
+    nama_depan: String(u.Nama_Depan || ''),
+    divisi: String(u.Divisi || ''),
+    jabatan: String(u.Jabatan || ''),
+    lokasi_kerja: String(u.Lokasi_Kerja || ''),
+    no_hp: String(u.No_HP || ''),
+    email_atasan: String(u.Email_Atasan || ''),
+    status: String(u.Status || 'ACTIVE'),
+    must_change_password: String(u.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE',
+    login_terakhir: u.Login_Terakhir ? String(u.Login_Terakhir) : '',
+    created_at: u.Created_At ? String(u.Created_At) : '',
+    inisial: inisial_(u.Nama_Lengkap)
+  };
+}
+
+function inisial_(nama) {
+  var bagian = String(nama || '').trim().split(/\s+/).filter(function (x) { return x; });
+  if (!bagian.length) return '?';
+  if (bagian.length === 1) return bagian[0].substring(0, 2).toUpperCase();
+  return (bagian[0].charAt(0) + bagian[1].charAt(0)).toUpperCase();
+}
+
+// ---------- login ----------
+
+function apiLogin(username, password) {
+  return apiGuard_(function () {
+    var uname = String(username || '').trim();
+    var pass = String(password || '');
+    if (!uname || !pass) throw new Error('Username dan password wajib diisi.');
+
+    var u = cariUserByUsername_(uname);
+    if (!u) throw new Error('Username tidak ditemukan. Gunakan nama depan Anda.');
+
+    // ----- kunci sementara -----
+    var terkunci = toDateTime_(u.Terkunci_Sampai);
+    if (terkunci && terkunci.getTime() > Date.now()) {
+      throw new Error('Akun terkunci sementara sampai ' + fmtDate_(terkunci, 'dd MMM yyyy HH:mm')
+        + ' karena percobaan login gagal berulang.');
+    }
+
+    if (String(u.Status || 'ACTIVE').toUpperCase() !== 'ACTIVE') {
+      throw new Error('Akun Anda tidak aktif. Hubungi Human Capital.');
+    }
+
+    // ----- verifikasi password -----
+    if (!verifyPassword_(pass, u.Password)) {
+      var gagal = (Number(u.Gagal_Login) || 0) + 1;
+      var patch = { Gagal_Login: gagal };
+      var maxGagal = getConfigNum_('login_max_percobaan', 5);
+      if (maxGagal > 0 && gagal >= maxGagal) {
+        var sampai = new Date(Date.now() + getConfigNum_('login_lock_menit', 15) * 60000);
+        patch.Terkunci_Sampai = fmtDate_(sampai, 'yyyy-MM-dd HH:mm:ss');
+        patch.Gagal_Login = 0;
+      }
+      updateRowByCol_('Master_User', u.__row, patch);
+      logAudit_(u.Employee_code, u.Username, u.Role, 'LOGIN_GAGAL', 'USER', u.Employee_code, 'password salah');
+      throw new Error('Password salah. Password awal Anda adalah Employee Code (contoh: 4122196-C).');
+    }
+
+    // ----- upgrade hash bila masih plaintext -----
+    if (!isHashed_(u.Password)) {
+      updateRowByCol_('Master_User', u.__row, { Password: hashPassword_(pass) });
+    }
+
+    updateRowByCol_('Master_User', u.__row, {
+      Gagal_Login: 0,
+      Terkunci_Sampai: '',
+      Login_Terakhir: nowStr_()
+    });
+
+    var session = buatSesi_(u);
+    logAudit_(u.Employee_code, u.Username, u.Role, 'LOGIN', 'USER', u.Employee_code, 'berhasil');
+
+    return {
+      token: session.Token,
+      valid_until: session.Valid_Until,
+      user: userPublic_(u),
+      must_change_password: String(u.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE'
+    };
+  });
+}
+
+function buatSesi_(u) {
+  var jam = getConfigNum_('auth_session_jam', 10);
+  var valid = new Date(Date.now() + jam * 3600000);
+  var token = Utilities.getUuid().replace(/-/g, '') + uuid6_();
+  appendObject_('Session_Token', {
+    Token: token,
+    Employee_code: String(u.Employee_code || ''),
+    Username: String(u.Username || ''),
+    Role: String(u.Role || 'EMP'),
+    Valid_Until: fmtDate_(valid, 'yyyy-MM-dd HH:mm:ss'),
+    Status: 'ACTIVE',
+    User_Agent: '',
+    Created_At: nowStr_(),
+    Invalidated_At: ''
+  });
+  return { Token: token, Valid_Until: fmtDate_(valid, 'yyyy-MM-dd HH:mm:ss') };
+}
+
+/**
+ * Validasi token. Mengembalikan objek auth atau melempar error.
+ * @return {Object} { employee_code, username, role, nama, email, user }
+ */
+function requireAuth_(token) {
+  var t = String(token || '').trim();
+  if (!t) throw authError_('Anda belum login.');
+
+  var sesi = null;
+  try {
+    var row = findRowByCol_('Session_Token', 'Token', t);
+    if (row !== -1) sesi = rowToObject_('Session_Token', row);
+  } catch (e) { sesi = null; }
+
+  if (!sesi) throw authError_('Sesi tidak ditemukan. Silakan login kembali.');
+  if (String(sesi.Status || '').toUpperCase() !== 'ACTIVE') throw authError_('Sesi sudah berakhir. Silakan login kembali.');
+
+  var valid = toDateTime_(sesi.Valid_Until);
+  if (valid && valid.getTime() < Date.now()) {
+    try { updateRowByCol_('Session_Token', sesi.__row, { Status: 'EXPIRED' }); } catch (e) { }
+    throw authError_('Sesi sudah kedaluwarsa. Silakan login kembali.');
+  }
+
+  var u = cariUser_(sesi.Employee_code);
+  if (!u) throw authError_('Akun tidak ditemukan. Hubungi Human Capital.');
+  if (String(u.Status || 'ACTIVE').toUpperCase() !== 'ACTIVE') throw authError_('Akun Anda tidak aktif.');
+
+  return {
+    employee_code: String(u.Employee_code || ''),
+    username: String(u.Username || ''),
+    role: String(u.Role || 'EMP'),
+    nama: String(u.Nama_Lengkap || ''),
+    email: String(u.Email_Perusahaan || ''),
+    user: u,
+    sesi: sesi
+  };
+}
+
+/** Validasi token + pastikan role termasuk daftar yang diizinkan. */
+function requireRole_(token, roles) {
+  var auth = requireAuth_(token);
+  if (roles && roles.length && roles.indexOf(auth.role) === -1) {
+    var e = new Error('Anda tidak punya hak akses untuk tindakan ini.');
+    e.code = 'FORBIDDEN';
+    throw e;
+  }
+  return auth;
+}
+
+/** HC & Super Admin. */
+function requireHc_(token) { return requireRole_(token, ['HC', 'SA']); }
+
+function apiGetSession(token) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    return {
+      user: userPublic_(auth.user),
+      role: auth.role,
+      valid_until: auth.sesi.Valid_Until,
+      must_change_password: String(auth.user.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE'
+    };
+  });
+}
+
+function apiLogout(token) {
+  return apiGuard_(function () {
+    var t = String(token || '').trim();
+    if (!t) return { ok: true };
+    var row = findRowByCol_('Session_Token', 'Token', t);
+    if (row !== -1) {
+      var sesi = rowToObject_('Session_Token', row);
+      updateRowByCol_('Session_Token', row, { Status: 'LOGOUT', Invalidated_At: nowStr_() });
+      logAudit_(sesi.Employee_code, sesi.Username, sesi.Role, 'LOGOUT', 'USER', sesi.Employee_code, '');
+    }
+    return { ok: true };
+  });
+}
+
+/**
+ * Batalkan sesi aktif.
+ * @param {string} employeeCode kosong ('') = SELURUH user
+ * @param {string=} kecualiToken token yang dipertahankan
+ */
+function cabutSemuaSesi_(employeeCode, kecualiToken) {
+  var semua = sheetToObjects_('Session_Token');
+  var n = 0;
+  var semuaUser = !employeeCode;
+  semua.forEach(function (s) {
+    if (!semuaUser && String(s.Employee_code) !== String(employeeCode)) return;
+    if (kecualiToken && String(s.Token) === String(kecualiToken)) return;
+    if (String(s.Status).toUpperCase() !== 'ACTIVE') return;
+    try { updateRowByCol_('Session_Token', s.__row, { Status: 'REVOKED', Invalidated_At: nowStr_() }); n++; } catch (e) { }
+  });
+  return n;
+}
+
+// ---------- ganti username & password ----------
+
+function apiChangeUsername(token, usernameBaru, passwordSaatIni) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var baru = slugUsername_(usernameBaru);
+    if (!baru || baru.length < 3) throw new Error('Username minimal 3 karakter (huruf, angka, titik, garis bawah).');
+    if (baru.length > 40) throw new Error('Username maksimal 40 karakter.');
+    if (!verifyPassword_(passwordSaatIni, auth.user.Password)) throw new Error('Password saat ini salah.');
+
+    var dipakai = cariUserByUsername_(baru);
+    if (dipakai && String(dipakai.Employee_code) !== String(auth.employee_code)) {
+      throw new Error('Username "' + baru + '" sudah dipakai. Pilih yang lain.');
+    }
+
+    var lama = String(auth.user.Username || '');
+    updateRowByCol_('Master_User', auth.user.__row, { Username: baru, Updated_At: nowStr_() });
+    // sesi aktif tetap dipakai, hanya perbarui nama username di sesi
+    try {
+      if (auth.sesi && auth.sesi.__row) updateRowByCol_('Session_Token', auth.sesi.__row, { Username: baru });
+    } catch (e) { }
+    logAudit_(auth.employee_code, baru, auth.role, 'GANTI_USERNAME', 'USER', auth.employee_code, lama + ' -> ' + baru);
+
+    var u = cariUser_(auth.employee_code);
+    return { user: userPublic_(u), username_lama: lama, username_baru: baru };
+  });
+}
+
+function apiChangePassword(token, passwordLama, passwordBaru, konfirmasi) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var baru = String(passwordBaru || '');
+    if (!baru || baru.length < 6) throw new Error('Password baru minimal 6 karakter.');
+    if (baru !== String(konfirmasi || '')) throw new Error('Konfirmasi password tidak sama.');
+    if (!verifyPassword_(passwordLama, auth.user.Password)) throw new Error('Password saat ini salah.');
+    if (baru === String(passwordLama)) throw new Error('Password baru tidak boleh sama dengan password lama.');
+
+    updateRowByCol_('Master_User', auth.user.__row, {
+      Password: hashPassword_(baru),
+      Must_Change_Password: 'FALSE',
+      Updated_At: nowStr_()
+    });
+
+    var dicabut = cabutSemuaSesi_(auth.employee_code, token);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'GANTI_PASSWORD', 'USER', auth.employee_code,
+      'sesi lain dicabut: ' + dicabut);
+    return { ok: true, sesi_lain_dicabut: dicabut };
+  });
+}
+
+/** Update data profil sendiri (kolom yang boleh diubah karyawan). */
+function apiUpdateMyProfile(token, data) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var d = data || {};
+    var patch = { Updated_At: nowStr_() };
+
+    if (d.no_hp !== undefined) patch.No_HP = String(d.no_hp || '').trim();
+    if (d.email_pribadi !== undefined) {
+      var ep = String(d.email_pribadi || '').trim();
+      if (ep && !isEmail_(ep)) throw new Error('Format email pribadi tidak valid.');
+      patch.Email_Pribadi = ep;
+    }
+    if (d.email_atasan !== undefined) {
+      var ea = String(d.email_atasan || '').trim();
+      if (ea && !isEmail_(ea)) throw new Error('Format email atasan tidak valid.');
+      patch.Email_Atasan = ea;
+    }
+    // jabatan/divisi/lokasi hanya HC & SA
+    if (auth.role === 'HC' || auth.role === 'SA') {
+      if (d.jabatan !== undefined) patch.Jabatan = String(d.jabatan || '').trim();
+      if (d.divisi !== undefined) patch.Divisi = String(d.divisi || '').trim();
+      if (d.lokasi_kerja !== undefined) patch.Lokasi_Kerja = String(d.lokasi_kerja || '').trim();
+      if (d.nama_lengkap !== undefined) patch.Nama_Lengkap = String(d.nama_lengkap || '').trim();
+      if (d.email_perusahaan !== undefined) {
+        var epr = String(d.email_perusahaan || '').trim();
+        if (epr && !isEmail_(epr)) throw new Error('Format email perusahaan tidak valid.');
+        patch.Email_Perusahaan = epr;
+      }
+    }
+
+    updateRowByCol_('Master_User', auth.user.__row, patch);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'UPDATE_PROFIL_SENDIRI', 'USER', auth.employee_code, patch);
+    return { user: userPublic_(cariUser_(auth.employee_code)) };
+  });
+}
+
+/** Karyawan melengkapi profil (dipakai halaman Profil User). */
+function apiUpdateProfilSaya(token, data) { return apiUpdateMyProfile(token, data); }
+
+// ============================================================================
+// 3. MASTER USER
+// ============================================================================
+
+function apiListUsers(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireRole_(token, ['HC', 'SA']);
+    var f = filter || {};
+    var q = String(f.q || '').trim().toLowerCase();
+    var users = sheetToObjects_('Master_User');
+
+    var hasil = users.filter(function (u) {
+      if (f.role && String(u.Role) !== String(f.role)) return false;
+      if (f.divisi && String(u.Divisi) !== String(f.divisi)) return false;
+      if (f.status && String(u.Status).toUpperCase() !== String(f.status).toUpperCase()) return false;
+      if (q) {
+        var gab = [u.Employee_code, u.Nama_Lengkap, u.Username, u.Email_Perusahaan, u.Email_Pribadi,
+          u.Jabatan, u.Divisi].join(' ').toLowerCase();
+        if (gab.indexOf(q) === -1) return false;
+      }
+      return true;
+    }).map(function (u) {
+      var p = userPublic_(u);
+      return p;
+    });
+
+    hasil.sort(function (a, b) { return a.nama_lengkap.localeCompare(b.nama_lengkap); });
+
+    // lampirkan jumlah sertifikasi
+    var jumlah = {};
+    sheetToObjects_('Master_File').forEach(function (f2) {
+      var k = String(f2.Employee_id || '');
+      jumlah[k] = (jumlah[k] || 0) + 1;
+    });
+    hasil.forEach(function (h) { h.jumlah_sertifikasi = jumlah[h.employee_code] || 0; });
+
+    return { rows: hasil, total: hasil.length };
+  });
+}
+
+function apiGetUser(token, employeeCode) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var code = String(employeeCode || auth.employee_code);
+    if (code !== auth.employee_code && auth.role === 'EMP') {
+      throw new Error('Anda hanya dapat melihat profil sendiri.');
+    }
+    var u = cariUser_(code);
+    if (!u) throw new Error('User dengan Employee Code ' + code + ' tidak ditemukan.');
+    return { user: userPublic_(u) };
+  });
+}
+
+/**
+ * Simpan user (buat baru atau perbarui).
+ * @param {Object} data field sesuai skema Master_User (camelCase diizinkan)
+ */
+function apiSaveUser(token, data) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var d = data || {};
+    var code = String(d.employee_code || d.Employee_code || '').trim();
+    if (!code) throw new Error('Employee Code wajib diisi.');
+    if (String(d.role || d.Role || '').toUpperCase() === 'SA' && auth.role !== 'SA') {
+      throw new Error('Hanya Super Admin yang boleh membuat/mengubah akun Super Admin.');
+    }
+
+    var nama = String(d.nama_lengkap || d.Nama_Lengkap || '').trim();
+    if (!nama) throw new Error('Nama lengkap wajib diisi.');
+
+    var role = String(d.role || d.Role || 'EMP').toUpperCase();
+    if (['SA', 'HC', 'EMP'].indexOf(role) === -1) role = 'EMP';
+
+    var emailPerusahaan = String(d.email_perusahaan || d.Email_Perusahaan || '').trim();
+    if (emailPerusahaan && !isEmail_(emailPerusahaan)) throw new Error('Format email perusahaan tidak valid.');
+    var emailPribadi = String(d.email_pribadi || d.Email_Pribadi || '').trim();
+    if (emailPribadi && !isEmail_(emailPribadi)) throw new Error('Format email pribadi tidak valid.');
+    var emailAtasan = String(d.email_atasan || d.Email_Atasan || '').trim();
+    if (emailAtasan && !isEmail_(emailAtasan)) throw new Error('Format email atasan tidak valid.');
+
+    var row = findRowByCol_('Master_User', 'Employee_code', code);
+    var isBaru = row === -1;
+
+    // ---- username ----
+    var username = slugUsername_(String(d.username || ''));
+    if (!username) username = namaDepan_(nama) || slugUsername_(code);
+    if (username.length < 3) username = slugUsername_(code) || ('user' + code.toLowerCase());
+    var bentrok = cariUserByUsername_(username);
+    if (bentrok && String(bentrok.Employee_code) !== code) {
+      if (getConfigBool_('username_prefix_duplikat', true)) {
+        username = username + String(code).toLowerCase().replace(/[^a-z0-9]/g, '');
+        var bentrok2 = cariUserByUsername_(username);
+        if (bentrok2 && String(bentrok2.Employee_code) !== code) {
+          throw new Error('Username "' + d.username + '" sudah dipakai. Tentukan username lain.');
+        }
+      } else {
+        throw new Error('Username "' + username + '" sudah dipakai. Tentukan username lain.');
+      }
+    }
+
+    var obj = {
+      Employee_code: code,
+      Nama_Lengkap: nama,
+      Username: username,
+      Nama_Depan: namaDepan_(nama),
+      Role: role,
+      Email_Perusahaan: emailPerusahaan,
+      Email_Pribadi: emailPribadi,
+      Divisi: String(d.divisi || d.Divisi || '').trim(),
+      Jabatan: String(d.jabatan || d.Jabatan || '').trim(),
+      Lokasi_Kerja: String(d.lokasi_kerja || d.Lokasi_Kerja || getConfig_('unit_default') || 'Patuha').trim(),
+      No_HP: String(d.no_hp || d.No_HP || '').trim(),
+      Email_Atasan: emailAtasan,
+      Status: String(d.status || d.Status || 'ACTIVE').toUpperCase(),
+      Updated_At: nowStr_()
+    };
+    if (['ACTIVE', 'INACTIVE'].indexOf(obj.Status) === -1) obj.Status = 'ACTIVE';
+
+    if (isBaru) {
+      obj.Password = hashPassword_(code); // password awal = Employee Code
+      obj.Must_Change_Password = String(getConfigBool_('password_wajib_ganti_default', false)).toUpperCase();
+      obj.Login_Terakhir = '';
+      obj.Gagal_Login = 0;
+      obj.Terkunci_Sampai = '';
+      obj.Created_At = nowStr_();
+      obj.Created_By = auth.employee_code;
+      appendObject_('Master_User', obj);
+      logAudit_(auth.employee_code, auth.username, auth.role, 'TAMBAH_USER', 'USER', code, obj);
+      return { mode: 'insert', employee_code: code, username: username, password_awal: code };
+    }
+
+    // password opsional saat update
+    var passBaru = String(d.password || '');
+    if (passBaru) obj.Password = hashPassword_(passBaru);
+    updateRowByCol_('Master_User', row, obj);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'UBAH_USER', 'USER', code, obj);
+    return { mode: 'update', employee_code: code, username: username };
+  });
+}
+
+function apiDeleteUser(token, employeeCode) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var code = String(employeeCode || '').trim();
+    if (!code) throw new Error('Employee Code wajib diisi.');
+    if (code === auth.employee_code) throw new Error('Anda tidak bisa menghapus akun sendiri.');
+
+    var punya = sheetToObjects_('Master_File').filter(function (f) {
+      return String(f.Employee_id) === code;
+    });
+    if (punya.length) {
+      throw new Error('User ini masih punya ' + punya.length + ' data sertifikasi. '
+        + 'Hapus/pindahkan data tersebut lebih dulu, atau ubah statusnya menjadi INACTIVE.');
+    }
+    var target = cariUser_(code);
+    if (!target) throw new Error('User tidak ditemukan.');
+    if (String(target.Role) === 'SA' && auth.role !== 'SA') throw new Error('Hanya Super Admin yang boleh menghapus Super Admin.');
+
+    var n = cabutSemuaSesi_(code, null);
+    var ok = deleteRowByCol_('Master_User', 'Employee_code', code);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'HAPUS_USER', 'USER', code, 'sesi dicabut: ' + n);
+    return { ok: ok, employee_code: code };
+  });
+}
+
+/** Reset password user menjadi Employee Code-nya. */
+function apiResetPassword(token, employeeCode) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var code = String(employeeCode || '').trim();
+    var u = cariUser_(code);
+    if (!u) throw new Error('User tidak ditemukan.');
+    if (String(u.Role) === 'SA' && auth.role !== 'SA') throw new Error('Hanya Super Admin yang boleh reset password Super Admin.');
+
+    updateRowByCol_('Master_User', u.__row, {
+      Password: hashPassword_(code),
+      Must_Change_Password: 'TRUE',
+      Gagal_Login: 0,
+      Terkunci_Sampai: '',
+      Updated_At: nowStr_()
+    });
+    cabutSemuaSesi_(code, null);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'RESET_PASSWORD', 'USER', code, 'di-reset ke Employee Code');
+    return { employee_code: code, password_awal: code };
+  });
+}
+
+/**
+ * Buat akun otomatis untuk setiap Employee_id di Master_File yang belum punya
+ * akun di Master_User. Dipakai saat migrasi data lama.
+ */
+function syncUsersFromFiles_(actorCode) {
+  var files = sheetToObjects_('Master_File');
+  var hasil = { dibuat: 0, dilewati: 0, daftar: [], errors: [] };
+  var sudah = {};
+
+  sheetToObjects_('Master_User').forEach(function (u) { sudah[String(u.Employee_code)] = true; });
+
+  var kodeUnik = uniq_(files.map(function (f) { return String(f.Employee_id || '').trim(); })
+    .filter(function (x) { return x; }));
+
+  kodeUnik.forEach(function (kode) {
+    if (sudah[kode]) { hasil.dilewati++; return; }
+    try {
+      // Master_File tidak menyimpan nama pemegang, jadi akun dibuat dengan
+      // nama sementara = Employee Code. HC melengkapi namanya di Master User.
+      var nama = kode;
+      var username = namaDepan_(nama) || slugUsername_(kode);
+      if (cariUserByUsername_(username)) username = username + String(kode).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (cariUserByUsername_(username)) username = 'user' + String(kode).toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      appendObject_('Master_User', {
+        Employee_code: kode,
+        Nama_Lengkap: nama,
+        Username: username,
+        Password: hashPassword_(kode),
+        Role: 'EMP',
+        Email_Perusahaan: '',
+        Email_Pribadi: '',
+        Nama_Depan: namaDepan_(nama),
+        Divisi: '',
+        Jabatan: '',
+        Lokasi_Kerja: getConfig_('unit_default') || 'Patuha',
+        No_HP: '',
+        Email_Atasan: '',
+        Status: 'ACTIVE',
+        Must_Change_Password: 'TRUE',
+        Login_Terakhir: '',
+        Gagal_Login: 0,
+        Terkunci_Sampai: '',
+        Created_At: nowStr_(),
+        Updated_At: nowStr_(),
+        Created_By: actorCode || 'SYSTEM'
+      });
+      sudah[kode] = true;
+      hasil.dibuat++;
+      hasil.daftar.push(kode + ' -> ' + username);
+    } catch (e) {
+      hasil.errors.push(kode + ': ' + errMsg_(e));
+    }
+  });
+
+  logAudit_(actorCode || 'SYSTEM', 'system', 'SYSTEM', 'SINKRON_USER', 'USER', '-',
+    'dibuat ' + hasil.dibuat + ', dilewati ' + hasil.dilewati);
+  return hasil;
+}
+
+function apiSyncUsersFromFiles(token) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    return syncUsersFromFiles_(auth.employee_code);
+  });
+}
+
+/**
+ * Impor user massal dari tempelan teks.
+ * Format tiap baris: Employee_code ; Nama Lengkap ; Email Perusahaan ; Divisi ; Jabatan ; Role
+ * (hanya kolom pertama yang wajib)
+ */
+function apiImportUsers(token, teks, opsi) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var o = opsi || {};
+    var baris = String(teks || '').split(/\r?\n/);
+    var hasil = { dibuat: 0, diperbarui: 0, gagal: 0, pesan: [] };
+
+    baris.forEach(function (line, idx) {
+      var s = String(line).trim();
+      if (!s) return;
+      if (idx === 0 && /employee[_ ]?code/i.test(s)) return; // header
+      var kol = s.split(/\s*[;|\t]\s*/);
+      var kode = String(kol[0] || '').trim();
+      if (!kode) return;
+      if (!/^[A-Za-z0-9\-_/.]+$/.test(kode)) { hasil.gagal++; hasil.pesan.push('Baris ' + (idx + 1) + ': kode tidak valid'); return; }
+
+      var row = findRowByCol_('Master_User', 'Employee_code', kode);
+      var adaSebelumnya = row !== -1;
+      try {
+        var nama = String(kol[1] || kode).trim();
+        if (!nama) nama = kode;
+        var data = {
+          employee_code: kode,
+          nama_lengkap: nama,
+          email_perusahaan: String(kol[2] || '').trim(),
+          divisi: String(kol[3] || '').trim(),
+          jabatan: String(kol[4] || '').trim(),
+          role: String(kol[5] || 'EMP').trim().toUpperCase() || 'EMP',
+          status: 'ACTIVE'
+        };
+        if (!o.ganti_nama && adaSebelumnya) {
+          // mode aman: hanya lengkapi kolom yang kosong
+          var lama = cariUser_(kode);
+          data.nama_lengkap = String(lama.Nama_Lengkap || '') || nama;
+          data.email_perusahaan = String(lama.Email_Perusahaan || '') || data.email_perusahaan;
+          data.divisi = String(lama.Divisi || '') || data.divisi;
+          data.jabatan = String(lama.Jabatan || '') || data.jabatan;
+          data.role = String(lama.Role || 'EMP');
+        }
+        // panggil logika simpan tanpa guard token lagi
+        simpanUserInternal_(auth, data);
+        if (adaSebelumnya) hasil.diperbarui++; else hasil.dibuat++;
+      } catch (e) {
+        hasil.gagal++;
+        hasil.pesan.push('Baris ' + (idx + 1) + ' (' + kode + '): ' + errMsg_(e));
+      }
+    });
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'IMPOR_USER', 'USER', '-',
+      'dibuat ' + hasil.dibuat + ', diperbarui ' + hasil.diperbarui + ', gagal ' + hasil.gagal);
+    return hasil;
+  });
+}
+
+/** Inti penyimpanan user dipakai apiSaveUser & apiImportUsers. */
+function simpanUserInternal_(auth, data) {
+  var d = data || {};
+  var code = String(d.employee_code || '').trim();
+  if (!code) throw new Error('Employee Code wajib diisi.');
+  var nama = String(d.nama_lengkap || code).trim();
+  var role = String(d.role || 'EMP').toUpperCase();
+  if (['SA', 'HC', 'EMP'].indexOf(role) === -1) role = 'EMP';
+
+  var row = findRowByCol_('Master_User', 'Employee_code', code);
+  var username = slugUsername_(String(d.username || '')) || namaDepan_(nama) || slugUsername_(code);
+  if (username.length < 3) username = slugUsername_(code) || ('user' + code.toLowerCase());
+  var bentrok = cariUserByUsername_(username);
+  if (bentrok && String(bentrok.Employee_code) !== code) {
+    username = username + String(code).toLowerCase().replace(/[^a-z0-9]/g, '');
+    var b2 = cariUserByUsername_(username);
+    if (b2 && String(b2.Employee_code) !== code) username = username + Math.floor(Math.random() * 90 + 10);
+  }
+
+  var obj = {
+    Employee_code: code,
+    Nama_Lengkap: nama,
+    Username: username,
+    Nama_Depan: namaDepan_(nama),
+    Role: role,
+    Email_Perusahaan: String(d.email_perusahaan || '').trim(),
+    Email_Pribadi: String(d.email_pribadi || '').trim(),
+    Divisi: String(d.divisi || '').trim(),
+    Jabatan: String(d.jabatan || '').trim(),
+    Lokasi_Kerja: String(d.lokasi_kerja || getConfig_('unit_default') || 'Patuha').trim(),
+    No_HP: String(d.no_hp || '').trim(),
+    Email_Atasan: String(d.email_atasan || '').trim(),
+    Status: String(d.status || 'ACTIVE').toUpperCase(),
+    Updated_At: nowStr_()
+  };
+  if (['ACTIVE', 'INACTIVE'].indexOf(obj.Status) === -1) obj.Status = 'ACTIVE';
+
+  if (row === -1) {
+    obj.Password = hashPassword_(code);
+    obj.Must_Change_Password = 'TRUE';
+    obj.Login_Terakhir = '';
+    obj.Gagal_Login = 0;
+    obj.Terkunci_Sampai = '';
+    obj.Created_At = nowStr_();
+    obj.Created_By = auth ? auth.employee_code : 'SYSTEM';
+    appendObject_('Master_User', obj);
+    return { mode: 'insert', employee_code: code, username: username };
+  }
+  updateRowByCol_('Master_User', row, obj);
+  return { mode: 'update', employee_code: code, username: username };
+}
+
+// ============================================================================
+// 4. MASTER SERTIFIKASI (jenis + masa berlaku)
+// ============================================================================
+
+function apiListCertTypes(token, filter) {
+  return apiGuard_(function () {
+    var f = filter || {};
+    var q = String(f.q || '').trim().toLowerCase();
+    var rows = sheetToObjects_('Master_Sertifikasi').filter(function (c) {
+      if (f.aktif_only && String(c.Aktif).toUpperCase() !== 'TRUE') return false;
+      if (f.kategori && String(c.Kategori) !== String(f.kategori)) return false;
+      if (q && String(c.Nama_Sertifikasi).toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    }).map(function (c) {
+      return {
+        cert_id: String(c.Cert_id || ''),
+        nama: String(c.Nama_Sertifikasi || ''),
+        kategori: String(c.Kategori || ''),
+        masa_berlaku_bulan: Number(c.Masa_berlaku_bulan) || 0,
+        penerbit: String(c.Penerbit || ''),
+        aktif: String(c.Aktif || 'TRUE').toUpperCase() === 'TRUE',
+        jumlah_pemegang: Number(c.Jumlah_pemegang) || 0
+      };
+    });
+    rows.sort(function (a, b) { return a.nama.localeCompare(b.nama); });
+    return { rows: rows, total: rows.length };
+  });
+}
+
+function findCertType_(nama) {
+  var target = String(nama || '').trim().toLowerCase();
+  if (!target) return null;
+  var semua = sheetToObjects_('Master_Sertifikasi');
+  for (var i = 0; i < semua.length; i++) {
+    if (String(semua[i].Nama_Sertifikasi || '').trim().toLowerCase() === target) return semua[i];
+  }
+  // pencocokan longgar
+  for (var j = 0; j < semua.length; j++) {
+    var n = String(semua[j].Nama_Sertifikasi || '').trim().toLowerCase();
+    if (n && (target.indexOf(n) !== -1 || n.indexOf(target) !== -1)) return semua[j];
+  }
+  return null;
+}
+
+/**
+ * Simpan jenis sertifikasi (tambah / ubah).
+ * Pencarian baris memakai `cert_id` bila dikirim (sehingga NAMA boleh diganti),
+ * dan jatuh ke pencocokan nama hanya untuk kompatibilitas impor lama.
+ * @param {Object} data { cert_id?, nama, kategori, masa_berlaku_bulan, penerbit, aktif }
+ */
+function apiSaveCertType(token, data) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var d = data || {};
+    var nama = String(d.nama || '').trim();
+    if (!nama) throw new Error('Nama sertifikasi wajib diisi.');
+    var bulan = Number(d.masa_berlaku_bulan) || getConfigNum_('masa_berlaku_default_bulan', 36);
+
+    // ---------- tentukan baris yang diubah ----------
+    var row = -1;
+    var certId = String(d.cert_id || '').trim();
+    if (certId) {
+      row = findRowByCol_('Master_Sertifikasi', 'Cert_id', certId);
+      if (row === -1) throw new Error('Jenis sertifikasi dengan ID ' + certId + ' tidak ditemukan.');
+    } else {
+      row = findRowByCol_('Master_Sertifikasi', 'Nama_Sertifikasi', nama);
+    }
+
+    var obj = {
+      Nama_Sertifikasi: nama,
+      Kategori: String(d.kategori || '').trim(),
+      Masa_berlaku_bulan: bulan,
+      Penerbit: String(d.penerbit || '').trim(),
+      Aktif: (d.aktif === false || String(d.aktif).toUpperCase() === 'FALSE') ? 'FALSE' : 'TRUE',
+      Updated_At: nowStr_()
+    };
+
+    if (row === -1) {
+      // cegah duplikat nama
+      if (findRowByCol_('Master_Sertifikasi', 'Nama_Sertifikasi', nama) !== -1) {
+        throw new Error('Jenis dengan nama "' + nama + '" sudah ada.');
+      }
+      obj.Cert_id = 'CERT-' + pad_(Math.floor(Math.random() * 9000) + 1000, 4);
+      obj.Jumlah_pemegang = 0;
+      obj.Created_At = nowStr_();
+      appendObject_('Master_Sertifikasi', obj);
+      logAudit_(auth.employee_code, auth.username, auth.role, 'TAMBAH_JENIS_SERTIFIKASI', 'CERT', obj.Cert_id, obj);
+      return { mode: 'insert', cert_id: obj.Cert_id, nama: nama };
+    }
+
+    var lama = rowToObject_('Master_Sertifikasi', row);
+    var namaLama = String(lama.Nama_Sertifikasi || '');
+
+    // ---------- ganti nama: ikut perbarui data sertifikasi terkait ----------
+    var dipindahkan = 0;
+    if (namaLama && namaLama.toLowerCase() !== nama.toLowerCase()) {
+      var bentrok = findRowByCol_('Master_Sertifikasi', 'Nama_Sertifikasi', nama);
+      if (bentrok !== -1 && bentrok !== row) {
+        throw new Error('Jenis dengan nama "' + nama + '" sudah ada. Gunakan nama lain.');
+      }
+      dipindahkan = gantiNamaSertifikasiDiFile_(namaLama, nama);
+    }
+
+    updateRowByCol_('Master_Sertifikasi', row, obj);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'UBAH_JENIS_SERTIFIKASI', 'CERT', lama.Cert_id,
+      { baru: obj, nama_lama: namaLama, data_sertifikasi_diperbarui: dipindahkan });
+
+    return {
+      mode: 'update',
+      cert_id: String(lama.Cert_id || ''),
+      nama: nama,
+      nama_lama: namaLama,
+      dipindahkan: dipindahkan
+    };
+  });
+}
+
+/**
+ * Ganti nama sertifikasi pada seluruh baris Master_File (dipakai saat jenis
+ * sertifikasi di-rename) sekaligus menghitung ulang kategori & masa berlakunya.
+ * @return {number} jumlah baris yang diubah
+ */
+function gantiNamaSertifikasiDiFile_(namaLama, namaBaru) {
+  var sh = getSheet_('Master_File');
+  if (!sh || sh.getLastRow() < 2) return 0;
+
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  var iNama = header.indexOf('Nama_Sertifikasi');
+  if (iNama === -1) return 0;
+  var iKategori = header.indexOf('Kategori');
+  var iMasa = header.indexOf('Masa_berlaku_bulan');
+  var iStatus = header.indexOf('Status');
+
+  var jenisBaru = findCertType_(namaBaru);
+  var kategoriBaru = jenisBaru ? String(jenisBaru.Kategori || '') : '';
+  var masaBaru = jenisBaru ? Number(jenisBaru.Masa_berlaku_bulan) || 0 : 0;
+
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  var diubah = 0;
+  var target = String(namaLama).trim().toLowerCase();
+
+  for (var r = 0; r < vals.length; r++) {
+    if (String(vals[r][iNama] || '').trim().toLowerCase() !== target) continue;
+    vals[r][iNama] = namaBaru;
+    if (iKategori !== -1 && kategoriBaru) vals[r][iKategori] = kategoriBaru;
+    if (iMasa !== -1 && masaBaru > 0) vals[r][iMasa] = masaBaru;
+    var hit = hitungMasaBerlaku_(vals[r][header.indexOf('Expired_at')]);
+    if (hit.ada_tanggal) {
+      vals[r][header.indexOf('Sisa_masa_berlaku_day')] = hit.sisa_hari;
+      if (header.indexOf('Sisa_masa_berlaku_by_month') !== -1) {
+        vals[r][header.indexOf('Sisa_masa_berlaku_by_month')] = hit.sisa_bulan;
+      }
+      if (iStatus !== -1) vals[r][iStatus] = hit.status;
+    }
+    diubah++;
+  }
+  if (diubah) sh.getRange(2, 1, vals.length, vals[0].length).setValues(vals);
+  return diubah;
+}
+
+function apiDeleteCertType(token, certId) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var id = String(certId || '').trim();
+    var row = findRowByCol_('Master_Sertifikasi', 'Cert_id', id);
+    if (row === -1) throw new Error('Jenis sertifikasi tidak ditemukan.');
+    var c = rowToObject_('Master_Sertifikasi', row);
+    var dipakai = sheetToObjects_('Master_File').filter(function (f) {
+      return String(f.Nama_Sertifikasi).toLowerCase() === String(c.Nama_Sertifikasi).toLowerCase();
+    }).length;
+    if (dipakai) {
+      throw new Error('Jenis ini dipakai oleh ' + dipakai + ' data sertifikasi. Nonaktifkan saja (Aktif = FALSE).');
+    }
+    deleteRowByCol_('Master_Sertifikasi', 'Cert_id', id);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'HAPUS_JENIS_SERTIFIKASI', 'CERT', id, c.Nama_Sertifikasi);
+    return { ok: true };
+  });
+}
+
+/** Hitung ulang jumlah pemegang tiap jenis sertifikasi. */
+function updateJumlahPemegang_() {
+  var sh = getSheet_('Master_Sertifikasi');
+  if (!sh || sh.getLastRow() < 2) return { ok: true, diubah: 0 };
+  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  var iNama = header.indexOf('Nama_Sertifikasi');
+  var iJml = header.indexOf('Jumlah_pemegang');
+  if (iNama === -1 || iJml === -1) return { ok: true, diubah: 0 };
+
+  var hitung = {};
+  sheetToObjects_('Master_File').forEach(function (f) {
+    var k = String(f.Nama_Sertifikasi || '').trim().toLowerCase();
+    if (k) hitung[k] = (hitung[k] || 0) + 1;
+  });
+
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues();
+  var out = vals.map(function (r) {
+    var k = String(r[iNama] || '').trim().toLowerCase();
+    r[iJml] = hitung[k] || 0;
+    return r;
+  });
+  if (out.length) sh.getRange(2, 1, out.length, out[0].length).setValues(out);
+  return { ok: true, diubah: out.length };
+}
+
+// ============================================================================
+// 5. MASTER FILE (data sertifikasi)
+// ============================================================================
+
+function kodeAksesFile_(auth, fileObj) {
+  if (!auth) return false;
+  if (auth.role === 'HC' || auth.role === 'SA') return true;
+  return String(fileObj.Employee_id) === String(auth.employee_code);
+}
+
+/** Ubah baris Master_File menjadi objek siap-pakai frontend. */
+function fileDto_(f, petaUser) {
+  var u = petaUser ? petaUser[String(f.Employee_id)] : null;
+  var hit = hitungMasaBerlaku_(f.Expired_at);
+  var def = hit.status ? STATUS_MAP_[hit.status] : null;
+  var ext = extFromName_(f.File_name);
+  var fileId = String(f.File_id || '');
+  return {
+    doc_id: String(f.Doc_id || ''),
+    employee_id: String(f.Employee_id || ''),
+    nama_pemegang: u ? String(u.Nama_Lengkap || '') : '',
+    username: u ? String(u.Username || '') : '',
+    divisi: u ? String(u.Divisi || '') : '',
+    jabatan: u ? String(u.Jabatan || '') : '',
+    email_perusahaan: u ? String(u.Email_Perusahaan || '') : '',
+    nama_sertifikasi: String(f.Nama_Sertifikasi || ''),
+    start_pelaksanaan: f.Start_pelaksanaan ? fmtDate_(f.Start_pelaksanaan, 'yyyy-MM-dd') : '',
+    end_pelaksanaan: f.End_pelaksanaan ? fmtDate_(f.End_pelaksanaan, 'yyyy-MM-dd') : '',
+    tanggal_sertifikasi: f.Tanggal_sertifikasi ? fmtDate_(f.Tanggal_sertifikasi, 'yyyy-MM-dd') : '',
+    tanggal_waktu_perpanjangan: f.Tanggal_waktu_perpanjangan ? fmtDate_(f.Tanggal_waktu_perpanjangan, 'yyyy-MM-dd') : '',
+    expired_at: f.Expired_at ? fmtDate_(f.Expired_at, 'yyyy-MM-dd') : '',
+    sisa_hari: hit.ada_tanggal ? hit.sisa_hari : null,
+    sisa_bulan: hit.ada_tanggal ? hit.sisa_bulan : null,
+    status: hit.status,
+    status_label: def ? def.label : 'Belum ada tanggal',
+    status_tone: def ? def.tone : 'gray',
+    status_icon: def ? def.icon : 'bi-dash-circle',
+    prioritas: def ? def.prioritas : 99,
+    link_file: String(f.Link_file || ''),
+    file_id: fileId,
+    file_name: String(f.File_name || ''),
+    mime_type: String(f.Mime_type || ''),
+    ukuran_file: Number(f.Ukuran_file) || 0,
+    ukuran_label: humanSize_(Number(f.Ukuran_file) || 0),
+    ext: ext,
+    file_icon: FILE_ICON_[ext] || 'bi-file-earmark',
+    masa_berlaku_bulan: Number(f.Masa_berlaku_bulan) || 0,
+    kategori: String(f.Kategori || ''),
+    penerbit: String(f.Penerbit || ''),
+    no_sertifikat: String(f.No_sertifikat || ''),
+    status_verifikasi: String(f.Status_Verifikasi || 'PENDING').toUpperCase(),
+    catatan: String(f.Catatan || ''),
+    verified_by: String(f.Verified_By || ''),
+    verified_at: f.Verified_At ? String(f.Verified_At) : '',
+    created_at: f.Created_At ? String(f.Created_At) : '',
+    updated_at: f.Updated_At ? String(f.Updated_At) : '',
+    created_by: String(f.Created_By || ''),
+    preview_url: fileId ? ('https://drive.google.com/file/d/' + fileId + '/preview') : '',
+    view_url: fileId ? ('https://drive.google.com/file/d/' + fileId + '/view') : String(f.Link_file || ''),
+    download_url: fileId ? ('https://drive.google.com/uc?export=download&id=' + fileId) : ''
+  };
+}
+
+function petaUser_() {
+  var peta = {};
+  sheetToObjects_('Master_User').forEach(function (u) {
+    peta[String(u.Employee_code)] = u;
+  });
+  return peta;
+}
+
+function cariFile_(docId) {
+  var row = findRowByCol_('Master_File', 'Doc_id', docId);
+  if (row === -1) return null;
+  return rowToObject_('Master_File', row);
+}
+
+/**
+ * Daftar data sertifikasi dengan filter + paginasi.
+ * @param {Object} filter { q, status, divisi, employee_code, kategori, verifikasi,
+ *                          dari, sampai, sort, dir, page, per_page, semua_status }
+ */
+function apiListFiles(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var peta = petaUser_();
+    var rows = sheetToObjects_('Master_File').map(function (x) { return fileDto_(x, peta); });
+
+    // karyawan hanya melihat miliknya sendiri
+    if (auth.role === 'EMP') rows = rows.filter(function (r) { return r.employee_id === auth.employee_code; });
+
+    var q = String(f.q || '').trim().toLowerCase();
+    var st = String(f.status || '').trim().toUpperCase();
+    var div = String(f.divisi || '').trim();
+    var kat = String(f.kategori || '').trim();
+    var ver = String(f.verifikasi || '').trim().toUpperCase();
+    var emp = String(f.employee_code || '').trim();
+    var dari = toDate_(f.dari);
+    var sampai = toDate_(f.sampai);
+    var hanyaKadaluarsa = toBool_(f.hanya_kadaluarsa);
+
+    var hasil = rows.filter(function (r) {
+      if (emp && r.employee_id !== emp) return false;
+      if (st && r.status !== st) return false;
+      if (div && r.divisi !== div) return false;
+      if (kat && r.kategori !== kat) return false;
+      if (ver && r.status_verifikasi !== ver) return false;
+      if (hanyaKadaluarsa && r.status !== 'KADALUARSA') return false;
+      if (dari || sampai) {
+        var exp = toDate_(r.expired_at);
+        if (!exp) return false;
+        if (dari && exp.getTime() < dari.getTime()) return false;
+        if (sampai && exp.getTime() > sampai.getTime()) return false;
+      }
+      if (q) {
+        var gab = [r.employee_id, r.nama_pemegang, r.nama_sertifikasi, r.divisi, r.jabatan,
+          r.no_sertifikat, r.penerbit, r.kategori].join(' ').toLowerCase();
+        if (gab.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    // ---------- urutkan ----------
+    // Setiap kunci punya pembanding sendiri supaya kolom angka (sisa hari,
+    // prioritas) tidak dibandingkan sebagai teks.
+    var sort = String(f.sort || 'prioritas');
+    var kali = String(f.dir || 'asc').toLowerCase() === 'desc' ? -1 : 1;
+
+    function angkaSisa(x) {
+      return (x.sisa_hari === null || x.sisa_hari === undefined || x.sisa_hari === '')
+        ? Number.MAX_SAFE_INTEGER : Number(x.sisa_hari);
+    }
+
+    var pembanding = {
+      prioritas: function (a, b) {
+        if (a.prioritas !== b.prioritas) return (a.prioritas - b.prioritas) * kali;
+        var sa = angkaSisa(a), sb = angkaSisa(b);
+        if (sa !== sb) return (sa - sb) * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      status: function (a, b) {
+        if (a.prioritas !== b.prioritas) return (a.prioritas - b.prioritas) * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      sisa: function (a, b) {
+        var sa = angkaSisa(a), sb = angkaSisa(b);
+        if (sa !== sb) return (sa - sb) * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      expired: function (a, b) {
+        var ea = a.expired_at || '9999-99-99';
+        var eb = b.expired_at || '9999-99-99';
+        if (ea !== eb) return ea < eb ? -kali : kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      nama: function (a, b) {
+        var n = String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+        if (n !== 0) return n * kali;
+        return String(a.nama_sertifikasi).localeCompare(String(b.nama_sertifikasi));
+      },
+      sertifikasi: function (a, b) {
+        var n = String(a.nama_sertifikasi).localeCompare(String(b.nama_sertifikasi));
+        if (n !== 0) return n * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      divisi: function (a, b) {
+        var n = String(a.divisi).localeCompare(String(b.divisi));
+        if (n !== 0) return n * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      }
+    };
+    hasil.sort(pembanding[sort] || pembanding.prioritas);
+
+    // ---------- ringkasan ----------
+    var ringkas = {};
+    STATUS_DEFS.forEach(function (s) { ringkas[s.key] = 0; });
+    ringkas.BELUM_ADA = 0;
+    rows.forEach(function (r) {
+      if (!r.status) ringkas.BELUM_ADA++; else ringkas[r.status]++;
+    });
+
+    // ---------- paginasi ----------
+    var total = hasil.length;
+    var perPage = Number(f.per_page) || getConfigNum_('tabel_baris_per_halaman', 25);
+    var page = Math.max(Number(f.page) || 1, 1);
+    if (perPage > 0) {
+      var mulai = (page - 1) * perPage;
+      hasil = hasil.slice(mulai, mulai + perPage);
+    }
+
+    return {
+      rows: hasil,
+      total: total,
+      page: page,
+      per_page: perPage,
+      pages: perPage > 0 ? Math.max(Math.ceil(total / perPage), 1) : 1,
+      ringkasan: ringkas,
+      status_defs: STATUS_DEFS,
+      pada: nowStr_()
+    };
+  });
+}
+
+function apiGetFile(token, docId) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = cariFile_(docId);
+    if (!f) throw new Error('Data sertifikasi tidak ditemukan.');
+    if (!kodeAksesFile_(auth, f)) throw new Error('Anda tidak berhak melihat data ini.');
+    return { file: fileDto_(f, petaUser_()) };
+  });
+}
+
+/**
+ * Simpan data sertifikasi (baru / ubah) beserta lampiran.
+ * @param {Object} data {
+ *   doc_id, employee_id, nama_sertifikasi, start_pelaksanaan, end_pelaksanaan,
+ *   tanggal_sertifikasi, tanggal_waktu_perpanjangan, expired_at, masa_berlaku_bulan,
+ *   kategori, penerbit, no_sertifikat, catatan, hapus_lampiran,
+ *   file: { name, mimeType, base64 }
+ * }
+ */
+function apiSaveFile(token, data) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var d = data || {};
+    var isHc = (auth.role === 'HC' || auth.role === 'SA');
+
+    var docId = String(d.doc_id || '').trim();
+    var lama = docId ? cariFile_(docId) : null;
+    if (docId && !lama) throw new Error('Data yang akan diubah tidak ditemukan.');
+    if (lama && !kodeAksesFile_(auth, lama)) throw new Error('Anda tidak berhak mengubah data ini.');
+
+    // ----- pemilik data -----
+    var employeeId = String(d.employee_id || '').trim();
+    if (!isHc) employeeId = auth.employee_code;
+    if (!employeeId) throw new Error('Pemegang sertifikasi wajib dipilih.');
+    var pemilik = cariUser_(employeeId);
+    if (!pemilik) throw new Error('Employee Code "' + employeeId + '" tidak terdaftar di Master User.');
+
+    // ----- kolom wajib -----
+    var nama = String(d.nama_sertifikasi || '').trim();
+    if (!nama) throw new Error('Nama sertifikasi wajib diisi.');
+
+    var start = toDate_(d.start_pelaksanaan);
+    var end = toDate_(d.end_pelaksanaan);
+    if (!start) throw new Error('Tanggal mulai pelaksanaan wajib diisi.');
+    if (!end) throw new Error('Tanggal selesai pelaksanaan wajib diisi.');
+    if (end.getTime() < start.getTime()) throw new Error('Tanggal selesai tidak boleh lebih awal dari tanggal mulai.');
+
+    var tglSert = toDate_(d.tanggal_sertifikasi);
+    if (d.tanggal_sertifikasi && !tglSert) throw new Error('Tanggal sertifikasi tidak valid.');
+    var tglPerpanjang = toDate_(d.tanggal_waktu_perpanjangan);
+    if (d.tanggal_waktu_perpanjangan && !tglPerpanjang) throw new Error('Tanggal perpanjangan tidak valid.');
+
+    // ----- masa berlaku & expired_at -----
+    var masaBulan = Number(d.masa_berlaku_bulan);
+    if (!masaBulan || masaBulan <= 0) masaBulan = masaBerlakuDariNama_(nama);
+
+    // kalau sudah diperpanjang, dasar perhitungan diambil dari tanggal perpanjangan
+    var dasar = tglPerpanjang || end;
+    var expired = toDate_(d.expired_at);
+    var eksplisit = false;
+    if (d.expired_at && !expired) throw new Error('Expired_at tidak valid.');
+    if (expired) {
+      var otomatis = deriveExpiredAt_(dasar, masaBulan);
+      if (!otomatis || otomatis.getTime() !== expired.getTime()) eksplisit = true;
+    } else {
+      expired = deriveExpiredAt_(dasar, masaBulan);
+    }
+    if (!expired) throw new Error('Expired_at tidak bisa dihitung. Isi tanggal kedaluwarsa secara manual.');
+    if (expired.getTime() < dasar.getTime()) throw new Error('Expired_at tidak boleh lebih awal dari tanggal pelaksanaan.');
+
+    var hit = hitungMasaBerlaku_(expired);
+
+    // ----- lampiran -----
+    var fileId = lama ? String(lama.File_id || '') : '';
+    var fileName = lama ? String(lama.File_name || '') : '';
+    var mime = lama ? String(lama.Mime_type || '') : '';
+    var ukuran = lama ? (Number(lama.Ukuran_file) || 0) : 0;
+    var link = lama ? String(lama.Link_file || '') : '';
+
+    if (toBool_(d.hapus_lampiran) && fileId) {
+      try { DriveApp.getFileById(fileId).setTrashed(true); } catch (e) { Logger.log('hapus lampiran: ' + errMsg_(e)); }
+      fileId = ''; fileName = ''; mime = ''; ukuran = 0; link = '';
+    }
+    if (d.file && (d.file.base64 || d.file.fileId)) {
+      // buang lampiran lama bila ada
+      if (fileId) { try { DriveApp.getFileById(fileId).setTrashed(true); } catch (e) { } }
+      var up = uploadAttachment_(d.file, employeeId, nama);
+      fileId = up.fileId; fileName = up.name; mime = up.mime; ukuran = up.size; link = up.url;
+    }
+
+    var obj = {
+      Employee_id: employeeId,
+      Nama_Sertifikasi: nama,
+      Start_pelaksanaan: fmtDate_(start, 'yyyy-MM-dd'),
+      End_pelaksanaan: fmtDate_(end, 'yyyy-MM-dd'),
+      Tanggal_sertifikasi: tglSert ? fmtDate_(tglSert, 'yyyy-MM-dd') : '',
+      Tanggal_waktu_perpanjangan: tglPerpanjang ? fmtDate_(tglPerpanjang, 'yyyy-MM-dd') : '',
+      Expired_at: fmtDate_(expired, 'yyyy-MM-dd'),
+      Sisa_masa_berlaku_day: hit.sisa_hari,
+      Sisa_masa_berlaku_by_month: hit.sisa_bulan,
+      Status: hit.status,
+      Link_file: link,
+      File_id: fileId,
+      File_name: fileName,
+      Mime_type: mime,
+      Ukuran_file: ukuran,
+      Masa_berlaku_bulan: masaBulan,
+      Kategori: String(d.kategori || '').trim() || kategoriDariNama_(nama),
+      Penerbit: String(d.penerbit || '').trim(),
+      No_sertifikat: String(d.no_sertifikat || '').trim(),
+      Catatan: String(d.catatan || '').trim(),
+      Updated_At: nowStr_()
+    };
+
+    if (isHc) {
+      obj.Status_Verifikasi = 'VERIFIED';
+      obj.Verified_By = auth.employee_code;
+      obj.Verified_At = nowStr_();
+    } else if (lama) {
+      // karyawan mengubah datanya sendiri -> perlu verifikasi ulang
+      obj.Status_Verifikasi = 'PENDING';
+      obj.Verified_By = '';
+      obj.Verified_At = '';
+    } else {
+      obj.Status_Verifikasi = 'PENDING';
+    }
+
+    var mode;
+    if (lama) {
+      updateRowByCol_('Master_File', lama.__row, obj);
+      mode = 'update';
+    } else {
+      var newId = buatDocId_();
+      obj.Doc_id = newId;
+      obj.Created_At = nowStr_();
+      obj.Created_By = auth.employee_code;
+      appendObject_('Master_File', obj);
+      docId = newId;
+      mode = 'insert';
+    }
+
+    try { updateJumlahPemegang_(); } catch (e) { }
+
+    logAudit_(auth.employee_code, auth.username, auth.role,
+      (mode === 'insert' ? 'TAMBAH_SERTIFIKASI' : 'UBAH_SERTIFIKASI'), 'FILE', docId,
+      { nama: nama, pemegang: employeeId, expired: obj.Expired_at, status: obj.Status, lampiran: !!fileId });
+
+    // notifikasi in-app bila status sudah mendesak
+    try { notifikasiStatusMendesak_(docId); } catch (e) { }
+
+    return {
+      mode: mode,
+      doc_id: docId,
+      file: fileDto_(cariFile_(docId), petaUser_())
+    };
+  });
+}
+
+function kategoriDariNama_(nama) {
+  var c = null;
+  try { c = findCertType_(nama); } catch (e) { }
+  return c ? String(c.Kategori || '') : '';
+}
+
+/** Doc_id: DOC-YYYYMM-#### (nomor urut bulan berjalan). */
+function buatDocId_() {
+  var prefix = 'DOC-' + Utilities.formatDate(new Date(), tz_(), 'yyyyMM') + '-';
+  var sh = getSheet_('Master_File');
+  var max = 0;
+  if (sh && sh.getLastRow() > 1) {
+    var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+      .map(function (h) { return String(h).trim(); });
+    var idx = header.indexOf('Doc_id');
+    if (idx !== -1) {
+      var vals = sh.getRange(2, idx + 1, sh.getLastRow() - 1, 1).getValues();
+      vals.forEach(function (r) {
+        var s = String(r[0] || '');
+        if (s.indexOf(prefix) === 0) {
+          var n = parseInt(s.substring(prefix.length), 10);
+          if (!isNaN(n) && n > max) max = n;
+        }
+      });
+    }
+  }
+  return prefix + pad_(max + 1, 4);
+}
+
+function apiDeleteFile(token, docId) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = cariFile_(docId);
+    if (!f) throw new Error('Data sertifikasi tidak ditemukan.');
+    if (auth.role !== 'HC' && auth.role !== 'SA') {
+      throw new Error('Hanya Human Capital yang dapat menghapus data sertifikasi.');
+    }
+
+    if (f.File_id) {
+      try { DriveApp.getFileById(String(f.File_id)).setTrashed(true); } catch (e) { Logger.log('trash lampiran: ' + errMsg_(e)); }
+    }
+    deleteRowByCol_('Master_File', 'Doc_id', docId);
+    try { updateJumlahPemegang_(); } catch (e) { }
+    logAudit_(auth.employee_code, auth.username, auth.role, 'HAPUS_SERTIFIKASI', 'FILE', docId,
+      { nama: f.Nama_Sertifikasi, pemegang: f.Employee_id });
+    return { ok: true, doc_id: docId };
+  });
+}
+
+/** HC memverifikasi data yang diinput karyawan. */
+function apiVerifyFile(token, docId, keputusan, catatan) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var f = cariFile_(docId);
+    if (!f) throw new Error('Data sertifikasi tidak ditemukan.');
+    var kep = String(keputusan || 'VERIFIED').toUpperCase();
+    if (['VERIFIED', 'REJECTED', 'PENDING'].indexOf(kep) === -1) kep = 'VERIFIED';
+
+    updateRowByCol_('Master_File', f.__row, {
+      Status_Verifikasi: kep,
+      Verified_By: auth.employee_code,
+      Verified_At: nowStr_(),
+      Catatan: catatan !== undefined ? String(catatan) : String(f.Catatan || ''),
+      Updated_At: nowStr_()
+    });
+    logAudit_(auth.employee_code, auth.username, auth.role, 'VERIFIKASI_SERTIFIKASI', 'FILE', docId, kep);
+    return { doc_id: docId, status_verifikasi: kep };
+  });
+}
+
+// ============================================================================
+// 6. PROFIL PEKERJA
+// ============================================================================
+
+/**
+ * Profil lengkap satu pekerja: identitas + seluruh sertifikasi + ringkasan.
+ * @return {Object} { user, files, ringkasan, kategori }
+ */
+function apiGetEmployeeProfile(token, employeeCode) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var code = String(employeeCode || auth.employee_code).trim();
+    if (code !== auth.employee_code && auth.role === 'EMP') {
+      throw new Error('Anda hanya dapat melihat profil sendiri.');
+    }
+    var u = cariUser_(code);
+    if (!u) throw new Error('Pekerja dengan Employee Code ' + code + ' tidak ditemukan.');
+
+    var peta = petaUser_();
+    var files = sheetToObjects_('Master_File')
+      .filter(function (f) { return String(f.Employee_id) === code; })
+      .map(function (f) { return fileDto_(f, peta); });
+
+    files.sort(function (a, b) {
+      if (a.prioritas !== b.prioritas) return a.prioritas - b.prioritas;
+      return String(a.nama_sertifikasi).localeCompare(String(b.nama_sertifikasi));
+    });
+
+    var ringkasan = { total: files.length, belum_ada: 0, kadaluarsa: 0, mendesak: 0, aman: 0, ada_lampiran: 0 };
+    STATUS_DEFS.forEach(function (s) { ringkasan[s.key] = 0; });
+    files.forEach(function (f) {
+      if (!f.status) ringkasan.belum_ada++;
+      else ringkasan[f.status]++;
+      if (f.status === 'KADALUARSA' || f.status === 'MENDEKATI_KADALUARSA' || f.status === 'SEGERA_PERPANJANG') ringkasan.mendesak++;
+      if (f.status === 'MASIH_BERLAKU' || f.status === 'PERINGATAN') ringkasan.aman++;
+      if (f.file_id) ringkasan.ada_lampiran++;
+    });
+    ringkasan.persen_lengkap = files.length ? Math.round((ringkasan.ada_lampiran / files.length) * 100) : 0;
+
+    var kategori = uniq_(files.map(function (f) { return f.kategori; }).filter(function (x) { return x; })).sort();
+
+    return {
+      user: userPublic_(u),
+      files: files,
+      ringkasan: ringkasan,
+      kategori: kategori,
+      boleh_edit: (auth.role === 'HC' || auth.role === 'SA' || code === auth.employee_code),
+      status_defs: STATUS_DEFS
+    };
+  });
+}
+
+/** Daftar pekerja ringkas untuk dropdown / pencarian. */
+function apiListEmployees(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var q = String(f.q || '').trim().toLowerCase();
+
+    var jumlah = {};
+    sheetToObjects_('Master_File').forEach(function (x) {
+      var k = String(x.Employee_id || '');
+      jumlah[k] = (jumlah[k] || 0) + 1;
+    });
+
+    var rows = sheetToObjects_('Master_User').map(function (u) {
+      return {
+        employee_code: String(u.Employee_code || ''),
+        nama_lengkap: String(u.Nama_Lengkap || ''),
+        username: String(u.Username || ''),
+        role: String(u.Role || 'EMP'),
+        role_label: ROLE_LABEL_[String(u.Role || 'EMP')] || 'Employee',
+        divisi: String(u.Divisi || ''),
+        jabatan: String(u.Jabatan || ''),
+        email_perusahaan: String(u.Email_Perusahaan || ''),
+        email_pribadi: String(u.Email_Pribadi || ''),
+        status: String(u.Status || 'ACTIVE'),
+        inisial: inisial_(u.Nama_Lengkap),
+        jumlah_sertifikasi: jumlah[String(u.Employee_code)] || 0
+      };
+    }).filter(function (u) {
+      if (f.aktif_only && u.status.toUpperCase() !== 'ACTIVE') return false;
+      if (f.hanya_emp && u.role !== 'EMP') return false;
+      if (q) {
+        var gab = [u.employee_code, u.nama_lengkap, u.username, u.divisi, u.jabatan].join(' ').toLowerCase();
+        if (gab.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    rows.sort(function (a, b) { return a.nama_lengkap.localeCompare(b.nama_lengkap); });
+    return { rows: rows, total: rows.length };
+  });
+}
+
+// ============================================================================
+// 7. DASHBOARD
+// ============================================================================
+
+function apiGetDashboard(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var div = String(f.divisi || '').trim();
+    var peta = petaUser_();
+
+    var semuaFile = sheetToObjects_('Master_File').map(function (x) { return fileDto_(x, peta); });
+    var semuaUser = sheetToObjects_('Master_User').map(function (u) { return userPublic_(u); });
+
+    if (div) {
+      semuaFile = semuaFile.filter(function (x) { return x.divisi === div; });
+      semuaUser = semuaUser.filter(function (u) { return u.divisi === div; });
+    }
+
+    // kalau EMP: hanya milik sendiri
+    if (auth.role === 'EMP') {
+      semuaFile = semuaFile.filter(function (x) { return x.employee_id === auth.employee_code; });
+      semuaUser = semuaUser.filter(function (u) { return u.employee_code === auth.employee_code; });
+    }
+
+    var hariIni = todayDate_();
+
+    // ---------- KPI ----------
+    var kpi = {
+      total_pekerja: semuaUser.length,
+      total_sertifikasi: semuaFile.length,
+      rata_sertifikasi: semuaUser.length ? Math.round((semuaFile.length / semuaUser.length) * 10) / 10 : 0,
+      kadaluarsa: 0,
+      mendesak: 0,
+      peringatan: 0,
+      aman: 0,
+      belum_ada_tanggal: 0,
+      ada_lampiran: 0,
+      perlu_verifikasi: 0,
+      kedaluwarsa_30_hari: 0
+    };
+    STATUS_DEFS.forEach(function (s) { kpi[s.key.toLowerCase()] = 0; });
+
+    var hitungStatus = {};
+    STATUS_DEFS.forEach(function (s) { hitungStatus[s.key] = 0; });
+
+    semuaFile.forEach(function (x) {
+      if (!x.status) { kpi.belum_ada_tanggal++; return; }
+      hitungStatus[x.status]++;
+      if (x.status === 'KADALUARSA') kpi.kadaluarsa++;
+      if (x.status === 'KADALUARSA' || x.status === 'MENDEKATI_KADALUARSA' || x.status === 'SEGERA_PERPANJANG') kpi.mendesak++;
+      if (x.status === 'PERINGATAN' || x.status === 'PERLU_PERHATIAN') kpi.peringatan++;
+      if (x.status === 'MASIH_BERLAKU') kpi.aman++;
+      if (x.file_id) kpi.ada_lampiran++;
+      if (x.status_verifikasi === 'PENDING') kpi.perlu_verifikasi++;
+      if (x.sisa_hari !== null && x.sisa_hari >= 0 && x.sisa_hari <= 30) kpi.kedaluwarsa_30_hari++;
+    });
+
+    // ---------- sebaran status (untuk donut/bar) ----------
+    var sebaran = STATUS_DEFS.map(function (s) {
+      return { key: s.key, label: s.label, tone: s.tone, jumlah: hitungStatus[s.key] || 0 };
+    });
+
+    // ---------- per divisi ----------
+    var perDivisi = {};
+    semuaFile.forEach(function (x) {
+      var k = x.divisi || '(Belum ada divisi)';
+      if (!perDivisi[k]) perDivisi[k] = { divisi: k, total: 0, kadaluarsa: 0, mendesak: 0, aman: 0, pekerja: {} };
+      perDivisi[k].total++;
+      perDivisi[k].pekerja[x.employee_id] = 1;
+      if (x.status === 'KADALUARSA') perDivisi[k].kadaluarsa++;
+      if (x.status === 'KADALUARSA' || x.status === 'MENDEKATI_KADALUARSA' || x.status === 'SEGERA_PERPANJANG') perDivisi[k].mendesak++;
+      if (x.status === 'MASIH_BERLAKU') perDivisi[k].aman++;
+    });
+    var divisiArr = Object.keys(perDivisi).map(function (k) {
+      var d = perDivisi[k];
+      d.jumlah_pekerja = Object.keys(d.pekerja).length;
+      delete d.pekerja;
+      return d;
+    }).sort(function (a, b) { return b.total - a.total; });
+
+    // ---------- daftar prioritas ----------
+    var limit = getConfigNum_('dashboard_prioritas_limit', 8);
+    var prioritas = semuaFile
+      .filter(function (x) { return x.status && x.prioritas <= 3; })
+      .sort(function (a, b) {
+        if (a.prioritas !== b.prioritas) return a.prioritas - b.prioritas;
+        return (a.sisa_hari === null ? 0 : a.sisa_hari) - (b.sisa_hari === null ? 0 : b.sisa_hari);
+      });
+
+    // ---------- top jenis sertifikasi ----------
+    var perJenis = {};
+    semuaFile.forEach(function (x) {
+      var k = x.nama_sertifikasi || '(Tanpa nama)';
+      if (!perJenis[k]) perJenis[k] = { nama: k, kategori: x.kategori, total: 0, kadaluarsa: 0 };
+      perJenis[k].total++;
+      if (x.status === 'KADALUARSA') perJenis[k].kadaluarsa++;
+    });
+    var jenisArr = Object.keys(perJenis).map(function (k) { return perJenis[k]; })
+      .sort(function (a, b) { return b.total - a.total; }).slice(0, 10);
+
+    // ---------- tren 12 bulan (berdasarkan Expired_at) ----------
+    var tren = [];
+    for (var i = 0; i < 12; i++) {
+      var anchor = addMonths_(new Date(hariIni.getFullYear(), hariIni.getMonth(), 1), i);
+      var labelBulan = BULAN_SINGKAT_ID_[anchor.getMonth()] + ' ' + String(anchor.getFullYear()).substring(2);
+      var jumlah = 0;
+      semuaFile.forEach(function (x) {
+        var e = toDate_(x.expired_at);
+        if (!e) return;
+        if (e.getFullYear() === anchor.getFullYear() && e.getMonth() === anchor.getMonth()) jumlah++;
+      });
+      tren.push({ label: labelBulan, bulan: anchor.getMonth() + 1, tahun: anchor.getFullYear(), jumlah: jumlah });
+    }
+
+    // ---------- pekerja paling perlu perhatian ----------
+    var perPekerja = {};
+    semuaFile.forEach(function (x) {
+      var k = x.employee_id;
+      if (!perPekerja[k]) {
+        perPekerja[k] = {
+          employee_code: k, nama: x.nama_pemegang, divisi: x.divisi, jabatan: x.jabatan,
+          total: 0, kadaluarsa: 0, mendesak: 0, skor: 0
+        };
+      }
+      perPekerja[k].total++;
+      if (x.status === 'KADALUARSA') { perPekerja[k].kadaluarsa++; perPekerja[k].skor += 100; }
+      else if (x.status === 'MENDEKATI_KADALUARSA') { perPekerja[k].mendesak++; perPekerja[k].skor += 60; }
+      else if (x.status === 'SEGERA_PERPANJANG') { perPekerja[k].mendesak++; perPekerja[k].skor += 30; }
+      else if (x.status === 'PERLU_PERHATIAN') perPekerja[k].skor += 10;
+      else if (x.status === 'PERINGATAN') perPekerja[k].skor += 4;
+    });
+    var pekerjaKritis = Object.keys(perPekerja).map(function (k) { return perPekerja[k]; })
+      .filter(function (p) { return p.skor > 0; })
+      .sort(function (a, b) { return b.skor - a.skor; })
+      .slice(0, 6);
+
+    // ---------- ringkasan notifikasi ----------
+    var belumDibaca = 0;
+    try {
+      belumDibaca = sheetToObjects_('T_Notifikasi').filter(function (n) {
+        if (auth.role === 'EMP') return String(n.Employee_code) === auth.employee_code && String(n.Is_Read).toUpperCase() !== 'TRUE';
+        return String(n.Is_Read).toUpperCase() !== 'TRUE';
+      }).length;
+    } catch (e) { }
+
+    return {
+      kpi: kpi,
+      sebaran: sebaran,
+      per_divisi: divisiArr,
+      prioritas: prioritas.slice(0, limit),
+      prioritas_total: prioritas.length,
+      per_jenis: jenisArr,
+      tren: tren,
+      pekerja_kritis: pekerjaKritis,
+      notifikasi_belum_dibaca: belumDibaca,
+      divisi_options: opsiDivisi_(),
+      pada: nowStr_(),
+      zona_waktu: tz_(),
+      status_defs: STATUS_DEFS
+    };
+  });
+}
+
+function opsiDivisi_() {
+  var s = String(getConfig_('divisi_options') || '');
+  var arr = s ? s.split('|').map(function (x) { return x.trim(); }).filter(function (x) { return x; }) : [];
+  if (!arr.length) arr = DIVISI_SEED_.slice();
+  try {
+    sheetToObjects_('Master_User').forEach(function (u) {
+      var v = String(u.Divisi || '').trim();
+      if (v && arr.indexOf(v) === -1) arr.push(v);
+    });
+  } catch (e) { }
+  return arr.sort();
+}
+
+// ============================================================================
+// 8. NOTIFIKASI & REMINDER
+// ============================================================================
+
+/** Tahapan pengingat: label, jumlah hari sisa, dan warna. */
+var LEVEL_REMINDER_ = [
+  { level: 'H270', hari: 270, label: '9 bulan lagi', tone: 'yellow' },
+  { level: 'H180', hari: 180, label: '6 bulan lagi', tone: 'orange' },
+  { level: 'H90', hari: 90, label: '3 bulan lagi', tone: 'red' },
+  { level: 'H60', hari: 60, label: '2 bulan lagi', tone: 'black' },
+  { level: 'H30', hari: 30, label: '1 bulan lagi', tone: 'black' },
+  { level: 'EXPIRED', hari: -1, label: 'sudah kedaluwarsa', tone: 'black' }
+];
+
+/** Tahapan yang cocok untuk sebuah sisa hari (yang paling mendesak). */
+function levelUntukSisaHari_(sisaHari) {
+  var aktif = String(getConfig_('reminder_level_bulan') || '9,6,3,2,1,0')
+    .split(',').map(function (x) { return String(x).trim(); });
+  var bulan = sisaHari / 30;
+  // urut dari paling mendesak
+  var kandidat = [
+    { level: 'EXPIRED', bulan: 0 },
+    { level: 'H30', bulan: 1 },
+    { level: 'H60', bulan: 2 },
+    { level: 'H90', bulan: 3 },
+    { level: 'H180', bulan: 6 },
+    { level: 'H270', bulan: 9 }
+  ];
+  for (var i = 0; i < kandidat.length; i++) {
+    if (aktif.indexOf(String(kandidat[i].bulan)) === -1) continue;
+    if (kandidat[i].level === 'EXPIRED') {
+      if (sisaHari < 0) return kandidat[i].level;
+      continue;
+    }
+    if (bulan <= kandidat[i].bulan) return kandidat[i].level;
+  }
+  return '';
+}
+
+function levelDef_(level) {
+  for (var i = 0; i < LEVEL_REMINDER_.length; i++) {
+    if (LEVEL_REMINDER_[i].level === level) return LEVEL_REMINDER_[i];
+  }
+  return { level: level, hari: 0, label: level, tone: 'gray' };
+}
+
+/** Daftar email Human Capital & Super Admin. */
+function emailHc_() {
+  var out = [];
+  try {
+    sheetToObjects_('Master_User').forEach(function (u) {
+      var r = String(u.Role || '').toUpperCase();
+      if (r !== 'HC' && r !== 'SA') return;
+      if (String(u.Status || 'ACTIVE').toUpperCase() !== 'ACTIVE') return;
+      if (isEmail_(u.Email_Perusahaan)) out.push(String(u.Email_Perusahaan).trim());
+      if (isEmail_(u.Email_Pribadi)) out.push(String(u.Email_Pribadi).trim());
+    });
+  } catch (e) { }
+  var extra = String(getConfig_('reminder_extra_emails') || '').split(/[,;\n]/);
+  extra.forEach(function (x) { if (isEmail_(x)) out.push(String(x).trim()); });
+  return uniq_(out);
+}
+
+/** Sudah pernah dikirim untuk (doc, level) tertentu? */
+function sudahDikirim_(docId, periodeKey) {
+  try {
+    var logs = sheetToObjects_('T_Email_Log');
+    for (var i = 0; i < logs.length; i++) {
+      if (String(logs[i].Periode_key) === periodeKey && String(logs[i].Status).toUpperCase() === 'SENT') return true;
+    }
+  } catch (e) { }
+  return false;
+}
+
+/**
+ * Jalankan reminder.
+ * @param {boolean} paksa abaikan jadwal hari & abaikan penanda sudah-terkirim.
+ */
+function jalankanReminder_(paksa) {
+  var mulai = new Date();
+  var hasil = { ok: true, target: 0, terkirim: 0, gagal: 0, dilewati: 0, detail: [], pada: nowStr_() };
+
+  if (!getConfigBool_('reminder_enabled', true) && !paksa) {
+    hasil.ok = false;
+    hasil.detail.push('Reminder dinonaktifkan di Config (reminder_enabled = FALSE).');
+    return hasil;
+  }
+
+  // ---------- jadwal hari ----------
+  var hariKirim = getConfigNum_('reminder_hari_kirim', 1);
+  var hariIni = new Date().getDay(); // 0=Minggu ... 6=Sabtu
+  if (!paksa && hariKirim > 0) {
+    var targetHari = hariKirim === 7 ? 0 : hariKirim; // 7 = Minggu
+    if (hariIni !== targetHari) {
+      hasil.dilewati = 1;
+      hasil.detail.push('Bukan jadwal kirim (hari ini ' + HARI_ID_[hariIni] + ').');
+      return hasil;
+    }
+  }
+
+  var peta = petaUser_();
+  var semua = sheetToObjects_('Master_File');
+  var maxEmail = getConfigNum_('reminder_max_email_per_jalan', 90);
+  var ulangHari = getConfigNum_('reminder_ulang_kadaluarsa_hari', 7);
+
+  for (var i = 0; i < semua.length; i++) {
+    if (hasil.terkirim >= maxEmail) {
+      hasil.detail.push('Batas ' + maxEmail + ' email per jalan tercapai, sisanya dikirim besok.');
+      break;
+    }
+    var f = semua[i];
+    var exp = toDate_(f.Expired_at);
+    if (!exp) continue;
+
+    var sisaHari = Math.round((exp.getTime() - todayDate_().getTime()) / 86400000);
+    var level = levelUntukSisaHari_(sisaHari);
+    if (!level) continue;
+
+    // hanya untuk data yang sudah diverifikasi
+    var verif = String(f.Status_Verifikasi || 'PENDING').toUpperCase();
+    if (verif === 'REJECTED') continue;
+
+    var docId = String(f.Doc_id || '');
+    var periodeKey = docId + '|' + level;
+    if (level === 'EXPIRED') {
+      var minggu = Utilities.formatDate(todayDate_(), tz_(), 'yyyy-ww');
+      periodeKey = docId + '|EXPIRED|' + minggu;
+      // kadaluarsa diulang tiap `ulangHari` hari
+      if (!paksa && ulangHari > 0) {
+        var lastSent = '';
+        try {
+          sheetToObjects_('T_Email_Log').forEach(function (l) {
+            if (String(l.Doc_id) === docId && String(l.Level) === 'EXPIRED'
+              && String(l.Status).toUpperCase() === 'SENT') {
+              if (String(l.Sent_At) > lastSent) lastSent = String(l.Sent_At);
+            }
+          });
+        } catch (e) { }
+        if (lastSent) {
+          var selisih = diffDays_(todayDate_(), toDate_(lastSent));
+          if (selisih !== null && selisih < ulangHari) continue;
+        }
+      }
+    } else if (!paksa && sudahDikirim_(docId, periodeKey)) {
+      hasil.dilewati++;
+      continue;
+    }
+
+    hasil.target++;
+
+    // ---------- penerima ----------
+    var u = peta[String(f.Employee_id)] || null;
+    var ke = [];
+    var cc = [];
+    if (getConfigBool_('reminder_ke_karyawan', true) && u) {
+      if (isEmail_(u.Email_Perusahaan)) ke.push(String(u.Email_Perusahaan).trim());
+      if (isEmail_(u.Email_Pribadi)) cc.push(String(u.Email_Pribadi).trim());
+    }
+    if (getConfigBool_('reminder_ke_hc', true)) {
+      emailHc_().forEach(function (e) { cc.push(e); });
+    }
+    if (getConfigBool_('reminder_ke_atasan', true) && u && isEmail_(u.Email_Atasan)) {
+      cc.push(String(u.Email_Atasan).trim());
+    }
+    cc = uniq_(cc).filter(function (e) { return ke.indexOf(e) === -1; });
+
+    if (!ke.length && !cc.length) {
+      hasil.gagal++;
+      hasil.detail.push(docId + ': tidak ada alamat email tujuan.');
+      catatEmailLog_(docId, String(f.Employee_id), level, periodeKey, '', '', '', 'SKIPPED', 'tidak ada email tujuan');
+      continue;
+    }
+
+    // ---------- kirim ----------
+    var def = levelDef_(level);
+    var subjek = String(getConfig_('email_subject_prefix') || '[SIAGA Sertifikasi]') + ' '
+      + def.label.toUpperCase() + ' — ' + String(f.Nama_Sertifikasi) + ' (' + String(f.Employee_id) + ')';
+    var html = htmlEmailReminder_(u, f, def);
+    var penerimaEfektif = ke.length ? ke : cc;
+    var ccEfektif = ke.length ? cc : [];
+
+    try {
+      kirimEmail_(penerimaEfektif, ccEfektif, subjek, html);
+      hasil.terkirim++;
+      catatEmailLog_(docId, String(f.Employee_id), level, periodeKey,
+        penerimaEfektif.join(', '), ccEfektif.join(', '), subjek, 'SENT', '');
+      buatNotifikasi_(String(f.Employee_id), docId, level, String(f.Status || ''), u, f, def);
+      hasil.detail.push(docId + ' [' + level + '] -> ' + penerimaEfektif.concat(ccEfektif).join(', '));
+    } catch (e) {
+      hasil.gagal++;
+      catatEmailLog_(docId, String(f.Employee_id), level, periodeKey,
+        penerimaEfektif.join(', '), ccEfektif.join(', '), subjek, 'FAILED', errMsg_(e));
+      hasil.detail.push(docId + ': GAGAL — ' + errMsg_(e));
+    }
+  }
+
+  // ---------- log ringkasan ----------
+  try {
+    appendObject_('T_Email_Log', {
+      Log_id: generateId_('EML'),
+      Periode_key: 'RUN|' + Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm'),
+      Doc_id: '-',
+      Employee_code: '-',
+      Level: 'RUN',
+      Penerima: '-',
+      Cc: '-',
+      Subject: 'Ringkasan jalan reminder',
+      Status: 'SUMMARY',
+      Error: '',
+      Sent_At: 'target=' + hasil.target + '; terkirim=' + hasil.terkirim + '; gagal=' + hasil.gagal
+    });
+  } catch (e) { }
+
+  hasil.durasi_ms = (new Date()).getTime() - mulai.getTime();
+  return hasil;
+}
+
+function catatEmailLog_(docId, employeeCode, level, periodeKey, penerima, cc, subject, status, error) {
+  try {
+    appendObject_('T_Email_Log', {
+      Log_id: generateId_('EML'),
+      Periode_key: periodeKey,
+      Doc_id: docId,
+      Employee_code: employeeCode,
+      Level: level,
+      Penerima: penerima || '',
+      Cc: cc || '',
+      Subject: subject || '',
+      Status: status || '',
+      Error: error || '',
+      Sent_At: nowStr_()
+    });
+  } catch (e) { Logger.log('catatEmailLog_: ' + errMsg_(e)); }
+}
+
+function kirimEmail_(ke, cc, subjek, html) {
+  var opsi = { htmlBody: html, name: APP_NAME };
+  var pengirim = String(getConfig_('email_pengirim') || EMAIL_PENGIRIM || '').trim();
+  if (pengirim && isEmail_(pengirim)) opsi.from = pengirim;
+  if (cc && cc.length) opsi.cc = cc.join(',');
+  MailApp.sendEmail(ke.join(','), subjek, stripHtml_(html), opsi);
+}
+
+function stripHtml_(html) {
+  return String(html || '').replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|tr|h\d)>/gi, '\n')
+    .replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Template email reminde — tabel sederhana agar tampil baik di semua klien. */
+function htmlEmailReminder_(u, f, def) {
+  var warna = {
+    green: '#71A62F', yellow: '#D8CE3A', orange: '#E07B14',
+    red: '#ED1B2F', black: '#111111', gray: '#8494A8'
+  }[def.tone] || '#0B50A1';
+
+  var hit = hitungMasaBerlaku_(f.Expired_at);
+  var sisaTeks = hit.ada_tanggal
+    ? (hit.sisa_hari < 0
+      ? ('Sudah lewat ' + Math.abs(hit.sisa_hari) + ' hari')
+      : (hit.sisa_hari + ' hari lagi (± ' + hit.sisa_bulan + ' bulan)'))
+    : '-';
+
+  var rows = [
+    ['Nama', u ? String(u.Nama_Lengkap || '') : '-'],
+    ['Employee Code', String(f.Employee_id || '-')],
+    ['Divisi / Jabatan', (u ? (String(u.Divisi || '-') + ' / ' + String(u.Jabatan || '-')) : '-')],
+    ['Sertifikasi', String(f.Nama_Sertifikasi || '-')],
+    ['No. Sertifikat', String(f.No_sertifikat || '-')],
+    ['Pelaksanaan', fmtTanggalIndo_(f.Start_pelaksanaan) + ' s.d. ' + fmtTanggalIndo_(f.End_pelaksanaan)],
+    ['Berlaku sampai', fmtTanggalIndo_(f.Expired_at)],
+    ['Sisa masa berlaku', sisaTeks],
+    ['Status', hit.status_label || '-']
+  ];
+
+  var body = rows.map(function (r) {
+    return '<tr>'
+      + '<td style="padding:8px 12px;border-bottom:1px solid #E4E9F0;color:#5B6B80;font-size:13px;width:38%">' + r[0] + '</td>'
+      + '<td style="padding:8px 12px;border-bottom:1px solid #E4E9F0;color:#16202E;font-size:13px;font-weight:600">' + escHtml_(r[1]) + '</td>'
+      + '</tr>';
+  }).join('');
+
+  return ''
+    + '<div style="font-family:Poppins,Segoe UI,Roboto,Arial,sans-serif;background:#F4F7FB;padding:24px">'
+    + '<div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #E4E9F0;border-radius:16px;overflow:hidden">'
+    + '<div style="background:#093D7D;padding:18px 22px">'
+    + '<div style="color:#8DC63F;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase">' + APP_NAME + '</div>'
+    + '<div style="color:#fff;font-size:18px;font-weight:700;margin-top:4px">Pengingat Masa Berlaku Sertifikasi</div>'
+    + '</div>'
+    + '<div style="padding:18px 22px">'
+    + '<div style="display:inline-block;background:' + warna + ';color:#fff;font-size:12px;font-weight:700;'
+    + 'padding:6px 14px;border-radius:100px;margin-bottom:14px">' + escHtml_(def.label.toUpperCase()) + '</div>'
+    + '<p style="font-size:14px;color:#33465C;line-height:1.65;margin:0 0 14px">'
+    + 'Sertifikasi berikut akan/sudah berakhir masa berlakunya. Mohon segera lakukan proses perpanjangan '
+    + 'agar tidak menghambat operasional dan kepatuhan.</p>'
+    + '<table style="width:100%;border-collapse:collapse;border:1px solid #E4E9F0;border-radius:12px;overflow:hidden">'
+    + body + '</table>'
+    + (f.Link_file ? ('<p style="margin:16px 0 0"><a href="' + String(f.Link_file) + '" '
+      + 'style="background:#0B50A1;color:#fff;text-decoration:none;padding:10px 18px;border-radius:100px;'
+      + 'font-size:13px;font-weight:600;display:inline-block">Lihat lampiran sertifikat</a></p>') : '')
+    + '</div>'
+    + '<div style="background:#F8FAFC;border-top:1px solid #E4E9F0;padding:12px 22px">'
+    + '<p style="margin:0;font-size:11px;color:#8494A8;line-height:1.6">'
+    + escHtml_(String(getConfig_('email_footer') || '')) + '</p></div>'
+    + '</div></div>';
+}
+
+function escHtml_(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function buatNotifikasi_(employeeCode, docId, level, statusKey, u, f, def) {
+  try {
+    // hindari duplikat notifikasi untuk doc+level yang sama
+    var ada = sheetToObjects_('T_Notifikasi').some(function (n) {
+      return String(n.Doc_id) === String(docId) && String(n.Level) === String(level)
+        && String(n.Employee_code) === String(employeeCode);
+    });
+    if (ada) return false;
+
+    appendObject_('T_Notifikasi', {
+      Notif_id: generateId_('NTF'),
+      Employee_code: String(employeeCode || ''),
+      Doc_id: String(docId || ''),
+      Level: String(level || ''),
+      Status_key: String(statusKey || ''),
+      Judul: 'Sertifikasi ' + String(f.Nama_Sertifikasi || '') + ' — ' + def.label,
+      Pesan: 'Masa berlaku sampai ' + fmtTanggalIndo_(f.Expired_at)
+        + '. Segera lakukan perpanjangan.',
+      Is_Read: 'FALSE',
+      Read_At: '',
+      Created_At: nowStr_()
+    });
+    return true;
+  } catch (e) { Logger.log('buatNotifikasi_: ' + errMsg_(e)); return false; }
+}
+
+/** Simpan notifikasi in-app saat data disimpan dengan status mendesak. */
+function notifikasiStatusMendesak_(docId) {
+  var f = cariFile_(docId);
+  if (!f) return;
+  var hit = hitungMasaBerlaku_(f.Expired_at);
+  if (!hit.status) return;
+  var def = STATUS_MAP_[hit.status];
+  if (!def || def.prioritas > 3) return;
+  var sisa = hit.sisa_hari;
+  var level = sisa < 0 ? 'EXPIRED' : ('H' + (sisa <= 60 ? 60 : 90));
+  var u = cariUser_(String(f.Employee_id));
+  buatNotifikasi_(String(f.Employee_id), docId, level, hit.status, u, f, levelDef_(level));
+}
+
+// ---------- endpoint notifikasi ----------
+
+function apiListNotifications(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var peta = petaUser_();
+    var rows = sheetToObjects_('T_Notifikasi').filter(function (n) {
+      if (auth.role === 'EMP') return String(n.Employee_code) === auth.employee_code;
+      if (f.employee_code) return String(n.Employee_code) === String(f.employee_code);
+      return true;
+    }).map(function (n) {
+      var u = peta[String(n.Employee_code)];
+      return {
+        notif_id: String(n.Notif_id || ''),
+        employee_code: String(n.Employee_code || ''),
+        nama: u ? String(u.Nama_Lengkap || '') : '',
+        doc_id: String(n.Doc_id || ''),
+        level: String(n.Level || ''),
+        judul: String(n.Judul || ''),
+        pesan: String(n.Pesan || ''),
+        is_read: String(n.Is_Read || 'FALSE').toUpperCase() === 'TRUE',
+        created_at: String(n.Created_At || '')
+      };
+    });
+    rows.sort(function (a, b) { return String(b.created_at).localeCompare(String(a.created_at)); });
+    var belum = rows.filter(function (r) { return !r.is_read; }).length;
+    var limit = Number(f.limit) || 50;
+    return { rows: rows.slice(0, limit), total: rows.length, belum_dibaca: belum };
+  });
+}
+
+function apiMarkNotificationRead(token, notifId) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var row = findRowByCol_('T_Notifikasi', 'Notif_id', notifId);
+    if (row === -1) throw new Error('Notifikasi tidak ditemukan.');
+    var n = rowToObject_('T_Notifikasi', row);
+    if (auth.role === 'EMP' && String(n.Employee_code) !== auth.employee_code) {
+      throw new Error('Anda tidak berhak mengubah notifikasi ini.');
+    }
+    updateRowByCol_('T_Notifikasi', row, { Is_Read: 'TRUE', Read_At: nowStr_() });
+    return { ok: true };
+  });
+}
+
+function apiMarkAllNotificationRead(token) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var rows = sheetToObjects_('T_Notifikasi');
+    var n = 0;
+    rows.forEach(function (x) {
+      if (String(x.Is_Read).toUpperCase() === 'TRUE') return;
+      if (auth.role === 'EMP' && String(x.Employee_code) !== auth.employee_code) return;
+      try { updateRowByCol_('T_Notifikasi', x.__row, { Is_Read: 'TRUE', Read_At: nowStr_() }); n++; } catch (e) { }
+    });
+    return { diubah: n };
+  });
+}
+
+function apiRunReminderNow(token) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var r = jalankanReminder_(true);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'JALANKAN_REMINDER', 'SYSTEM', '-',
+      'target ' + r.target + ', terkirim ' + r.terkirim + ', gagal ' + r.gagal);
+    return r;
+  });
+}
+
+function apiRingkasanReminder(token) {
+  return apiGuard_(function () {
+    requireHc_(token);
+    var logs = sheetToObjects_('T_Email_Log');
+    var terkirim = logs.filter(function (l) { return String(l.Status).toUpperCase() === 'SENT'; }).length;
+    var gagal = logs.filter(function (l) { return String(l.Status).toUpperCase() === 'FAILED'; }).length;
+    var terakhir = '';
+    logs.forEach(function (l) {
+      if (String(l.Status).toUpperCase() !== 'SENT') return;
+      if (String(l.Sent_At) > terakhir) terakhir = String(l.Sent_At);
+    });
+    return {
+      total_terkirim: terkirim,
+      total_gagal: gagal,
+      terakhir_kirim: terakhir,
+      email_hc: emailHc_(),
+      jadwal_hari: getConfigNum_('reminder_hari_kirim', 1),
+      level_aktif: String(getConfig_('reminder_level_bulan') || ''),
+      enabled: getConfigBool_('reminder_enabled', true)
+    };
+  });
+}
+
+// ---------- trigger harian ----------
+
+/** Dibuat otomatis saat bootstrap; juga tersedia dari menu spreadsheet. */
+function createDailyReminderTrigger() {
+  deleteDailyReminderTrigger();
+  ScriptApp.newTrigger('reminderHarian_')
+    .timeBased()
+    .atHour(7)
+    .everyDays(1)
+    .inTimezone(tz_())
+    .create();
+  alertOrLog_('Trigger reminder harian dibuat (07:00 ' + tz_() + ').');
+  return { ok: true };
+}
+
+function deleteDailyReminderTrigger() {
+  var n = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'reminderHarian_') { ScriptApp.deleteTrigger(t); n++; }
+  });
+  return { ok: true, dihapus: n };
+}
+
+/** Entry point trigger harian. */
+function reminderHarian_() {
+  try {
+    var r = jalankanReminder_(false);
+    Logger.log('reminderHarian_: ' + JSON.stringify({ target: r.target, terkirim: r.terkirim, gagal: r.gagal }));
+    return r;
+  } catch (e) {
+    Logger.log('reminderHarian_ gagal: ' + errMsg_(e));
+    return { ok: false, error: errMsg_(e) };
+  }
+}
+
+// ============================================================================
+// 9. EXPORT (Excel & PDF)
+// ============================================================================
+
+/** Siapkan baris export dari filter yang sama dengan apiListFiles. */
+function barisExport_(filter, auth) {
+  var f = filter || {};
+  var peta = petaUser_();
+  var rows = sheetToObjects_('Master_File').map(function (x) { return fileDto_(x, peta); });
+
+  if (auth.role === 'EMP') rows = rows.filter(function (r) { return r.employee_id === auth.employee_code; });
+  if (f.employee_code) rows = rows.filter(function (r) { return r.employee_id === String(f.employee_code); });
+  if (f.divisi) rows = rows.filter(function (r) { return r.divisi === String(f.divisi); });
+  if (f.status) rows = rows.filter(function (r) { return r.status === String(f.status).toUpperCase(); });
+  if (f.kategori) rows = rows.filter(function (r) { return r.kategori === String(f.kategori); });
+  if (f.verifikasi) rows = rows.filter(function (r) { return r.status_verifikasi === String(f.verifikasi).toUpperCase(); });
+  var q = String(f.q || '').trim().toLowerCase();
+  if (q) {
+    rows = rows.filter(function (r) {
+      return [r.employee_id, r.nama_pemegang, r.nama_sertifikasi, r.divisi, r.jabatan, r.no_sertifikat]
+        .join(' ').toLowerCase().indexOf(q) !== -1;
+    });
+  }
+  var dari = toDate_(f.dari), sampai = toDate_(f.sampai);
+  if (dari || sampai) {
+    rows = rows.filter(function (r) {
+      var e = toDate_(r.expired_at);
+      if (!e) return false;
+      if (dari && e.getTime() < dari.getTime()) return false;
+      if (sampai && e.getTime() > sampai.getTime()) return false;
+      return true;
+    });
+  }
+  rows.sort(function (a, b) {
+    if (a.prioritas !== b.prioritas) return a.prioritas - b.prioritas;
+    return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+  });
+  return rows;
+}
+
+var HEADER_EXPORT_ = [
+  'No', 'Employee Code', 'Nama', 'Divisi', 'Jabatan', 'Nama Sertifikasi', 'Kategori',
+  'No. Sertifikat', 'Penerbit', 'Mulai Pelaksanaan', 'Selesai Pelaksanaan',
+  'Tanggal Sertifikasi', 'Tanggal Perpanjangan', 'Berlaku Sampai',
+  'Sisa Hari', 'Sisa Bulan', 'Status', 'Verifikasi', 'Link Lampiran'
+];
+
+function barisExportArray_(rows) {
+  var out = [HEADER_EXPORT_.slice()];
+  rows.forEach(function (r, i) {
+    out.push([
+      i + 1, r.employee_id, r.nama_pemegang, r.divisi, r.jabatan, r.nama_sertifikasi, r.kategori,
+      r.no_sertifikat, r.penerbit, r.start_pelaksanaan, r.end_pelaksanaan,
+      r.tanggal_sertifikasi, r.tanggal_waktu_perpanjangan, r.expired_at,
+      r.sisa_hari === null ? '' : r.sisa_hari,
+      r.sisa_bulan === null ? '' : r.sisa_bulan,
+      r.status_label, r.status_verifikasi,
+      r.link_file || ''
+    ]);
+  });
+  return out;
+}
+
+/**
+ * Export Excel (.xlsx).
+ * Spreadsheet sementara dibuat, lalu diunduh sebagai xlsx lewat endpoint
+ * export Google Sheets (cara yang andal; makeCopy() akan tetap berupa
+ * Google Sheet, bukan berkas xlsx).
+ * @return {Object} { url, download_url, file_id, name, jumlah }
+ */
+function apiExportExcel(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var rows = barisExport_(filter, auth);
+    if (!rows.length) throw new Error('Tidak ada data yang cocok untuk diekspor.');
+    var max = getConfigNum_('export_max_baris', 5000);
+    var dipotong = false;
+    if (rows.length > max) { rows = rows.slice(0, max); dipotong = true; }
+
+    var data = barisExportArray_(rows);
+    var namaFile = 'Rekap_Sertifikasi_' + Utilities.formatDate(new Date(), tz_(), 'yyyyMMdd-HHmm');
+
+    // ---------- 1. spreadsheet sementara ----------
+    var tmp = SpreadsheetApp.create(namaFile);
+    var tmpId = tmp.getId();
+    var sh = tmp.getSheets()[0];
+    sh.setName('Rekap Sertifikasi');
+    sh.getRange(1, 1, data.length, data[0].length).setValues(data);
+    sh.getRange(1, 1, 1, data[0].length)
+      .setFontWeight('bold').setBackground('#093D7D').setFontColor('#FFFFFF');
+    sh.setFrozenRows(1);
+    try { sh.setColumnWidths(1, data[0].length, 150); } catch (e) { }
+    try { sh.getRange(2, 1, data.length - 1, 1).setNumberFormat('0'); } catch (e) { }
+    SpreadsheetApp.flush();
+
+    // ---------- 2. unduh sebagai xlsx ----------
+    var namaXlsx = namaFile + '.xlsx';
+    var folder = DriveApp.getFolderById(ensureExportFolder_());
+    var file;
+    try {
+      var url = 'https://docs.google.com/spreadsheets/d/' + tmpId + '/export?format=xlsx';
+      var resp = UrlFetchApp.fetch(url, {
+        headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+        muteHttpExceptions: true
+      });
+      if (resp.getResponseCode() !== 200) {
+        throw new Error('HTTP ' + resp.getResponseCode());
+      }
+      file = folder.createFile(resp.getBlob().setName(namaXlsx));
+    } catch (e) {
+      // ---------- 3. cadangan: konversi native Apps Script ----------
+      Logger.log('export xlsx via UrlFetch gagal (' + errMsg_(e) + '), memakai cadangan.');
+      var asli = DriveApp.getFileById(tmpId);
+      var blob = asli.getAs('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      file = folder.createFile(blob.setName(namaXlsx));
+    }
+
+    // ---------- 4. bersihkan spreadsheet sementara ----------
+    try { DriveApp.getFileById(tmpId).setTrashed(true); } catch (e) { }
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'EXPORT_EXCEL', 'LAPORAN', file.getId(),
+      'jumlah baris ' + rows.length + (dipotong ? ' (dipotong dari ' + max + ')' : ''));
+
+    return {
+      url: file.getUrl(),
+      download_url: 'https://drive.google.com/uc?export=download&id=' + file.getId(),
+      file_id: file.getId(),
+      name: namaXlsx,
+      jumlah: rows.length,
+      dipotong: dipotong
+    };
+  });
+}
+
+/**
+ * Export PDF rekap (HTML -> PDF). Memakai tabel agar rapi saat dicetak.
+ */
+function apiExportPdf(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var rows = barisExport_(f, auth);
+    if (!rows.length) throw new Error('Tidak ada data yang cocok untuk diekspor.');
+    var max = getConfigNum_('export_max_baris', 5000);
+    if (rows.length > max) rows = rows.slice(0, max);
+
+    var judul = String(f.judul || 'Rekap Sertifikasi & Masa Berlaku');
+    var sub = String(f.subjudul || '').trim();
+    if (!sub) {
+      var bagian = [];
+      if (f.divisi) bagian.push('Divisi: ' + f.divisi);
+      if (f.status && STATUS_MAP_[String(f.status).toUpperCase()]) {
+        bagian.push('Status: ' + STATUS_MAP_[String(f.status).toUpperCase()].label);
+      }
+      sub = bagian.join(' · ');
+    }
+
+    var html = htmlLaporanPdf_(judul, sub, rows);
+    var namaFile = 'Rekap_Sertifikasi_' + Utilities.formatDate(new Date(), tz_(), 'yyyyMMdd-HHmm') + '.pdf';
+    var blob = Utilities.newBlob(html, 'text/html', namaFile).getAs('application/pdf');
+    var folder = DriveApp.getFolderById(ensureExportFolder_());
+    var file = folder.createFile(blob.setName(namaFile));
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'EXPORT_PDF', 'LAPORAN', file.getId(),
+      'jumlah baris ' + rows.length);
+    return {
+      url: file.getUrl(),
+      download_url: 'https://drive.google.com/uc?export=download&id=' + file.getId(),
+      file_id: file.getId(),
+      name: namaFile,
+      jumlah: rows.length
+    };
+  });
+}
+
+/** PDF profil satu pekerja (dipakai halaman Profil Pekerja). */
+function apiExportProfilPdf(token, employeeCode, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var code = String(employeeCode || auth.employee_code).trim();
+    if (code !== auth.employee_code && auth.role === 'EMP') throw new Error('Anda hanya dapat mengekspor profil sendiri.');
+
+    var u = cariUser_(code);
+    if (!u) throw new Error('Pekerja tidak ditemukan.');
+    var f = filter || {};
+    f.employee_code = code;
+    var rows = barisExport_(f, auth);
+
+    var html = htmlProfilPdf_(userPublic_(u), rows);
+    var namaFile = 'Profil_Sertifikasi_' + slugUsername_(String(u.Nama_Lengkap || code)).replace(/[^a-z0-9]/g, '_')
+      + '_' + Utilities.formatDate(new Date(), tz_(), 'yyyyMMdd') + '.pdf';
+    var blob = Utilities.newBlob(html, 'text/html', namaFile).getAs('application/pdf');
+    var folder = DriveApp.getFolderById(ensureExportFolder_());
+    var file = folder.createFile(blob.setName(namaFile));
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'EXPORT_PROFIL_PDF', 'USER', code, namaFile);
+    return { url: file.getUrl(), download_url: 'https://drive.google.com/uc?export=download&id=' + file.getId(),
+      file_id: file.getId(), name: namaFile, jumlah: rows.length };
+  });
+}
+
+function warnaTone_(tone) {
+  var m = {
+    green: '#71A62F', yellow: '#D8CE3A', orange: '#E07B14',
+    red: '#ED1B2F', black: '#1B2430', dead: '#7F1D1D', gray: '#94A3B8'
+  };
+  return m[tone] || '#5B6B80';
+}
+
+function htmlLaporanPdf_(judul, sub, rows) {
+  var peta = {};
+  STATUS_DEFS.forEach(function (s) { peta[s.key] = s; });
+
+  var body = rows.map(function (r, i) {
+    var def = peta[r.status];
+    return '<tr>'
+      + '<td class="ctr">' + (i + 1) + '</td>'
+      + '<td>' + escHtml_(r.nama_pemegang) + '<br><span class="kecil">' + escHtml_(r.employee_id) + '</span></td>'
+      + '<td>' + escHtml_(r.divisi || '-') + '</td>'
+      + '<td>' + escHtml_(r.nama_sertifikasi) + '</td>'
+      + '<td class="ctr">' + escHtml_(fmtTanggalIndo_(r.expired_at)) + '</td>'
+      + '<td class="ctr">' + (r.sisa_hari === null ? '-' : (r.sisa_hari + ' hr')) + '</td>'
+      + '<td class="ctr" style="color:' + warnaTone_(r.status_tone) + ';font-weight:700">'
+      + escHtml_(def ? def.label : 'Belum ada tanggal') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  return '<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><style>'
+    + '@page{size:A4 landscape;margin:12mm}'
+    + 'body{font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#16202E;font-size:10px;margin:0}'
+    + '.kop{border-bottom:2px solid #0B50A1;padding-bottom:8px;margin-bottom:12px}'
+    + '.kop .brand{color:#0B50A1;font-size:15px;font-weight:700}'
+    + '.kop .sub{color:#5B6B80;font-size:9px;margin-top:2px}'
+    + 'h1{font-size:14px;margin:10px 0 2px}'
+    + '.meta{color:#5B6B80;font-size:9px;margin-bottom:10px}'
+    + 'table{width:100%;border-collapse:collapse}'
+    + 'th{background:#093D7D;color:#fff;font-size:9px;text-align:left;padding:6px 5px}'
+    + 'td{border-bottom:1px solid #E4E9F0;padding:5px;vertical-align:top}'
+    + 'tr:nth-child(even) td{background:#F8FAFC}'
+    + '.ctr{text-align:center}'
+    + '.kecil{color:#8494A8;font-size:8px}'
+    + '.foot{margin-top:10px;color:#8494A8;font-size:8px}'
+    + '</style></head><body>'
+    + '<div class="kop"><div class="brand">' + APP_NAME + '</div>'
+    + '<div class="sub">' + APP_OWNER + ' · ' + APP_SUB + '</div></div>'
+    + '<h1>' + escHtml_(judul) + '</h1>'
+    + '<div class="meta">' + escHtml_(sub || '') + (sub ? ' · ' : '')
+    + 'Total ' + rows.length + ' data · dicetak ' + fmtTanggalIndo_(todayDate_()) + ' ' + nowStr_().substring(11) + '</div>'
+    + '<table><thead><tr>'
+    + '<th class="ctr" style="width:4%">No</th>'
+    + '<th style="width:20%">Pemegang</th>'
+    + '<th style="width:16%">Divisi</th>'
+    + '<th style="width:26%">Sertifikasi</th>'
+    + '<th class="ctr" style="width:12%">Berlaku sampai</th>'
+    + '<th class="ctr" style="width:8%">Sisa</th>'
+    + '<th class="ctr" style="width:14%">Status</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>'
+    + '<div class="foot">Dokumen ini dihasilkan otomatis oleh ' + APP_NAME + ' — ' + APP_OWNER + '</div>'
+    + '</body></html>';
+}
+
+function htmlProfilPdf_(u, rows) {
+  var hitung = {};
+  STATUS_DEFS.forEach(function (s) { hitung[s.key] = 0; });
+  rows.forEach(function (r) { if (r.status) hitung[r.status]++; });
+
+  var ringkas = STATUS_DEFS.map(function (s) {
+    return '<td class="ctr" style="border:1px solid #E4E9F0;padding:8px">'
+      + '<div style="font-size:16px;font-weight:700;color:' + warnaTone_(s.tone) + '">' + (hitung[s.key] || 0) + '</div>'
+      + '<div class="kecil">' + escHtml_(s.label) + '</div></td>';
+  }).join('');
+
+  var body = rows.map(function (r, i) {
+    var def = STATUS_MAP_[r.status];
+    return '<tr>'
+      + '<td class="ctr">' + (i + 1) + '</td>'
+      + '<td>' + escHtml_(r.nama_sertifikasi) + '</td>'
+      + '<td>' + escHtml_(r.kategori || '-') + '</td>'
+      + '<td class="ctr">' + escHtml_(fmtTanggalIndo_(r.start_pelaksanaan)) + '</td>'
+      + '<td class="ctr">' + escHtml_(fmtTanggalIndo_(r.end_pelaksanaan)) + '</td>'
+      + '<td class="ctr">' + escHtml_(fmtTanggalIndo_(r.expired_at)) + '</td>'
+      + '<td class="ctr" style="color:' + warnaTone_(r.status_tone) + ';font-weight:700">'
+      + escHtml_(def ? def.label : '-') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  return '<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><style>'
+    + '@page{size:A4;margin:12mm}'
+    + 'body{font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#16202E;font-size:10px;margin:0}'
+    + '.kop{border-bottom:2px solid #0B50A1;padding-bottom:8px;margin-bottom:12px}'
+    + '.kop .brand{color:#0B50A1;font-size:15px;font-weight:700}'
+    + '.kop .sub{color:#5B6B80;font-size:9px;margin-top:2px}'
+    + 'h1{font-size:14px;margin:10px 0 4px}'
+    + '.kecil{color:#8494A8;font-size:8px}'
+    + 'table{width:100%;border-collapse:collapse}'
+    + 'th{background:#093D7D;color:#fff;font-size:9px;text-align:left;padding:6px 5px}'
+    + 'td{border-bottom:1px solid #E4E9F0;padding:5px;vertical-align:top}'
+    + '.ctr{text-align:center}'
+    + '.ident td{padding:4px 6px;border-bottom:1px dashed #E4E9F0}'
+    + '.ident .k{color:#5B6B80;width:26%}'
+    + '</style></head><body>'
+    + '<div class="kop"><div class="brand">' + APP_NAME + '</div>'
+    + '<div class="sub">' + APP_OWNER + '</div></div>'
+    + '<h1>Profil Sertifikasi — ' + escHtml_(u.nama_lengkap) + '</h1>'
+    + '<div class="kecil">' + escHtml_(u.employee_code) + ' · dicetak ' + fmtTanggalIndo_(todayDate_()) + '</div>'
+    + '<table class="ident" style="margin:10px 0 14px">'
+    + '<tr><td class="k">Employee Code</td><td>' + escHtml_(u.employee_code) + '</td>'
+    + '<td class="k">Username</td><td>' + escHtml_(u.username) + '</td></tr>'
+    + '<tr><td class="k">Divisi</td><td>' + escHtml_(u.divisi || '-') + '</td>'
+    + '<td class="k">Jabatan</td><td>' + escHtml_(u.jabatan || '-') + '</td></tr>'
+    + '<tr><td class="k">Email Perusahaan</td><td>' + escHtml_(u.email_perusahaan || '-') + '</td>'
+    + '<td class="k">Email Pribadi</td><td>' + escHtml_(u.email_pribadi || '-') + '</td></tr>'
+    + '<tr><td class="k">Lokasi Kerja</td><td>' + escHtml_(u.lokasi_kerja || '-') + '</td>'
+    + '<td class="k">No. HP</td><td>' + escHtml_(u.no_hp || '-') + '</td></tr>'
+    + '</table>'
+    + '<table style="margin-bottom:14px"><tr>' + ringkas + '</tr></table>'
+    + '<table><thead><tr>'
+    + '<th class="ctr" style="width:5%">No</th><th style="width:30%">Sertifikasi</th>'
+    + '<th style="width:16%">Kategori</th><th class="ctr" style="width:12%">Mulai</th>'
+    + '<th class="ctr" style="width:12%">Selesai</th><th class="ctr" style="width:12%">Berlaku sampai</th>'
+    + '<th class="ctr" style="width:13%">Status</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>'
+    + '<div class="kecil" style="margin-top:10px">Dokumen ini dihasilkan otomatis oleh '
+    + APP_NAME + ' — ' + APP_OWNER + '</div>'
+    + '</body></html>';
+}
+
+// ============================================================================
+// 10. META & PENGATURAN
+// ============================================================================
+
+/** Metadata untuk frontend: status, ambang, opsi dropdown, aturan berkas. */
+function apiGetMeta(token) {
+  return apiGuard_(function () {
+    var auth = token ? requireAuth_(token) : null;
+    var certs = [];
+    try {
+      certs = sheetToObjects_('Master_Sertifikasi')
+        .filter(function (c) { return String(c.Aktif || 'TRUE').toUpperCase() === 'TRUE'; })
+        .map(function (c) {
+          return {
+            nama: String(c.Nama_Sertifikasi || ''),
+            kategori: String(c.Kategori || ''),
+            masa_berlaku_bulan: Number(c.Masa_berlaku_bulan) || 36
+          };
+        }).sort(function (a, b) { return a.nama.localeCompare(b.nama); });
+    } catch (e) { }
+
+    var kategori = uniq_(certs.map(function (c) { return c.kategori; }).filter(function (x) { return x; })).sort();
+
+    return {
+      app_name: APP_NAME,
+      app_sub: APP_SUB,
+      app_owner: APP_OWNER,
+      app_version: APP_VERSION,
+      zona_waktu: tz_(),
+      statuses: STATUS_DEFS,
+      roles: ROLES_,
+      role_labels: ROLE_LABEL_,
+      ambang: ambangHari_(),
+      divisi_options: opsiDivisi_(),
+      jenis_sertifikasi: certs,
+      kategori_options: kategori,
+      allowed_ext: ALLOWED_EXT_,
+      allowed_mime: Object.keys(ALLOWED_MIME_),
+      max_upload_mb: MAX_UPLOAD_MB_,
+      file_icons: FILE_ICON_,
+      reminder: {
+        enabled: getConfigBool_('reminder_enabled', true),
+        hari_kirim: getConfigNum_('reminder_hari_kirim', 1),
+        level: String(getConfig_('reminder_level_bulan') || ''),
+        ke_karyawan: getConfigBool_('reminder_ke_karyawan', true),
+        ke_hc: getConfigBool_('reminder_ke_hc', true),
+        ke_atasan: getConfigBool_('reminder_ke_atasan', true),
+        extra_emails: String(getConfig_('reminder_extra_emails') || '')
+      },
+      boleh: auth ? {
+        kelola_user: (auth.role === 'HC' || auth.role === 'SA'),
+        kelola_master: (auth.role === 'HC' || auth.role === 'SA'),
+        jalankan_reminder: (auth.role === 'HC' || auth.role === 'SA'),
+        lihat_semua: (auth.role === 'HC' || auth.role === 'SA')
+      } : {}
+    };
+  });
+}
+
+function apiGetConfig(token) {
+  return apiGuard_(function () {
+    requireHc_(token);
+    return { config: getAllConfig_() };
+  });
+}
+
+function apiSetConfig(token, obj) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    if (!obj) throw new Error('Tidak ada perubahan.');
+    var dilindungi = { 'spreadsheet_id': 1, 'superadmin_email': 1 };
+    var diubah = {}, dilewati = {};
+    Object.keys(obj).forEach(function (k) {
+      if (dilindungi[k] && auth.role !== 'SA') { dilewati[k] = true; return; }
+      if (CONFIG_DEFAULTS[k] === undefined) { dilewati[k] = true; return; }
+      setConfig_(k, obj[k]);
+      diubah[k] = obj[k];
+    });
+    logAudit_(auth.employee_code, auth.username, auth.role, 'UBAH_CONFIG', 'CONFIG', '-', diubah);
+    return { diubah: Object.keys(diubah), dilewati: Object.keys(dilewati) };
+  });
+}
+
+/**
+ * Hitung ulang kolom turunan (sisa hari, sisa bulan, status) untuk SELURUH
+ * baris Master_File. Dipakai setelah ambang status diubah di halaman
+ * Pengaturan atau setelah impor data massal.
+ */
+function apiRecalcStatus(token) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var r = recalcAllStatus_();
+    var cert = { diubah: 0 };
+    try { cert = updateJumlahPemegang_(); } catch (e) { }
+    logAudit_(auth.employee_code, auth.username, auth.role, 'HITUNG_ULANG_STATUS', 'SYSTEM', '-',
+      'total ' + r.total + ', diubah ' + r.diubah);
+    return {
+      total: r.total,
+      diubah: r.diubah,
+      jenis_sertifikasi_diperbarui: cert.diubah || 0,
+      pada: r.pada,
+      ambang: ambangHari_()
+    };
+  });
+}
+
+// ============================================================================
+// 11. HELPER INTERNAL LAIN
+// ============================================================================
+
+/** Ringkasan singkat untuk header halaman (dipakai beberapa view). */
+function apiGetRingkasanCepat(token) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var peta = petaUser_();
+    var rows = sheetToObjects_('Master_File').map(function (x) { return fileDto_(x, peta); });
+    if (auth.role === 'EMP') rows = rows.filter(function (r) { return r.employee_id === auth.employee_code; });
+
+    var out = { kadaluarsa: 0, mendesak: 0, perlu_verifikasi: 0 };
+    rows.forEach(function (r) {
+      if (r.status === 'KADALUARSA') out.kadaluarsa++;
+      if (r.status === 'KADALUARSA' || r.status === 'MENDEKATI_KADALUARSA' || r.status === 'SEGERA_PERPANJANG') out.mendesak++;
+      if (r.status_verifikasi === 'PENDING') out.perlu_verifikasi++;
+    });
+    return out;
+  });
+}
+
+/**
+ * PEMULIHAN DARURAT — jalankan dari editor Apps Script, bukan dari web.
+ * Mengembalikan password SELURUH user ke Employee Code masing-masing
+ * (atau ke `passwordBaru` bila diisi) dan mewajibkan ganti saat login.
+ * Dipakai bila HC & Super Admin sama-sama tidak bisa masuk.
+ *
+ *   repairPasswords_()                  -> semua password = Employee Code
+ *   repairPasswords_('Patuha2026#')      -> semua password = nilai tersebut
+ *
+ * @param {string=} passwordBaru
+ */
+function repairPasswords_(passwordBaru) {
+  var sh = getSheet_('Master_User');
+  if (!sh) return { ok: false, msg: 'Sheet Master_User tidak ditemukan' };
+
+  var rows = sheetToObjects_('Master_User');
+  var diubah = 0;
+  rows.forEach(function (u) {
+    var sandi = passwordBaru ? String(passwordBaru) : String(u.Employee_code || '');
+    if (!sandi) return;
+    try {
+      updateRowByCol_('Master_User', u.__row, {
+        Password: hashPassword_(sandi),
+        Must_Change_Password: 'TRUE',
+        Gagal_Login: 0,
+        Terkunci_Sampai: '',
+        Updated_At: nowStr_()
+      });
+      diubah++;
+    } catch (e) { }
+  });
+
+  cabutSemuaSesi_('', null);
+  try {
+    PropertiesService.getScriptProperties().setProperty('SIAGA_REPAIR_AT', nowStr_());
+  } catch (e) { }
+
+  var hasil = {
+    ok: true,
+    diubah: diubah,
+    mode: passwordBaru ? 'password seragam' : 'Employee Code',
+    catatan: 'Semua sesi lama dicabut. Setiap user wajib mengganti password saat login berikutnya.'
+  };
+  alertOrLog_('repairPasswords_ selesai.\nUser diubah: ' + diubah
+    + '\nPassword: ' + hasil.mode + '\n\n' + hasil.catatan);
+  return hasil;
+}
+
+/**
+ * Utilitas: tandai ulang semua akun agar wajib ganti password
+ * tanpa mengubah passwordnya. Jalankan dari editor.
+ */
+function wajibkanGantiPasswordSemua_() {
+  var rows = sheetToObjects_('Master_User');
+  var n = 0;
+  rows.forEach(function (u) {
+    try { updateRowByCol_('Master_User', u.__row, { Must_Change_Password: 'TRUE' }); n++; } catch (e) { }
+  });
+  alertOrLog_(n + ' akun ditandai wajib ganti password.');
+  return { ok: true, diubah: n };
+}

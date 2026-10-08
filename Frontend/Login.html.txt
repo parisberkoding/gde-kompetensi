@@ -1,0 +1,194 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — Login.html
+  Halaman masuk. Dimuat oleh SIAGA.tampilkanLogin() lewat getView('Login').
+  Kredensial: Username = nama depan, Password = Employee Code.
+  ============================================================================
+-->
+<div class="siaga-login">
+
+  <!-- ============================ KIRI: BRANDING ============================ -->
+  <section class="siaga-login__brand">
+    <div class="siaga-login__logo">
+      <div class="siaga-login__mark">S</div>
+      <div>
+        <div style="font-weight:700;font-size:1.05rem;line-height:1.2">SIAGA Sertifikasi</div>
+        <div style="font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.6)">
+          Unit Patuha
+        </div>
+      </div>
+    </div>
+
+    <div class="siaga-login__title">
+      <h1>Pengingat Masa Berlaku Sertifikasi Karyawan</h1>
+      <p>
+        Satu tempat untuk memantau seluruh sertifikasi kompetensi karyawan Unit Patuha —
+        lengkap dengan pengingat otomatis ke karyawan, Human Capital, dan atasan
+        sebelum masa berlaku habis.
+      </p>
+
+      <ul class="siaga-login__points">
+        <li>
+          <i class="bi bi-clock-history"></i>
+          <span><b>Pengingat berjenjang</b> — notifikasi terkirim saat sisa 9, 6, 3, 2, dan 1 bulan.</span>
+        </li>
+        <li>
+          <i class="bi bi-folder-check"></i>
+          <span><b>Lampiran terpusat</b> — berkas PDF, Excel, Word, dan gambar tersimpan rapi di Drive.</span>
+        </li>
+        <li>
+          <i class="bi bi-graph-up-arrow"></i>
+          <span><b>Dasbor &amp; laporan</b> — rekap per divisi, per jenis sertifikasi, siap diekspor PDF/Excel.</span>
+        </li>
+      </ul>
+    </div>
+
+    <div class="siaga-login__foot">
+      &copy; <span id="siagaLoginTahun"></span> PT Geo Dipa Energi (Persero) — Unit Patuha
+    </div>
+  </section>
+
+  <!-- ============================ KANAN: FORM ============================ -->
+  <section class="siaga-login__panel">
+    <div class="siaga-login__card">
+      <div class="gde-card">
+        <div class="gde-card__body" style="padding:2rem">
+
+          <h2>Masuk ke akun Anda</h2>
+          <p>Gunakan username dan password yang diberikan Human Capital.</p>
+
+          <div id="siagaLoginAlert" class="gde-alert gde-alert--danger gde-u-hide" style="margin-bottom:1rem">
+            <i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>
+            <div class="gde-alert__body"><strong>Gagal masuk</strong><span id="siagaLoginAlertMsg"></span></div>
+          </div>
+
+          <form id="siagaLoginForm" autocomplete="on" novalidate>
+            <div style="margin-bottom:1rem">
+              <label class="gde-label" for="siagaLoginUsername">
+                Username <span class="gde-req">*</span>
+              </label>
+              <input class="gde-input" type="text" id="siagaLoginUsername" name="username"
+                     placeholder="contoh: adiasa" autocomplete="username"
+                     autocapitalize="none" spellcheck="false" required>
+              <div class="gde-hint">Username adalah <b>nama depan</b> Anda (huruf kecil).</div>
+            </div>
+
+            <div style="margin-bottom:1.25rem">
+              <label class="gde-label" for="siagaLoginPassword">
+                Password <span class="gde-req">*</span>
+              </label>
+              <div class="siaga-pass">
+                <input class="gde-input" type="password" id="siagaLoginPassword" name="password"
+                       placeholder="Employee Code" autocomplete="current-password" required>
+                <button class="siaga-pass__toggle" type="button" id="siagaLoginTogglePass"
+                        aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>
+              </div>
+              <div class="gde-hint">Password awal Anda adalah <b>Employee Code</b> (contoh: 4122196-C).</div>
+            </div>
+
+            <button class="gde-btn gde-btn--primary gde-btn--block gde-btn--lg" type="submit" id="siagaLoginSubmit">
+              <i class="bi bi-box-arrow-in-right"></i> Masuk
+            </button>
+          </form>
+
+          <div class="siaga-login__hint">
+            <b>Lupa password?</b> Hubungi Human Capital Unit Patuha untuk melakukan reset.
+            Password akan dikembalikan ke Employee Code Anda dan wajib diganti saat login berikutnya.
+          </div>
+
+        </div>
+      </div>
+
+      <p style="text-align:center;margin:.85rem 0 0;font-size:.7rem;color:var(--gde-muted-2)">
+        SIAGA Sertifikasi <span id="siagaLoginVersi"></span> — akses hanya untuk karyawan terdaftar.
+      </p>
+    </div>
+  </section>
+</div>
+
+<script>
+/* ==========================================================================
+   KONTROLER HALAMAN LOGIN
+   ========================================================================== */
+function initLogin(pesanAwal) {
+  'use strict';
+
+  var form = SIAGA.el('siagaLoginForm');
+  var inputUser = SIAGA.el('siagaLoginUsername');
+  var inputPass = SIAGA.el('siagaLoginPassword');
+  var tombol = SIAGA.el('siagaLoginSubmit');
+  var toggle = SIAGA.el('siagaLoginTogglePass');
+  var kotakAlert = SIAGA.el('siagaLoginAlert');
+  var alertMsg = SIAGA.el('siagaLoginAlertMsg');
+
+  var tahun = SIAGA.el('siagaLoginTahun');
+  if (tahun) tahun.textContent = new Date().getFullYear();
+  var versi = SIAGA.el('siagaLoginVersi');
+  if (versi) versi.textContent = SIAGA.APP.version;
+
+  function tampilkanGalat(pesan) {
+    if (!kotakAlert) { SIAGA.gagal(pesan); return; }
+    alertMsg.textContent = pesan;
+    kotakAlert.classList.remove('gde-u-hide');
+  }
+
+  function sembunyikanGalat() {
+    if (kotakAlert) kotakAlert.classList.add('gde-u-hide');
+  }
+
+  if (pesanAwal) tampilkanGalat(pesanAwal);
+  setTimeout(function () { try { inputUser.focus(); } catch (e) { } }, 120);
+
+  if (toggle) {
+    toggle.addEventListener('click', function () {
+      var lihat = inputPass.type === 'password';
+      inputPass.type = lihat ? 'text' : 'password';
+      toggle.innerHTML = '<i class="bi ' + (lihat ? 'bi-eye-slash' : 'bi-eye') + '"></i>';
+      try { inputPass.focus(); } catch (e) { }
+    });
+  }
+
+  if (form) {
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      sembunyikanGalat();
+      SIAGA.bersihkanInvalid(form);
+
+      var username = String(inputUser.value || '').trim();
+      var password = String(inputPass.value || '');
+
+      if (!username) { SIAGA.tandaiInvalid(inputUser, 'Username wajib diisi.'); return; }
+      if (!password) { SIAGA.tandaiInvalid(inputPass, 'Password wajib diisi.'); return; }
+
+      SIAGA.tombolSibuk(tombol, true, 'Memeriksa...');
+      SIAGA.login(username, password).then(function (data) {
+        SIAGA.tombolSibuk(tombol, false);
+        SIAGA.sukses('Selamat datang, ' + ((data.user && data.user.nama_lengkap) || username) + '.', 'Berhasil masuk');
+        return SIAGA.muatMeta().then(function () {
+          SIAGA.renderShell();
+          SIAGA.mulaiRouter();          // mulai router + muat halaman awal
+          SIAGA.perbaruiBadgeNotifikasi();
+          SIAGA.perbaruiBadgeMendesak();
+          if (data.user && data.user.must_change_password) {
+            SIAGA.ingat('Password Anda masih password awal. Segera ganti di menu Username & Password.',
+              'Perhatian keamanan');
+          }
+        });
+      }).catch(function (err) {
+        SIAGA.tombolSibuk(tombol, false);
+        var msg = (err && err.message) ? err.message : 'Tidak dapat masuk. Coba lagi.';
+        tampilkanGalat(msg);
+        inputPass.value = '';
+        try { inputPass.focus(); } catch (e2) { }
+      });
+    });
+  }
+
+  /* Enter di kolom username pindah ke password */
+  if (inputUser) {
+    inputUser.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); try { inputPass.focus(); } catch (x) { } }
+    });
+  }
+}
+</script>

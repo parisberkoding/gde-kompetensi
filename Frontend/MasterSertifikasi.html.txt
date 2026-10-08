@@ -1,0 +1,603 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — MasterSertifikasi.html
+  Halaman: Jenis Sertifikasi (master jenis + masa berlaku).
+  Hanya untuk role HC dan SA (router sudah menjaga, halaman ini tetap
+  memasang guard sendiri lewat SIAGA.isHc()).
+
+  Masa_berlaku_bulan dipakai server untuk menghitung Expired_at otomatis
+  (36 bulan = 3 tahun, 60 bulan = 5 tahun) dan untuk merapikan dropdown
+  jenis sertifikasi pada form Register.
+
+  KONTRAK API (lihat subprocess.gs bagian 4):
+    apiListCertTypes(token, filter) -> { rows:[{cert_id,nama,kategori,
+                                        masa_berlaku_bulan,penerbit,aktif,
+                                        jumlah_pemegang}], total }
+    apiSaveCertType(token, data)    -> { mode:'insert'|'update', cert_id }
+    apiDeleteCertType(token, cert_id)-> { ok }
+  ============================================================================
+-->
+<div id="msRoot">
+  <div class="siaga-loader">
+    <div class="siaga-loader__ring"></div>
+    <p>Memuat jenis sertifikasi...</p>
+  </div>
+</div>
+
+<script>
+/* ==========================================================================
+   KONTROLER MASTER JENIS SERTIFIKASI
+   ========================================================================== */
+var MSState = {
+  baris: [],          // hasil apiListCertTypes tanpa filter
+  filter: { q: '', kategori: '', aktifOnly: false },
+  mode: 'baru',       // 'baru' | 'ubah'
+  certId: ''          // cert_id yang sedang diubah
+};
+
+function initMasterSertifikasi(param) {
+  'use strict';
+
+  /* Guard role: halaman ini khusus HC / SA */
+  if (!SIAGA.isHc()) {
+    SIAGA.el('msRoot').innerHTML = SIAGA.galatHtml(
+      'Akses ditolak. Halaman Jenis Sertifikasi hanya dapat dibuka oleh Human Capital atau Super Admin.');
+    return;
+  }
+
+  /* state selalu segar setiap view dibuka */
+  MSState.baris = [];
+  MSState.filter = { q: '', kategori: '', aktifOnly: false };
+  MSState.mode = 'baru';
+  MSState.certId = '';
+
+  renderMsKerangka();
+  muatJenis();
+}
+
+/* -------------------------------------------------------------- kerangka -- */
+function renderMsKerangka() {
+  SIAGA.el('msRoot').innerHTML = ''
+    /* ---------- header ---------- */
+    + '<div class="gde-page-head">'
+    + '  <div>'
+    + '    <div class="gde-u-eyebrow">Master Data</div>'
+    + '    <h1>Jenis Sertifikasi</h1>'
+    + '    <p>Kelola daftar jenis sertifikasi beserta masa berlakunya. Kolom '
+    + '    <b>masa berlaku</b> dipakai sistem untuk menghitung <b>Expired_at</b> secara otomatis '
+    + '    (36 bulan = 3 tahun, 60 bulan = 5 tahun) dan menjaga pilihan jenis sertifikasi '
+    + '    pada form Register tetap rapi.</p>'
+    + '  </div>'
+    + '  <div class="gde-page-actions">'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="msRefresh">'
+    + '      <i class="bi bi-arrow-clockwise"></i> Segarkan</button>'
+    + '    <button class="gde-btn gde-btn--primary" type="button" id="msTambahBtn">'
+    + '      <i class="bi bi-plus-circle"></i> Tambah jenis</button>'
+    + '  </div>'
+    + '</div>'
+    /* ---------- ringkasan ---------- */
+    + '<div id="msRingkas" class="gde-grid gde-grid--3 siaga-mb-4"></div>'
+    /* ---------- kartu tabel ---------- */
+    + '<div class="gde-card">'
+    + '  <div class="siaga-toolbar">'
+    + '    <div class="siaga-toolbar__field siaga-toolbar__field--grow">'
+    + '      <label class="gde-label" for="msCari">Cari nama sertifikasi</label>'
+    + '      <input class="gde-input" type="search" id="msCari" autocomplete="off" '
+    + '             placeholder="contoh: K3 Listrik, First Aid, POP...">'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-label" for="msKategori">Kategori</label>'
+    + '      <select class="gde-select" id="msKategori">'
+    + '        <option value="">Semua kategori</option>'
+    + '      </select>'
+    + '    </div>'
+    + '    <div class="siaga-toolbar__field">'
+    + '      <label class="gde-switch" for="msAktifOnly">'
+    + '        <input type="checkbox" id="msAktifOnly">'
+    + '        <span class="gde-switch__track"></span>'
+    + '        <span style="font-size:.85rem">Hanya yang aktif</span>'
+    + '      </label>'
+    + '    </div>'
+    + '  </div>'
+    + '  <div style="padding:1rem 1.25rem 0">'
+    + '    <div class="gde-alert gde-alert--info">'
+    + '      <i class="bi bi-info-circle-fill gde-alert__icon"></i>'
+    + '      <div class="gde-alert__body"><strong>Catatan masa berlaku</strong>'
+    + '      Perubahan masa berlaku hanya memengaruhi perhitungan data baru. Untuk menghitung ulang '
+    + '      data lama, gunakan tombol <b>Hitung Ulang Status</b> di menu spreadsheet atau minta HC '
+    + '      memperbarui tanggal kedaluwarsa.</div>'
+    + '    </div>'
+    + '  </div>'
+    + '  <div id="msIsi"></div>'
+    + '</div>'
+    /* ---------- modal form ---------- */
+    + msModalHtml();
+
+  pasangPerilakuMs();
+}
+
+function msModalHtml() {
+  return ''
+    + '<div class="gde-modal" id="msModal" role="dialog" aria-modal="true">'
+    + '  <div class="gde-modal__scrim" data-ms-tutup="msModal"></div>'
+    + '  <div class="gde-modal__dialog">'
+    + '    <div class="gde-modal__head">'
+    + '      <h3 id="msModalJudul">Tambah jenis sertifikasi</h3>'
+    + '      <button class="gde-modal__close" type="button" data-ms-tutup="msModal" aria-label="Tutup">&times;</button>'
+    + '    </div>'
+    + '    <div class="gde-modal__body">'
+    + '      <form id="msForm" novalidate autocomplete="off">'
+    + '        <div class="siaga-formgrid">'
+    + '          <div class="span-2">'
+    + '            <label class="gde-label" for="msNama">Nama sertifikasi <span class="gde-req">*</span></label>'
+    + '            <input class="gde-input" type="text" id="msNama" name="nama" '
+    + '                   placeholder="contoh: K3 Listrik Tegangan Rendah">'
+    + '            <div class="gde-hint" id="msHintNama">Nama ini dipakai sebagai kunci pencocokan pada data sertifikasi.</div>'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="msKategoriInput">Kategori</label>'
+    + '            <input class="gde-input" type="text" id="msKategoriInput" name="kategori" '
+    + '                   list="msDaftarKategori" placeholder="contoh: K3, Teknik, Manajerial">'
+    + '            <datalist id="msDaftarKategori"></datalist>'
+    + '          </div>'
+    + '          <div>'
+    + '            <label class="gde-label" for="msPenerbit">Penerbit</label>'
+    + '            <input class="gde-input" type="text" id="msPenerbit" name="penerbit" '
+    + '                   placeholder="contoh: BNSP, Kemnaker, Disnaker">'
+    + '          </div>'
+    + '          <div class="span-2">'
+    + '            <label class="gde-label" for="msBulan">Masa berlaku (bulan) <span class="gde-req">*</span></label>'
+    + '            <input class="gde-input" type="number" id="msBulan" name="masa_berlaku_bulan" '
+    + '                   min="1" step="1" value="36" inputmode="numeric">'
+    + '            <div class="gde-hint" id="msHintBulan">36 bulan = 3 tahun · 60 bulan = 5 tahun.</div>'
+    + '            <div class="siaga-mt-3" style="display:flex;flex-wrap:wrap;gap:.4rem">'
+    + '              <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" data-ms-bulan="36">'
+    + '                3 tahun (36)</button>'
+    + '              <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" data-ms-bulan="60">'
+    + '                5 tahun (60)</button>'
+    + '            </div>'
+    + '          </div>'
+    + '          <div class="span-2">'
+    + '            <label class="gde-switch" for="msAktif">'
+    + '              <input type="checkbox" id="msAktif" name="aktif">'
+    + '              <span class="gde-switch__track"></span>'
+    + '              <span>Jenis ini aktif dan muncul pada pilihan form Register</span>'
+    + '            </label>'
+    + '          </div>'
+    + '        </div>'
+    + '      </form>'
+    + '    </div>'
+    + '    <div class="gde-modal__foot">'
+    + '      <button class="gde-btn gde-btn--outline" type="button" data-ms-tutup="msModal">Batal</button>'
+    + '      <button class="gde-btn gde-btn--primary" type="button" id="msSimpan">'
+    + '        <i class="bi bi-save"></i> Simpan</button>'
+    + '    </div>'
+    + '  </div>'
+    + '</div>';
+}
+
+/* --------------------------------------------------------- pasang event -- */
+function pasangPerilakuMs() {
+  var akar = SIAGA.el('msRoot');
+  var form = SIAGA.el('msForm');
+  var cari = SIAGA.el('msCari');
+  var kategori = SIAGA.el('msKategori');
+  var aktifOnly = SIAGA.el('msAktifOnly');
+
+  var tambah = SIAGA.el('msTambahBtn');
+  if (tambah) tambah.addEventListener('click', function () { bukaMsForm('baru', ''); });
+  var refresh = SIAGA.el('msRefresh');
+  if (refresh) {
+    refresh.addEventListener('click', function () {
+      SIAGA.tombolSibuk(refresh, true, 'Memuat...');
+      muatJenis(function () { SIAGA.tombolSibuk(refresh, false); });
+    });
+  }
+
+  if (cari) {
+    cari.addEventListener('input', SIAGA.debounce(function () {
+      MSState.filter.q = cari.value;
+      renderMsTabel();
+    }, 320));
+  }
+  if (kategori) {
+    kategori.addEventListener('change', function () {
+      MSState.filter.kategori = kategori.value;
+      renderMsTabel();
+    });
+  }
+  if (aktifOnly) {
+    aktifOnly.addEventListener('change', function () {
+      MSState.filter.aktifOnly = !!aktifOnly.checked;
+      renderMsTabel();
+    });
+  }
+
+  if (form) {
+    form.addEventListener('submit', function (e) { e.preventDefault(); simpanMs(); });
+  }
+  var simpan = SIAGA.el('msSimpan');
+  if (simpan) simpan.addEventListener('click', simpanMs);
+
+  /* delegasi umum */
+  SIAGA.on(akar, 'click', '[data-ms-tutup]', function (e, t) {
+    SIAGA.modalTutup(t.getAttribute('data-ms-tutup'));
+  });
+
+  SIAGA.on(akar, 'click', '[data-ms-bulan]', function (e, t) {
+    e.preventDefault();
+    var input = SIAGA.el('msBulan');
+    if (input) {
+      input.value = t.getAttribute('data-ms-bulan');
+      SIAGA.bersihkanInvalid(form);
+      try { input.focus(); } catch (err) { }
+    }
+  });
+
+  SIAGA.on(akar, 'click', '[data-ms-aksi]', function (e, t) {
+    var aksi = t.getAttribute('data-ms-aksi');
+    var id = t.getAttribute('data-ms-id') || '';
+    if (aksi === 'tambah') bukaMsForm('baru', '');
+    else if (aksi === 'ubah') bukaMsForm('ubah', id);
+    else if (aksi === 'toggle') msToggleAktif(id);
+    else if (aksi === 'hapus') msHapus(id);
+  });
+}
+
+/* --------------------------------------------------------------- muatan -- */
+function muatJenis(selesai) {
+  var isi = SIAGA.el('msIsi');
+  if (isi) isi.innerHTML = SIAGA.pemuatHtml('Memuat jenis sertifikasi...');
+
+  SIAGA.api('apiListCertTypes', [{}]).then(function (d) {
+    var data = d || {};
+    MSState.baris = data.rows || [];
+    /* urutan bawaan: pemegang terbanyak, lalu nama A-Z */
+    MSState.baris.sort(function (a, b) {
+      var selisih = SIAGA.num(b.jumlah_pemegang) - SIAGA.num(a.jumlah_pemegang);
+      if (selisih) return selisih;
+      return String(a.nama || '').localeCompare(String(b.nama || ''));
+    });
+    msIsiPilihanKategori();
+    renderMsRingkas();
+    renderMsTabel();
+    if (typeof selesai === 'function') selesai();
+  }).catch(function (e) {
+    var wadah = SIAGA.el('msIsi');
+    if (wadah) wadah.innerHTML = SIAGA.galatHtml(e.message);
+    var ringkas = SIAGA.el('msRingkas');
+    if (ringkas) ringkas.innerHTML = '';
+    if (typeof selesai === 'function') selesai();
+  });
+}
+
+/* Isi select + datalist kategori dari data yang ada (unik). */
+function msIsiPilihanKategori() {
+  var daftar = [];
+  MSState.baris.forEach(function (c) {
+    var k = String(c.kategori || '').trim();
+    if (k && daftar.indexOf(k) === -1) daftar.push(k);
+  });
+  daftar.sort();
+
+  var sel = SIAGA.el('msKategori');
+  if (sel) {
+    var nilai = MSState.filter.kategori;
+    sel.innerHTML = '<option value="">Semua kategori</option>'
+      + daftar.map(function (o) {
+        return '<option value="' + SIAGA.attr(o) + '">' + SIAGA.esc(o) + '</option>';
+      }).join('');
+    sel.value = nilai;
+  }
+
+  var dl = SIAGA.el('msDaftarKategori');
+  if (dl) {
+    dl.innerHTML = daftar.map(function (o) {
+      return '<option value="' + SIAGA.attr(o) + '"></option>';
+    }).join('');
+  }
+}
+
+/* ------------------------------------------------------------ ringkasan -- */
+function renderMsRingkas() {
+  var aktif = 0, nonaktif = 0, pemegang = 0;
+  MSState.baris.forEach(function (c) {
+    if (c.aktif) aktif++; else nonaktif++;
+    pemegang += SIAGA.num(c.jumlah_pemegang);
+  });
+
+  var wadah = SIAGA.el('msRingkas');
+  if (!wadah) return;
+  wadah.innerHTML = ''
+    + msMini('Jenis aktif', aktif, 'bi-award', 'green')
+    + msMini('Jenis nonaktif', nonaktif, 'bi-slash-circle', 'black')
+    + msMini('Total pemegang', pemegang, 'bi-people', 'blue');
+}
+
+function msMini(label, nilai, ikon, tone) {
+  return '<div class="siaga-mini siaga-mini--' + tone + '">'
+    + '<div class="siaga-mini__icon"><i class="bi ' + ikon + '"></i></div>'
+    + '<div style="min-width:0">'
+    + '<div class="siaga-mini__label">' + SIAGA.esc(label) + '</div>'
+    + '<div class="siaga-mini__value">' + SIAGA.angka(nilai) + '</div>'
+    + '</div></div>';
+}
+
+/* ---------------------------------------------------------------- tabel -- */
+function msBarisTersaring() {
+  var f = MSState.filter;
+  var q = String(f.q || '').trim().toLowerCase();
+
+  return MSState.baris.filter(function (c) {
+    if (f.aktifOnly && !c.aktif) return false;
+    if (f.kategori && String(c.kategori || '') !== String(f.kategori)) return false;
+    if (q && String(c.nama || '').toLowerCase().indexOf(q) === -1) return false;
+    return true;
+  });
+}
+
+function renderMsTabel() {
+  var wadah = SIAGA.el('msIsi');
+  if (!wadah) return;
+
+  var semua = msBarisTersaring();
+
+  if (!MSState.baris.length) {
+    wadah.innerHTML = SIAGA.kosongHtml('bi-award', 'Belum ada jenis sertifikasi',
+      'Tambahkan jenis sertifikasi beserta masa berlakunya agar Expired_at data baru '
+      + 'terhitung otomatis dan pilihan pada form Register rapi.',
+      '<button class="gde-btn gde-btn--primary" type="button" data-ms-aksi="tambah">'
+      + '<i class="bi bi-plus-circle"></i> Tambah jenis</button>');
+    return;
+  }
+
+  if (!semua.length) {
+    wadah.innerHTML = SIAGA.kosongHtml('bi-search', 'Tidak ada jenis yang cocok',
+      'Ubah kata kunci atau kosongkan filter untuk melihat seluruh jenis sertifikasi.');
+    return;
+  }
+
+  var html = '<div class="siaga-tablewrap">'
+    + '<table class="gde-table gde-table--compact">'
+    + '<thead><tr>'
+    + '<th class="gde-ctr" style="width:52px">No</th>'
+    + '<th>Nama sertifikasi</th>'
+    + '<th class="gde-ctr">Kategori</th>'
+    + '<th>Masa berlaku</th>'
+    + '<th>Penerbit</th>'
+    + '<th class="gde-ctr">Pemegang</th>'
+    + '<th class="gde-ctr">Status</th>'
+    + '<th class="gde-u-text-right gde-u-nowrap">Aksi</th>'
+    + '</tr></thead><tbody>'
+    + semua.map(function (c, i) { return msBarisHtml(c, i + 1); }).join('')
+    + '</tbody></table></div>'
+    + '<div class="siaga-pager">'
+    + '<div class="siaga-pager__info">Menampilkan <b>' + SIAGA.angka(semua.length)
+    + '</b> dari <b>' + SIAGA.angka(MSState.baris.length) + '</b> jenis sertifikasi.</div>'
+    + '</div>';
+
+  wadah.innerHTML = html;
+}
+
+function msBarisHtml(c, no) {
+  var bulan = SIAGA.num(c.masa_berlaku_bulan);
+  var tahun = msTahunTeks(bulan);
+  var id = String(c.cert_id || '');
+  var nama = String(c.nama || '');
+
+  var masa = bulan
+    ? '<b>' + SIAGA.angka(bulan) + ' bulan</b>'
+      + (tahun ? '<div style="font-size:.68rem;color:var(--gde-muted)">' + SIAGA.esc(tahun) + '</div>' : '')
+    : '<span style="color:var(--gde-muted)">Belum diatur</span>';
+
+  var kategori = c.kategori
+    ? '<span class="gde-chip gde-chip--soft">' + SIAGA.esc(c.kategori) + '</span>'
+    : '<span style="color:var(--gde-muted)">—</span>';
+
+  var pemegang = SIAGA.num(c.jumlah_pemegang);
+
+  return '<tr>'
+    + '<td class="gde-ctr gde-u-tabular" style="color:var(--gde-muted)">' + SIAGA.angka(no) + '</td>'
+    + '<td class="siaga-td-sert"><strong>' + SIAGA.esc(nama) + '</strong>'
+    + '  <span>' + SIAGA.esc(id) + '</span></td>'
+    + '<td class="gde-ctr">' + kategori + '</td>'
+    + '<td>' + masa + '</td>'
+    + '<td>' + (c.penerbit ? SIAGA.esc(c.penerbit) : '<span style="color:var(--gde-muted)">—</span>') + '</td>'
+    + '<td class="gde-ctr gde-u-tabular">' + (pemegang ? '<b>' + SIAGA.angka(pemegang) + '</b>' : '0') + '</td>'
+    + '<td class="gde-ctr"><span class="gde-status gde-status--' + (c.aktif ? 'green' : 'gray') + '">'
+    +   (c.aktif ? 'Aktif' : 'Nonaktif') + '</span></td>'
+    + '<td>'
+    + '  <div class="siaga-aksi">'
+    + '    <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" '
+    + '            data-ms-aksi="ubah" data-ms-id="' + SIAGA.attr(id) + '">Ubah</button>'
+    + '    <button class="gde-btn gde-btn--outline gde-btn--xs" type="button" '
+    + '            data-ms-aksi="toggle" data-ms-id="' + SIAGA.attr(id) + '" '
+    + '            title="' + (c.aktif ? 'Sembunyikan dari pilihan Register' : 'Tampilkan lagi di pilihan Register') + '">'
+    +       (c.aktif ? 'Nonaktifkan' : 'Aktifkan') + '</button>'
+    + '    <button class="gde-btn gde-btn--outline-danger gde-btn--xs" type="button" '
+    + '            data-ms-aksi="hapus" data-ms-id="' + SIAGA.attr(id) + '" '
+    + '            title="Hapus jenis sertifikasi ini">Hapus</button>'
+    + '  </div>'
+    + '</td>'
+    + '</tr>';
+}
+
+/* -------------------------------------------------------------- bantuan -- */
+function msCariCert(certId) {
+  for (var i = 0; i < MSState.baris.length; i++) {
+    if (String(MSState.baris[i].cert_id) === String(certId)) return MSState.baris[i];
+  }
+  return null;
+}
+
+function msTahunTeks(bulan) {
+  var b = SIAGA.num(bulan, 0);
+  if (!b) return '';
+  var tahun = b / 12;
+  var teks = tahun.toLocaleString('id-ID', { maximumFractionDigits: 1 });
+  return '≈ ' + teks + ' tahun';
+}
+
+function msBersihkan(obj) {
+  var out = {};
+  Object.keys(obj || {}).forEach(function (k) {
+    var v = obj[k];
+    out[k] = (typeof v === 'string') ? v.trim() : v;
+  });
+  return out;
+}
+
+/* ------------------------------------------------------------------ form -- */
+function bukaMsForm(mode, certId) {
+  var form = SIAGA.el('msForm');
+  if (!form) return;
+
+  SIAGA.resetForm(form);
+  SIAGA.bersihkanInvalid(form);
+  MSState.mode = mode;
+  MSState.certId = certId || '';
+
+  var judul = SIAGA.el('msModalJudul');
+  var inNama = SIAGA.el('msNama');
+  var hintNama = SIAGA.el('msHintNama');
+
+  if (mode === 'ubah') {
+    var c = msCariCert(certId);
+    if (!c) { SIAGA.gagal('Jenis sertifikasi tidak ditemukan pada tabel. Muat ulang halaman.'); return; }
+    if (judul) judul.textContent = 'Ubah jenis — ' + c.nama;
+    if (inNama) inNama.disabled = false;
+    if (hintNama) {
+      hintNama.innerHTML = 'Mengganti nama di sini akan <b>ikut mengganti nama pada '
+        + (c.jumlah_pemegang || 0) + ' data sertifikasi</b> yang memakai jenis ini, '
+        + 'sehingga data lama tetap terhubung. ID jenis: <code>' + SIAGA.esc(c.cert_id) + '</code>.';
+    }
+    SIAGA.isiForm(form, {
+      nama: c.nama,
+      kategori: c.kategori,
+      masa_berlaku_bulan: c.masa_berlaku_bulan,
+      penerbit: c.penerbit,
+      aktif: c.aktif
+    });
+  } else {
+    if (judul) judul.textContent = 'Tambah jenis sertifikasi';
+    if (inNama) inNama.disabled = false;
+    if (hintNama) hintNama.innerHTML = 'Nama ini dipakai sebagai kunci pencocokan pada data sertifikasi.';
+    SIAGA.isiForm(form, { masa_berlaku_bulan: 36, aktif: true });
+  }
+
+  SIAGA.modalBuka('msModal');
+  setTimeout(function () {
+    try { if (inNama && !inNama.disabled) inNama.focus(); } catch (e) { }
+  }, 120);
+}
+
+function simpanMs() {
+  var form = SIAGA.el('msForm');
+  var btn = SIAGA.el('msSimpan');
+  if (!form) return;
+
+  SIAGA.bersihkanInvalid(form);
+  var data = msBersihkan(SIAGA.nilaiForm(form));
+  var inputNama = SIAGA.el('msNama');
+  var inputBulan = SIAGA.el('msBulan');
+
+  if (MSState.mode === 'ubah') {
+    var lama = msCariCert(MSState.certId);
+    if (!lama) { SIAGA.gagal('Jenis sertifikasi tidak ditemukan. Muat ulang halaman.'); return; }
+    // Kunci baris yang diubah adalah cert_id, sehingga NAMA boleh diganti.
+    data.cert_id = lama.cert_id;
+  }
+
+  if (!data.nama) {
+    SIAGA.tandaiInvalid(inputNama, 'Nama sertifikasi wajib diisi.'); return;
+  }
+  var bulan = SIAGA.num(data.masa_berlaku_bulan, 0);
+  if (!bulan || bulan < 1) {
+    SIAGA.tandaiInvalid(inputBulan, 'Masa berlaku wajib diisi minimal 1 bulan.'); return;
+  }
+  if (bulan > 600) {
+    SIAGA.tandaiInvalid(inputBulan, 'Masa berlaku wajar maksimal 600 bulan (50 tahun).'); return;
+  }
+  data.masa_berlaku_bulan = Math.round(bulan);
+  data.aktif = (data.aktif === true);
+
+  SIAGA.tombolSibuk(btn, true, 'Menyimpan...');
+  SIAGA.api('apiSaveCertType', [data]).then(function (r) {
+    SIAGA.tombolSibuk(btn, false);
+    SIAGA.modalTutup('msModal');
+    var hasil = r || {};
+    if (hasil.mode === 'update') {
+      var pesan = 'Jenis "' + data.nama + '" diperbarui (masa berlaku '
+        + data.masa_berlaku_bulan + ' bulan).';
+      if (hasil.nama_lama && hasil.nama_lama !== data.nama) {
+        pesan = 'Nama diganti dari "' + hasil.nama_lama + '" menjadi "' + data.nama + '". '
+          + SIAGA.angka(hasil.dipindahkan || 0) + ' data sertifikasi ikut diperbarui.';
+      }
+      SIAGA.sukses(pesan, 'Perubahan disimpan');
+    } else {
+      SIAGA.sukses('Jenis "' + data.nama + '" ditambahkan (' + data.masa_berlaku_bulan
+        + ' bulan). Jenis ini langsung tersedia pada form Register.', 'Jenis ditambahkan');
+    }
+    muatJenis();
+  }).catch(function (e) {
+    SIAGA.tombolSibuk(btn, false);
+    SIAGA.gagal(e.message);
+  });
+}
+
+/* --------------------------------------------------------- aksi per baris -- */
+function msToggleAktif(certId) {
+  var c = msCariCert(certId);
+  if (!c) { SIAGA.gagal('Jenis sertifikasi tidak ditemukan pada tabel. Muat ulang halaman.'); return; }
+  var jadiAktif = !c.aktif;
+
+  SIAGA.konfirmasi({
+    judul: jadiAktif ? 'Aktifkan jenis sertifikasi' : 'Nonaktifkan jenis sertifikasi',
+    pesan: jadiAktif
+      ? 'Jenis "' + c.nama + '" akan aktif kembali dan muncul pada pilihan form Register.'
+      : 'Jenis "' + c.nama + '" akan dinonaktifkan sehingga tidak muncul lagi pada pilihan form Register. '
+        + 'Data sertifikasi yang sudah ada tidak berubah.',
+    labelOk: jadiAktif ? 'Aktifkan' : 'Nonaktifkan',
+    bahaya: !jadiAktif
+  }).then(function (ya) {
+    if (!ya) return;
+    return SIAGA.api('apiSaveCertType', [{
+      nama: c.nama,
+      kategori: c.kategori,
+      masa_berlaku_bulan: c.masa_berlaku_bulan,
+      penerbit: c.penerbit,
+      aktif: jadiAktif
+    }]).then(function () {
+      SIAGA.sukses('Jenis "' + c.nama + '" kini ' + (jadiAktif ? 'AKTIF' : 'NONAKTIF') + '.',
+        'Status diperbarui');
+      muatJenis();
+    });
+  }).catch(function (e) {
+    SIAGA.gagal(e.message);
+  });
+}
+
+function msHapus(certId) {
+  var c = msCariCert(certId);
+  if (!c) { SIAGA.gagal('Jenis sertifikasi tidak ditemukan pada tabel. Muat ulang halaman.'); return; }
+  var pemegang = SIAGA.num(c.jumlah_pemegang);
+
+  SIAGA.konfirmasi({
+    judul: 'Hapus jenis sertifikasi',
+    pesan: 'Jenis "' + c.nama + '" akan dihapus permanen. Jenis yang masih dipakai data sertifikasi '
+      + 'tidak dapat dihapus dan sebaiknya dinonaktifkan saja. Tindakan ini tidak dapat dibatalkan.'
+      + (pemegang ? ' Saat ini tercatat ' + SIAGA.angka(pemegang) + ' pemegang.' : ''),
+    labelOk: 'Hapus jenis',
+    bahaya: true
+  }).then(function (ya) {
+    if (!ya) return;
+    return SIAGA.api('apiDeleteCertType', [certId]).then(function () {
+      SIAGA.sukses('Jenis "' + c.nama + '" telah dihapus.', 'Jenis dihapus');
+      muatJenis();
+    });
+  }).catch(function (e) {
+    /* mis. "Jenis ini dipakai oleh N data sertifikasi..." */
+    SIAGA.ingat(e.message, 'Tidak dapat dihapus');
+  });
+}
+</script>

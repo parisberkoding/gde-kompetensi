@@ -1,0 +1,486 @@
+/* ==========================================================================
+   GDE UI TEMPLATES — 03. COMPONENTS
+   Komponen ber-prefiks `gde-` untuk antarmuka baru: tombol, kartu, badge,
+   alert, tabel, form, tab, paginasi, modal, tooltip, timeline, KPI, dsb.
+   Tidak menyentuh kelas Bootstrap agar tidak bentrok; jembatan ke markup lama
+   ada di gde-compat.css.
+   ========================================================================== */
+
+/* ============================ 1. TOMBOL ============================ */
+.gde-btn {
+  --_bg: var(--gde-blue);
+  --_fg: #fff;
+  --_bd: transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gde-sp-2);
+  padding: .625rem 1.125rem;
+  font-family: var(--gde-font);
+  font-size: var(--gde-fs-base);
+  font-weight: var(--gde-fw-semibold);
+  line-height: 1.25;
+  color: var(--_fg);
+  background: var(--_bg);
+  border: 1.5px solid var(--_bd);
+  border-radius: var(--gde-r-pill);
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: transform var(--gde-t-fast), background var(--gde-t-fast), box-shadow var(--gde-t-fast), color var(--gde-t-fast), border-color var(--gde-t-fast);
+}
+.gde-btn:hover { transform: translateY(-1px); text-decoration: none; color: var(--_fg); }
+.gde-btn:active { transform: translateY(0); }
+.gde-btn:disabled, .gde-btn.is-disabled { opacity: .55; pointer-events: none; }
+
+.gde-btn--primary { --_bg: var(--gde-blue); box-shadow: 0 6px 18px rgba(11, 80, 161, .22); }
+.gde-btn--primary:hover { --_bg: var(--gde-blue-d); }
+.gde-btn--green { --_bg: var(--gde-green); --_fg: #0B2A05; box-shadow: 0 6px 18px rgba(141, 198, 63, .28); }
+.gde-btn--green:hover { --_bg: var(--gde-green-d); --_fg: #fff; }
+.gde-btn--danger { --_bg: var(--gde-red); box-shadow: 0 6px 18px rgba(237, 27, 47, .22); }
+.gde-btn--danger:hover { --_bg: var(--gde-red-d); }
+.gde-btn--warning { --_bg: var(--gde-yellow); --_fg: #6B5F00; }
+.gde-btn--warning:hover { --_bg: var(--gde-yellow-d); --_fg: #4A4100; }
+.gde-btn--dark { --_bg: var(--gde-ink); }
+.gde-btn--dark:hover { --_bg: #0B1420; }
+
+.gde-btn--outline { --_bg: #fff; --_fg: var(--gde-ink-2); --_bd: var(--gde-line); }
+.gde-btn--outline:hover { --_fg: var(--gde-green-d); --_bd: var(--gde-green); background: var(--gde-green-l); }
+.gde-btn--outline-primary { --_bg: #fff; --_fg: var(--gde-blue); --_bd: var(--gde-blue); }
+.gde-btn--outline-primary:hover { --_bg: var(--gde-blue-l); }
+.gde-btn--outline-danger { --_bg: #fff; --_fg: var(--gde-red); --_bd: var(--gde-red); }
+.gde-btn--outline-danger:hover { --_bg: var(--gde-red-l); }
+
+.gde-btn--ghost { --_bg: var(--gde-surface-3); --_fg: var(--gde-ink-2); }
+.gde-btn--ghost:hover { --_bg: var(--gde-surface-2); --_fg: var(--gde-ink); }
+.gde-btn--link { --_bg: transparent; --_fg: var(--gde-blue); padding: .25rem .5rem; }
+.gde-btn--link:hover { --_fg: var(--gde-blue-d); text-decoration: underline; }
+
+.gde-btn--sm { padding: .4rem .85rem; font-size: var(--gde-fs-sm); }
+.gde-btn--xs { padding: .25rem .6rem; font-size: var(--gde-fs-xs); border-radius: var(--gde-r-sm); }
+.gde-btn--lg { padding: .8rem 1.5rem; font-size: var(--gde-fs-md); }
+.gde-btn--block { display: flex; width: 100%; }
+.gde-btn--icon { padding: .5rem; width: 38px; height: 38px; border-radius: var(--gde-r-sm); }
+.gde-btn--icon.gde-btn--sm { width: 32px; height: 32px; }
+
+/* ============================ 2. KARTU ============================ */
+.gde-card {
+  background: var(--gde-surface);
+  border: 1px solid var(--gde-line);
+  border-radius: var(--gde-r-lg);
+  box-shadow: var(--gde-sh-1);
+  overflow: hidden;
+}
+.gde-card + .gde-card { margin-top: var(--gde-sp-4); }
+.gde-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--gde-sp-3);
+  padding: var(--gde-sp-4) var(--gde-sp-5);
+  border-bottom: 1px solid var(--gde-line-2);
+}
+.gde-card__head h1, .gde-card__head h2, .gde-card__head h3,
+.gde-card__head h4, .gde-card__head h5, .gde-card__head h6 { margin: 0; }
+.gde-card__head--brand { background: linear-gradient(135deg, var(--gde-blue-d), var(--gde-blue)); border-bottom: 0; color: #fff; }
+.gde-card__head--brand h1, .gde-card__head--brand h2, .gde-card__head--brand h3,
+.gde-card__head--brand h4, .gde-card__head--brand h5 { color: #fff; }
+.gde-card__head--brand .bi { color: var(--gde-green); }
+.gde-card__title { font-size: var(--gde-fs-md); font-weight: var(--gde-fw-semibold); }
+.gde-card__sub { font-size: var(--gde-fs-xs); color: var(--gde-muted); margin: 2px 0 0; }
+.gde-card__body { padding: var(--gde-sp-5); }
+.gde-card__body--flush { padding: 0; }
+.gde-card__foot {
+  padding: var(--gde-sp-3) var(--gde-sp-5);
+  border-top: 1px solid var(--gde-line-2);
+  background: var(--gde-surface-2);
+  display: flex; align-items: center; gap: var(--gde-sp-3); flex-wrap: wrap;
+}
+.gde-card__icon {
+  flex: none; width: 40px; height: 40px; border-radius: var(--gde-r-sm);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.05rem; background: var(--gde-green-l); color: var(--gde-green-d);
+}
+.gde-card__icon--blue { background: var(--gde-blue-l); color: var(--gde-blue); }
+.gde-card__icon--red { background: var(--gde-red-l); color: var(--gde-red); }
+.gde-card__icon--yellow { background: var(--gde-yellow-l); color: var(--gde-warning); }
+
+/* Kartu statistik */
+.gde-stat {
+  display: flex; align-items: center; gap: var(--gde-sp-4);
+  background: var(--gde-surface); border: 1px solid var(--gde-line);
+  border-radius: var(--gde-r-md); padding: var(--gde-sp-4) var(--gde-sp-5);
+  box-shadow: var(--gde-sh-1); transition: transform var(--gde-t-base), box-shadow var(--gde-t-base);
+}
+.gde-stat:hover { transform: translateY(-3px); box-shadow: var(--gde-sh-2); }
+.gde-stat__icon {
+  flex: none; width: 54px; height: 54px; border-radius: var(--gde-r-circle);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 1.35rem;
+  background: var(--gde-blue-l); color: var(--gde-blue);
+}
+.gde-stat--green .gde-stat__icon { background: var(--gde-green-l); color: var(--gde-green-d); }
+.gde-stat--red .gde-stat__icon { background: var(--gde-red-l); color: var(--gde-red); }
+.gde-stat--yellow .gde-stat__icon { background: var(--gde-yellow-l); color: var(--gde-warning); }
+.gde-stat__label { font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-semibold); color: var(--gde-muted); text-transform: uppercase; letter-spacing: .07em; }
+.gde-stat__value { font-size: var(--gde-fs-2xl); font-weight: var(--gde-fw-extrabold); color: var(--gde-blue); line-height: 1.15; letter-spacing: -.03em; }
+.gde-stat--green .gde-stat__value { color: var(--gde-green-d); }
+.gde-stat--red .gde-stat__value { color: var(--gde-red); }
+.gde-stat__hint { font-size: var(--gde-fs-xs); color: var(--gde-muted-2); }
+
+/* ============================ 3. BADGE & CHIP ============================ */
+.gde-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: .2rem .65rem; border-radius: var(--gde-r-pill);
+  font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold); line-height: 1.5;
+  background: var(--gde-green-l); color: var(--gde-green-d); white-space: nowrap;
+}
+.gde-badge--blue { background: var(--gde-blue-l); color: var(--gde-blue); }
+.gde-badge--red { background: var(--gde-red-l); color: var(--gde-red); }
+.gde-badge--yellow { background: var(--gde-yellow-l); color: var(--gde-warning); }
+.gde-badge--gray { background: var(--gde-surface-3); color: var(--gde-muted); }
+.gde-badge--dark { background: #E9EEF5; color: var(--gde-ink-2); }
+.gde-badge--solid { background: var(--gde-green); color: #0B2A05; }
+.gde-badge--solid-blue { background: var(--gde-blue); color: #fff; }
+.gde-badge--dot::before {
+  content: ''; width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; flex: none;
+}
+.gde-chip {
+  display: inline-flex; align-items: center; gap: var(--gde-sp-2);
+  padding: .3rem .8rem; border: 1px solid var(--gde-line); border-radius: var(--gde-r-pill);
+  background: #fff; font-size: var(--gde-fs-sm); color: var(--gde-ink-2);
+}
+.gde-chip b { color: var(--gde-blue); font-weight: var(--gde-fw-bold); }
+.gde-chip--soft { background: var(--gde-surface-2); border-color: transparent; }
+
+/* ============================ 4. ALERT & CALLOUT ============================ */
+.gde-alert {
+  display: flex; gap: var(--gde-sp-3); align-items: flex-start;
+  padding: var(--gde-sp-3) var(--gde-sp-4);
+  border: 1px solid var(--gde-line); border-left: 4px solid var(--gde-muted-2);
+  border-radius: var(--gde-r-sm); background: var(--gde-surface-2);
+  font-size: var(--gde-fs-base); color: var(--gde-ink-2);
+}
+.gde-alert__icon { flex: none; margin-top: 2px; font-size: 1rem; }
+.gde-alert__body { min-width: 0; }
+.gde-alert__body strong { display: block; margin-bottom: 2px; color: var(--gde-ink); }
+.gde-alert--info { background: var(--gde-blue-l); border-color: var(--gde-blue-l2); border-left-color: var(--gde-blue); color: #0A3F7E; }
+.gde-alert--success { background: var(--gde-green-l); border-color: var(--gde-green-l2); border-left-color: var(--gde-green-d); color: #3F6120; }
+.gde-alert--warning { background: var(--gde-yellow-l); border-color: var(--gde-yellow-l2); border-left-color: var(--gde-yellow-d); color: #6B5F00; }
+.gde-alert--danger { background: var(--gde-red-l); border-color: var(--gde-red-l2); border-left-color: var(--gde-red); color: #93131F; }
+
+/* ============================ 5. TABEL ============================ */
+.gde-table-wrap {
+  border: 1px solid var(--gde-line); border-radius: var(--gde-r-md);
+  background: #fff; overflow-x: auto;
+}
+.gde-table { width: 100%; border-collapse: collapse; font-size: var(--gde-fs-base); }
+.gde-table caption { caption-side: top; text-align: left; padding: var(--gde-sp-3) var(--gde-sp-4) 0; font-size: var(--gde-fs-sm); color: var(--gde-muted); }
+.gde-table th, .gde-table td { padding: .7rem .9rem; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--gde-line-2); }
+.gde-table thead th {
+  background: var(--gde-surface-2); font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold);
+  letter-spacing: .06em; text-transform: uppercase; color: var(--gde-ink-2);
+  border-bottom: 1px solid var(--gde-line); white-space: nowrap;
+}
+.gde-table tbody tr:last-child td { border-bottom: 0; }
+.gde-table tbody tr { transition: background var(--gde-t-fast); }
+.gde-table tbody tr:hover { background: var(--gde-surface-2); }
+.gde-table--compact th, .gde-table--compact td { padding: .5rem .7rem; }
+.gde-table--zebra tbody tr:nth-child(even) { background: var(--gde-surface-2); }
+.gde-table .gde-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gde-table .gde-ctr { text-align: center; white-space: nowrap; }
+.gde-table__empty { padding: var(--gde-sp-10); text-align: center; color: var(--gde-muted); }
+
+/* ============================ 6. FORM ============================ */
+.gde-label {
+  display: block; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-semibold);
+  color: var(--gde-ink-2); margin-bottom: var(--gde-sp-2);
+}
+.gde-label .gde-req { color: var(--gde-red); }
+.gde-input, .gde-select, .gde-textarea {
+  width: 100%; padding: .6rem .85rem;
+  font-family: var(--gde-font); font-size: var(--gde-fs-base); color: var(--gde-ink);
+  background: #fff; border: 1.5px solid var(--gde-line); border-radius: var(--gde-r-sm);
+  transition: border-color var(--gde-t-fast), box-shadow var(--gde-t-fast);
+  appearance: none;
+}
+.gde-input::placeholder, .gde-textarea::placeholder { color: var(--gde-muted-2); }
+.gde-input:focus, .gde-select:focus, .gde-textarea:focus {
+  outline: none; border-color: var(--gde-green); box-shadow: var(--gde-ring-green);
+}
+.gde-input:disabled, .gde-select:disabled { background: var(--gde-surface-3); color: var(--gde-muted); }
+.gde-select {
+  padding-right: 2.25rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%2364748B'%3E%3Cpath d='M8 11.5 2.5 6h11L8 11.5Z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right .8rem center; background-size: 14px;
+}
+.gde-hint { font-size: var(--gde-fs-xs); color: var(--gde-muted-2); margin-top: var(--gde-sp-1); }
+.gde-error { font-size: var(--gde-fs-xs); color: var(--gde-red); margin-top: var(--gde-sp-1); }
+.gde-input.is-invalid, .gde-select.is-invalid { border-color: var(--gde-red); }
+.gde-input.is-valid, .gde-select.is-valid { border-color: var(--gde-green); }
+
+.gde-check { display: inline-flex; align-items: center; gap: var(--gde-sp-2); font-size: var(--gde-fs-base); cursor: pointer; }
+.gde-check input { width: 17px; height: 17px; accent-color: var(--gde-green-d); margin: 0; cursor: pointer; }
+
+.gde-switch { position: relative; display: inline-flex; align-items: center; gap: var(--gde-sp-3); cursor: pointer; font-size: var(--gde-fs-base); }
+.gde-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.gde-switch__track {
+  width: 42px; height: 24px; border-radius: var(--gde-r-pill); background: var(--gde-line);
+  position: relative; transition: background var(--gde-t-base); flex: none;
+}
+.gde-switch__track::after {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+  border-radius: 50%; background: #fff; box-shadow: var(--gde-sh-1); transition: transform var(--gde-t-base);
+}
+.gde-switch input:checked + .gde-switch__track { background: var(--gde-green); }
+.gde-switch input:checked + .gde-switch__track::after { transform: translateX(18px); }
+.gde-switch input:focus-visible + .gde-switch__track { box-shadow: var(--gde-ring-green); }
+
+/* ============================ 7. NAVIGASI (tab & pill) ============================ */
+.gde-tabs { display: flex; flex-wrap: wrap; gap: var(--gde-sp-1); padding: var(--gde-sp-1); background: var(--gde-surface-2); border: 1px solid var(--gde-line); border-radius: var(--gde-r-pill); }
+.gde-tab {
+  border: 0; background: transparent; font-family: var(--gde-font); font-size: var(--gde-fs-sm);
+  font-weight: var(--gde-fw-semibold); color: var(--gde-muted);
+  padding: .45rem .95rem; border-radius: var(--gde-r-pill); cursor: pointer; transition: var(--gde-t-fast);
+}
+.gde-tab:hover { color: var(--gde-ink); }
+.gde-tab.is-active { background: #fff; color: var(--gde-blue); box-shadow: var(--gde-sh-1); }
+
+.gde-nav-pills { display: flex; flex-wrap: wrap; gap: var(--gde-sp-2); }
+.gde-nav-pills a, .gde-nav-pills button {
+  padding: .45rem .9rem; border-radius: var(--gde-r-pill); border: 1px solid var(--gde-line);
+  background: #fff; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-medium); color: var(--gde-ink-2);
+}
+.gde-nav-pills a:hover, .gde-nav-pills button:hover { border-color: var(--gde-green); color: var(--gde-green-d); text-decoration: none; }
+.gde-nav-pills .is-active { background: var(--gde-green-l); border-color: var(--gde-green); color: var(--gde-green-d); font-weight: var(--gde-fw-semibold); }
+
+/* ============================ 8. PAGINASI ============================ */
+.gde-pagination { display: flex; flex-wrap: wrap; gap: var(--gde-sp-1); align-items: center; }
+.gde-pagination a, .gde-pagination span {
+  min-width: 34px; height: 34px; padding: 0 var(--gde-sp-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--gde-line); border-radius: var(--gde-r-sm);
+  background: #fff; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-medium); color: var(--gde-ink-2);
+}
+.gde-pagination a:hover { border-color: var(--gde-green); color: var(--gde-green-d); text-decoration: none; }
+.gde-pagination .is-active { background: var(--gde-blue); border-color: var(--gde-blue); color: #fff; font-weight: var(--gde-fw-semibold); }
+.gde-pagination .is-disabled { opacity: .5; pointer-events: none; }
+
+/* ============================ 9. PROGRES & METER ============================ */
+.gde-progress { height: 9px; border-radius: var(--gde-r-pill); background: var(--gde-surface-3); overflow: hidden; }
+.gde-progress__bar { display: block; height: 100%; border-radius: var(--gde-r-pill); background: linear-gradient(90deg, var(--gde-green-d), var(--gde-green)); transition: width var(--gde-t-slow); }
+.gde-progress--blue .gde-progress__bar { background: linear-gradient(90deg, var(--gde-blue), #2E7BD1); }
+.gde-progress--red .gde-progress__bar { background: linear-gradient(90deg, var(--gde-red-d), var(--gde-red)); }
+.gde-progress--yellow .gde-progress__bar { background: linear-gradient(90deg, var(--gde-yellow-d), var(--gde-yellow)); }
+.gde-meter { display: flex; align-items: baseline; justify-content: space-between; font-size: var(--gde-fs-xs); color: var(--gde-muted); margin-bottom: 4px; }
+.gde-meter b { color: var(--gde-ink); font-size: var(--gde-fs-sm); }
+
+/* ============================ 10. DROPDOWN ============================ */
+.gde-dropdown { position: relative; display: inline-block; }
+.gde-dropdown__menu {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: var(--gde-z-dropdown);
+  min-width: 210px; padding: var(--gde-sp-1);
+  background: #fff; border: 1px solid var(--gde-line); border-radius: var(--gde-r-md);
+  box-shadow: var(--gde-sh-2); display: none;
+}
+.gde-dropdown.is-open .gde-dropdown__menu { display: block; animation: gde-fade-in var(--gde-t-base); }
+.gde-dropdown__item {
+  display: flex; align-items: center; gap: var(--gde-sp-3);
+  padding: .6rem .8rem; border-radius: var(--gde-r-sm);
+  font-size: var(--gde-fs-base); color: var(--gde-ink-2);
+}
+.gde-dropdown__item:hover { background: var(--gde-green-l); color: var(--gde-green-d); text-decoration: none; }
+.gde-dropdown__item .bi { color: var(--gde-green); }
+.gde-dropdown__divider { height: 1px; background: var(--gde-line-2); margin: var(--gde-sp-1) 0; }
+
+/* ============================ 11. MODAL ============================ */
+.gde-modal { position: fixed; inset: 0; z-index: var(--gde-z-modal); display: none; }
+.gde-modal.is-open { display: block; }
+.gde-modal__scrim { position: absolute; inset: 0; background: var(--gde-scrim); backdrop-filter: blur(3px); }
+.gde-modal__dialog {
+  position: relative; z-index: 1; margin: 6vh auto; width: min(640px, calc(100vw - 2rem));
+  background: #fff; border-radius: var(--gde-r-lg); box-shadow: var(--gde-sh-3);
+  max-height: 86vh; display: flex; flex-direction: column; animation: gde-rise var(--gde-t-slow);
+}
+.gde-modal__dialog--lg { width: min(900px, calc(100vw - 2rem)); }
+.gde-modal__head { padding: var(--gde-sp-4) var(--gde-sp-5); border-bottom: 1px solid var(--gde-line-2); display: flex; align-items: center; gap: var(--gde-sp-3); }
+.gde-modal__head h3 { margin: 0; font-size: var(--gde-fs-lg); }
+.gde-modal__body { padding: var(--gde-sp-5); overflow-y: auto; }
+.gde-modal__foot { padding: var(--gde-sp-3) var(--gde-sp-5); border-top: 1px solid var(--gde-line-2); display: flex; justify-content: flex-end; gap: var(--gde-sp-2); background: var(--gde-surface-2); border-radius: 0 0 var(--gde-r-lg) var(--gde-r-lg); }
+.gde-modal__close { margin-left: auto; border: 0; background: transparent; font-size: 1.35rem; line-height: 1; color: var(--gde-muted); cursor: pointer; }
+.gde-modal__close:hover { color: var(--gde-red); }
+
+/* ============================ 12. TOOLTIP ============================ */
+.gde-tip { position: relative; }
+.gde-tip__bubble {
+  position: absolute; bottom: calc(100% + 10px); left: 50%; transform: translateX(-50%);
+  background: #0C1A2E; color: #fff; font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-normal);
+  padding: .4rem .7rem; border-radius: var(--gde-r-xs); white-space: nowrap;
+  opacity: 0; visibility: hidden; transition: var(--gde-t-fast); z-index: var(--gde-z-dropdown);
+  box-shadow: var(--gde-sh-2);
+}
+.gde-tip__bubble::after {
+  content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+  border: 6px solid transparent; border-top-color: #0C1A2E;
+}
+.gde-tip:hover .gde-tip__bubble, .gde-tip:focus-within .gde-tip__bubble { opacity: 1; visibility: visible; }
+
+/* ============================ 13. LANGKAH & TIMELINE ============================ */
+.gde-steps { list-style: none; margin: 0; padding: 0; counter-reset: gde-step; }
+.gde-steps > li { position: relative; padding: 0 0 var(--gde-sp-5) 46px; }
+.gde-steps > li::before {
+  counter-increment: gde-step; content: counter(gde-step);
+  position: absolute; left: 0; top: 0; width: 30px; height: 30px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--gde-green-d), var(--gde-blue));
+  color: #fff; font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-extrabold);
+  display: flex; align-items: center; justify-content: center;
+}
+.gde-steps > li::after { content: ''; position: absolute; left: 14.5px; top: 34px; bottom: 6px; width: 1.5px; background: var(--gde-line); }
+.gde-steps > li:last-child { padding-bottom: 0; }
+.gde-steps > li:last-child::after { display: none; }
+.gde-steps strong { display: block; font-size: var(--gde-fs-base); margin-bottom: 2px; }
+.gde-steps p { font-size: var(--gde-fs-sm); color: var(--gde-muted); margin: 0; }
+
+.gde-timeline { list-style: none; margin: 0; padding: 0 0 0 26px; border-left: 2px solid var(--gde-line); }
+.gde-timeline > li { position: relative; padding: 0 0 var(--gde-sp-5) var(--gde-sp-5); }
+.gde-timeline > li::before {
+  content: ''; position: absolute; left: -34px; top: 4px; width: 12px; height: 12px;
+  border-radius: 50%; background: #fff; border: 3px solid var(--gde-green);
+}
+.gde-timeline__date { font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold); letter-spacing: .07em; text-transform: uppercase; color: var(--gde-blue); }
+.gde-timeline__title { font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold); margin: 2px 0 3px; }
+.gde-timeline__desc { font-size: var(--gde-fs-sm); color: var(--gde-muted); }
+
+/* ============================ 14. AVATAR & LIST ============================ */
+.gde-avatar {
+  flex: none; width: 38px; height: 38px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-bold);
+  background: var(--gde-blue-l); color: var(--gde-blue); text-transform: uppercase;
+}
+.gde-avatar--sm { width: 30px; height: 30px; font-size: var(--gde-fs-xs); }
+.gde-avatar--green { background: var(--gde-green-l); color: var(--gde-green-d); }
+.gde-avatar--red { background: var(--gde-red-l); color: var(--gde-red); }
+
+.gde-list { list-style: none; margin: 0; padding: 0; }
+.gde-list > li { display: flex; align-items: flex-start; gap: var(--gde-sp-3); padding: var(--gde-sp-3) 0; border-bottom: 1px dashed var(--gde-line); }
+.gde-list > li:last-child { border-bottom: 0; }
+.gde-list__k { flex: none; width: 46%; color: var(--gde-muted); font-size: var(--gde-fs-base); }
+.gde-list__v { font-weight: var(--gde-fw-semibold); color: var(--gde-ink); }
+
+/* ============================ 15. EMPTY STATE & SKELETON ============================ */
+.gde-empty { text-align: center; padding: var(--gde-sp-12) var(--gde-sp-5); color: var(--gde-muted); }
+.gde-empty__icon {
+  width: 68px; height: 68px; margin: 0 auto var(--gde-sp-4); border-radius: var(--gde-r-circle);
+  background: var(--gde-surface-3); color: var(--gde-muted-2);
+  display: flex; align-items: center; justify-content: center; font-size: 1.8rem;
+}
+.gde-empty h4 { margin-bottom: var(--gde-sp-2); }
+.gde-empty p { font-size: var(--gde-fs-base); margin: 0 auto var(--gde-sp-4); max-width: 46ch; }
+.gde-skeleton { border-radius: var(--gde-r-sm); background: linear-gradient(90deg, var(--gde-surface-3) 25%, var(--gde-line-2) 37%, var(--gde-surface-3) 63%); background-size: 400% 100%; animation: gde-shimmer 1.4s ease infinite; }
+@keyframes gde-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+/* ============================ 16. ANIMASI ============================ */
+@keyframes gde-fade-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes gde-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes gde-spin { to { transform: rotate(360deg); } }
+.gde-fade-up { opacity: 0; transform: translateY(18px); transition: opacity .5s ease, transform .5s ease; }
+.gde-fade-up.is-in { opacity: 1; transform: none; }
+.gde-spinner {
+  width: 16px; height: 16px; border-radius: 50%; display: inline-block;
+  border: 2px solid rgba(255, 255, 255, .35); border-top-color: #fff;
+  animation: gde-spin .7s linear infinite;
+}
+
+/* ============================ 17. BREADCRUMB ============================ */
+.gde-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gde-sp-2); list-style: none; margin: 0; padding: 0; font-size: var(--gde-fs-sm); color: var(--gde-muted); }
+.gde-breadcrumb li { display: flex; align-items: center; gap: var(--gde-sp-2); }
+.gde-breadcrumb li + li::before { content: '/'; color: var(--gde-muted-2); }
+.gde-breadcrumb a { color: var(--gde-muted); }
+.gde-breadcrumb a:hover { color: var(--gde-blue); }
+.gde-breadcrumb .is-active { color: var(--gde-ink); font-weight: var(--gde-fw-medium); }
+
+/* ============================ 18. PAGE HEAD ============================ */
+.gde-page-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--gde-sp-4); margin-bottom: var(--gde-sp-6); }
+.gde-page-head h1 { font-size: var(--gde-fs-2xl); margin: var(--gde-sp-2) 0 var(--gde-sp-1); }
+.gde-page-head p { margin: 0; font-size: var(--gde-fs-base); color: var(--gde-muted); max-width: 70ch; }
+.gde-page-actions { display: flex; flex-wrap: wrap; gap: var(--gde-sp-2); }
+
+/* ============================ 19. STRUK ITEM CARD ============================
+   Kartu satu item struk/bukti pengeluaran (pelaporan SPD & BBM).
+   Kebenaran markup JS dijamin lewat kelas klasik (lihat catatan komentar di
+   gde-compat), tapi tata letak diberi ruang lebih lega agar mudah dibaca:
+   thumbnail kiri, ringkasan kanan, lalu baris edit lebar-lebar.
+   ============================================================================ */
+.gde-struk {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gde-sp-4);
+  width: 100%;
+  padding: var(--gde-sp-4);
+  background: var(--gde-surface);
+  border: 1px solid var(--gde-line);
+  border-radius: var(--gde-r-md);
+  box-shadow: var(--gde-sh-1);
+  transition: box-shadow var(--gde-t-base), transform var(--gde-t-base);
+}
+.gde-struk:hover { box-shadow: var(--gde-sh-2); }
+.gde-struk.is-draft { border-left: 4px solid var(--gde-yellow-d); }
+.gde-struk.is-final { border-left: 4px solid var(--gde-green); }
+
+/* Thumbnail kiri, tinggi tetap supaya rapi */
+.gde-struk__thumb {
+  flex: 0 0 88px;
+  width: 88px;
+  height: 88px;
+  border-radius: var(--gde-r-xs);
+  overflow: hidden;
+  background: var(--gde-surface-2);
+  border: 1px solid var(--gde-line-2);
+  display: flex; align-items: center; justify-content: center;
+}
+.gde-struk__thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.gde-struk__thumb .bi { font-size: 1.6rem; color: var(--gde-muted-2); }
+
+/* Ringkasan (kode, tanggal) — mengisi sisa lebar */
+.gde-struk__summary { flex: 1 1 220px; min-width: 0; }
+.gde-struk__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gde-sp-2) var(--gde-sp-3); }
+.gde-struk__nominal { font-size: var(--gde-fs-lg); font-weight: var(--gde-fw-bold); color: var(--gde-ink); letter-spacing: -.01em; line-height: 1.1; }
+.gde-struk__code {
+  font-family: var(--gde-font-mono); font-size: var(--gde-fs-xs); color: var(--gde-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.gde-struk__date {
+  display: inline-flex; align-items: center; gap: var(--gde-sp-1);
+  font-size: var(--gde-fs-xs); color: var(--gde-muted);
+  background: var(--gde-surface-2); padding: .15rem .5rem; border-radius: var(--gde-r-pill);
+  white-space: nowrap;
+}
+.gde-struk__chip {
+  display: inline-flex; align-items: center; gap: var(--gde-sp-1);
+  font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-medium);
+  color: var(--gde-ink-2); background: var(--gde-surface-3);
+  border: 1px solid var(--gde-line); padding: .15rem .55rem; border-radius: var(--gde-r-pill);
+  white-space: nowrap;
+}
+.gde-struk__ket { font-size: var(--gde-fs-sm); color: var(--gde-ink-2); line-height: 1.45; word-break: break-word; }
+
+/* Panel edit (form Bawah) lebarkan penuh */
+.gde-struk__edit { flex: 1 1 100%; display: flex; flex-direction: column; gap: var(--gde-sp-3); border-top: 1px dashed var(--gde-line-2); padding-top: var(--gde-sp-3); }
+.gde-struk__edit-grid { display: grid; grid-template-columns: minmax(160px, 2fr) minmax(150px, 1.4fr) auto; gap: var(--gde-sp-3); align-items: end; }
+.gde-struk__edit label {
+  display: block; font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-semibold);
+  color: var(--gde-muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: var(--gde-sp-1);
+}
+
+/* Auto-save pesan */
+.gde-struk__autosave { display: inline-flex; align-items: center; gap: var(--gde-sp-1); font-size: var(--gde-fs-sm); color: var(--gde-green-d2); font-weight: var(--gde-fw-medium); }
+.gde-struk__autosave.is-hidden { display: none; }
+
+/* Hapus tombol pojok kanan atas */
+.gde-struk__del { position: absolute; top: var(--gde-sp-3); right: var(--gde-sp-3); }
+
+@media (max-width: 575.98px) {
+  .gde-struk__edit-grid { grid-template-columns: 1fr; align-items: stretch; }
+  .gde-struk__edit-grid .gde-btn--block { width: 100%; }
+}

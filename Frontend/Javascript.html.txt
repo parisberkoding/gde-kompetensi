@@ -1,0 +1,957 @@
+<!--
+  ============================================================================
+  SIAGA SERTIFIKASI — JavaScript.html
+  Lapisan bersama frontend: pemanggil API, sesi, router, toast, modal,
+  format tanggal/angka, badge status, helper unggah berkas, dan pendaftaran
+  seluruh view beserta hak akses per role.
+
+  Dimuat SETELAH Stylesheet dan SEBELUM skrip tiap view.
+  Semua view memakai namespace global `SIAGA`.
+  ============================================================================
+-->
+<script>
+/* ==========================================================================
+   0. NAMESPACE & KONSTANTA
+   ========================================================================== */
+var SIAGA = (function () {
+  'use strict';
+
+  var TOKEN_KEY = 'siaga.token';
+  var USER_KEY = 'siaga.user';
+
+  var APP = {
+    name: 'SIAGA Sertifikasi',
+    sub: 'Sistem Informasi & Pengingat Masa Berlaku Sertifikasi',
+    owner: 'PT Geo Dipa Energi (Persero) — Unit Patuha',
+    version: 'v1.0.0'
+  };
+
+  var state = {
+    token: '',
+    user: null,
+    meta: null,
+    view: '',
+    views: {},
+    lastError: ''
+  };
+
+  /* ========================================================================
+     1. HELPER DOM
+     ======================================================================== */
+  function qs(sel, root) { return (root || document).querySelector(sel); }
+  function qsa(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+  function el(id) { return document.getElementById(id); }
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function attr(s) { return esc(s); }
+
+  function on(root, event, selector, handler) {
+    (root || document).addEventListener(event, function (e) {
+      var t = e.target.closest(selector);
+      if (t && (root || document).contains(t)) handler.call(t, e, t);
+    });
+  }
+
+  function debounce(fn, wait) {
+    var t;
+    return function () {
+      var ctx = this, args = arguments;
+      clearTimeout(t);
+      t = setTimeout(function () { fn.apply(ctx, args); }, wait || 320);
+    };
+  }
+
+  function num(v, def) {
+    var n = Number(v);
+    return isNaN(n) ? (def === undefined ? 0 : def) : n;
+  }
+
+  /* ========================================================================
+     2. FORMAT
+     ======================================================================== */
+  var BULAN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli',
+    'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+  var BULAN_SINGKAT = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+  var HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+
+  function toDate(v) {
+    if (!v) return null;
+    if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+    var s = String(v).trim();
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+    var d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  function tglIndo(v, denganHari) {
+    var d = toDate(v);
+    if (!d) return '—';
+    var teks = d.getDate() + ' ' + BULAN[d.getMonth()] + ' ' + d.getFullYear();
+    return denganHari ? (HARI[d.getDay()] + ', ' + teks) : teks;
+  }
+
+  function tglSingkat(v) {
+    var d = toDate(v);
+    if (!d) return '—';
+    return d.getDate() + ' ' + BULAN_SINGKAT[d.getMonth()] + ' ' + String(d.getFullYear()).substring(2);
+  }
+
+  function iso(v) {
+    var d = toDate(v);
+    if (!d) return '';
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+  function waktuLalu(v) {
+    var d = toDate(v);
+    if (!d) return '—';
+    var detik = Math.floor((Date.now() - d.getTime()) / 1000);
+    if (detik < 60) return 'baru saja';
+    if (detik < 3600) return Math.floor(detik / 60) + ' menit lalu';
+    if (detik < 86400) return Math.floor(detik / 3600) + ' jam lalu';
+    if (detik < 604800) return Math.floor(detik / 86400) + ' hari lalu';
+    return tglSingkat(d);
+  }
+
+  function angka(n) {
+    var v = num(n, 0);
+    return v.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  }
+
+  function ukuran(bytes) {
+    var b = num(bytes, 0);
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1048576).toFixed(2) + ' MB';
+  }
+
+  function inisial(nama) {
+    var b = String(nama || '').trim().split(/\s+/).filter(function (x) { return x; });
+    if (!b.length) return '?';
+    if (b.length === 1) return b[0].substring(0, 2).toUpperCase();
+    return (b[0].charAt(0) + b[1].charAt(0)).toUpperCase();
+  }
+
+  function statusBadge(key, label, tone, icon) {
+    var t = tone || statusTone(key);
+    var l = label || statusLabel(key);
+    var i = icon || statusIcon(key);
+    return '<span class="gde-status gde-status--' + attr(t) + '">'
+      + (i ? '<i class="bi ' + attr(i) + '"></i>' : '') + esc(l) + '</span>';
+  }
+
+  function statusTone(key) {
+    var def = cariStatus(key);
+    return def ? def.tone : 'gray';
+  }
+  function statusLabel(key) {
+    var def = cariStatus(key);
+    return def ? def.label : (key ? key : 'Belum ada tanggal');
+  }
+  function statusIcon(key) {
+    var def = cariStatus(key);
+    return def ? def.icon : 'bi-dash-circle';
+  }
+  function cariStatus(key) {
+    var list = (state.meta && state.meta.statuses) || [];
+    for (var i = 0; i < list.length; i++) { if (list[i].key === key) return list[i]; }
+    return null;
+  }
+
+  function sisaTeks(hari, bulan) {
+    if (hari === null || hari === undefined || hari === '') return '—';
+    var h = num(hari);
+    if (h < 0) return 'Lewat ' + angka(Math.abs(h)) + ' hari';
+    return angka(h) + ' hari';
+  }
+
+  function sisaBulanTeks(bulan) {
+    if (bulan === null || bulan === undefined || bulan === '') return '';
+    return num(bulan).toLocaleString('id-ID', { maximumFractionDigits: 1 }) + ' bln';
+  }
+
+  /* ========================================================================
+     3. TOAST
+     ======================================================================== */
+  function toastContainer() {
+    var c = el('siagaToasts');
+    if (!c) {
+      c = document.createElement('div');
+      c.id = 'siagaToasts';
+      c.className = 'siaga-toasts';
+      document.body.appendChild(c);
+    }
+    return c;
+  }
+
+  function toast(msg, tipe, judul) {
+    var t = tipe || 'info';
+    var ikon = { success: 'bi-check-circle-fill', danger: 'bi-x-circle-fill', warning: 'bi-exclamation-triangle-fill', info: 'bi-info-circle-fill' }[t] || 'bi-info-circle-fill';
+    var div = document.createElement('div');
+    div.className = 'siaga-toast siaga-toast--' + t;
+    div.innerHTML = '<i class="bi ' + ikon + ' siaga-toast__icon"></i>'
+      + '<div class="siaga-toast__body">'
+      + (judul ? '<strong class="siaga-toast__title">' + esc(judul) + '</strong>' : '')
+      + '<div class="siaga-toast__msg">' + esc(msg) + '</div></div>'
+      + '<button class="siaga-toast__close" type="button" aria-label="Tutup">&times;</button>';
+    toastContainer().appendChild(div);
+    var tutup = function () { if (div.parentNode) div.parentNode.removeChild(div); };
+    div.querySelector('.siaga-toast__close').addEventListener('click', tutup);
+    setTimeout(tutup, t === 'danger' ? 9000 : 5200);
+  }
+
+  var sukses = function (m, j) { toast(m, 'success', j); };
+  var gagal = function (m, j) { toast(m, 'danger', j); };
+  var info = function (m, j) { toast(m, 'info', j); };
+  var ingat = function (m, j) { toast(m, 'warning', j); };
+
+  /* ========================================================================
+     4. MODAL
+     ======================================================================== */
+  function modalBuka(id) {
+    var m = el(id);
+    if (!m) return;
+    m.classList.add('is-open');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function modalTutup(id) {
+    var m = el(id);
+    if (!m) return;
+    m.classList.remove('is-open');
+    if (!qsa('.gde-modal.is-open').length) document.body.style.overflow = '';
+  }
+
+  function modalTutupSemua() {
+    qsa('.gde-modal.is-open').forEach(function (m) { m.classList.remove('is-open'); });
+    document.body.style.overflow = '';
+  }
+
+  function konfirmasi(opsi) {
+    return new Promise(function (resolve) {
+      var o = opsi || {};
+      var id = 'siagaConfirm';
+      var lama = el(id);
+      if (lama) lama.parentNode.removeChild(lama);
+
+      var wrap = document.createElement('div');
+      wrap.className = 'gde-modal is-open';
+      wrap.id = id;
+      wrap.innerHTML = ''
+        + '<div class="gde-modal__scrim" data-tutup></div>'
+        + '<div class="gde-modal__dialog" style="max-width:480px">'
+        + '  <div class="gde-modal__head"><h3>' + esc(o.judul || 'Konfirmasi') + '</h3></div>'
+        + '  <div class="gde-modal__body"><p style="margin:0;color:var(--gde-ink-2)">' + (o.pesanHtml || esc(o.pesan || '')) + '</p></div>'
+        + '  <div class="gde-modal__foot">'
+        + '    <button class="gde-btn gde-btn--outline" data-batal type="button">' + esc(o.labelBatal || 'Batal') + '</button>'
+        + '    <button class="gde-btn ' + (o.bahaya ? 'gde-btn--danger' : 'gde-btn--primary') + '" data-ok type="button">'
+        + esc(o.labelOk || 'Lanjutkan') + '</button>'
+        + '  </div>'
+        + '</div>';
+      document.body.appendChild(wrap);
+      document.body.style.overflow = 'hidden';
+
+      var selesai = function (hasil) {
+        if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+        document.body.style.overflow = '';
+        resolve(hasil);
+      };
+      wrap.querySelector('[data-ok]').addEventListener('click', function () { selesai(true); });
+      wrap.querySelector('[data-batal]').addEventListener('click', function () { selesai(false); });
+      wrap.querySelector('[data-tutup]').addEventListener('click', function () { selesai(false); });
+    });
+  }
+
+  /* ========================================================================
+     5. PEMANGGIL API
+     ======================================================================== */
+  function gsr(fn) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function (resolve, reject) {
+      var runner = google.script.run
+        .withSuccessHandler(function (res) { resolve(res); })
+        .withFailureHandler(function (err) { reject(err); });
+      runner[fn].apply(runner, args);
+    });
+  }
+
+  /**
+   * Panggil endpoint apiXxx dan buka bungkusan { ok, data } / { ok, error }.
+   * Argumen token disisipkan otomatis sebagai parameter pertama bila
+   * `opts.token !== false`.
+   */
+  function api(fn, args, opts) {
+    var o = opts || {};
+    var a = (args || []).slice();
+    if (o.token !== false) a.unshift(state.token);
+    return gsr.apply(null, [fn].concat(a)).then(function (res) {
+      if (!res || typeof res !== 'object') throw new Error('Respons server tidak dikenal.');
+      if (res.ok === false) {
+        var e = new Error(res.error || 'Terjadi kesalahan pada server.');
+        e.server = true;
+        throw e;
+      }
+      return res.data === undefined ? null : res.data;
+    }).catch(function (err) {
+      var msg = (err && err.message) ? err.message : String(err);
+      if (/Sesi|login|AUTH/i.test(msg) && o.silent !== true) {
+        tanganiSesiHabis_(msg);
+      }
+      state.lastError = msg;
+      throw new Error(msg);
+    });
+  }
+
+  var perluLoginUlang = false;
+  function tanganiSesiHabis_(msg) {
+    if (perluLoginUlang) return;
+    perluLoginUlang = true;
+    gagal(msg || 'Sesi berakhir. Silakan login kembali.', 'Sesi berakhir');
+    hapusSesi();
+    setTimeout(function () { location.reload(); }, 1400);
+  }
+
+  /* ========================================================================
+     6. SESI
+     ======================================================================== */
+  function simpanSesi(token, user) {
+    state.token = token;
+    state.user = user;
+    try {
+      localStorage.setItem(TOKEN_KEY, token);
+      localStorage.setItem(USER_KEY, JSON.stringify(user || {}));
+    } catch (e) { }
+  }
+
+  function hapusSesi() {
+    state.token = '';
+    state.user = null;
+    try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch (e) { }
+  }
+
+  function tokenTersimpan() {
+    try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+  }
+
+  function pengguna() { return state.user || {}; }
+  function role() { return (state.user && state.user.role) || ''; }
+  function isHc() { return role() === 'HC' || role() === 'SA'; }
+  function isSa() { return role() === 'SA'; }
+  function namaSaya() { return (state.user && state.user.nama_lengkap) || ''; }
+
+  function login(username, password) {
+    return api('apiLogin', [username, password], { token: false }).then(function (data) {
+      simpanSesi(data.token, data.user);
+      perluLoginUlang = false;
+      return data;
+    });
+  }
+
+  function logout() {
+    var t = state.token;
+    var lanjut = function () {
+      hapusSesi();
+      location.reload();
+    };
+    if (!t) { lanjut(); return Promise.resolve(); }
+    return api('apiLogout', [t], { token: false, silent: true })
+      .then(lanjut, lanjut);
+  }
+
+  /** Muat sesi dari token tersimpan. */
+  function bootSesi() {
+    var t = tokenTersimpan();
+    if (!t) return Promise.resolve(false);
+    state.token = t;
+    return api('apiGetSession', []).then(function (data) {
+      state.user = data.user;
+      try { localStorage.setItem(USER_KEY, JSON.stringify(data.user)); } catch (e) { }
+      return true;
+    }).catch(function () {
+      hapusSesi();
+      return false;
+    });
+  }
+
+  /** Ambil metadata (status, ambang, opsi dropdown). Di-cache per sesi. */
+  function muatMeta(paksa) {
+    if (state.meta && !paksa) return Promise.resolve(state.meta);
+    return api('apiGetMeta', []).then(function (m) {
+      state.meta = m;
+      return m;
+    });
+  }
+
+  /* ========================================================================
+     7. ROUTER & VIEW
+     ======================================================================== */
+  /* Daftar view: nama view -> { file, init, judul, sub, roles } */
+  var VIEWS = {
+    dashboard: { file: 'Dashboard', init: 'initDashboard', judul: 'Dashboard', sub: 'Ringkasan masa berlaku sertifikasi', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-speedometer2' },
+    data: { file: 'DataSertifikasi', init: 'initDataSertifikasi', judul: 'Data Sertifikasi', sub: 'Penelusuran dan pengelolaan seluruh data', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-card-checklist' },
+    register: { file: 'Register', init: 'initRegister', judul: 'Input Data Sertifikasi', sub: 'Tambah data dan unggah lampiran', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-plus-circle' },
+    pekerja: { file: 'ProfilPekerja', init: 'initProfilPekerja', judul: 'Profil Pekerja', sub: 'Identitas dan seluruh sertifikasi pekerja', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-person-vcard' },
+    notifikasi: { file: 'Notifikasi', init: 'initNotifikasi', judul: 'Notifikasi', sub: 'Pengingat masa berlaku sertifikasi', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-bell' },
+    masteruser: { file: 'MasterUser', init: 'initMasterUser', judul: 'Master User', sub: 'Kelola akun, role, dan data pekerja', roles: ['SA', 'HC'], ikon: 'bi-people' },
+    mastersertifikasi: { file: 'MasterSertifikasi', init: 'initMasterSertifikasi', judul: 'Jenis Sertifikasi', sub: 'Master jenis sertifikasi & masa berlaku', roles: ['SA', 'HC'], ikon: 'bi-award' },
+    profil: { file: 'ProfilUser', init: 'initProfilUser', judul: 'Profil Saya', sub: 'Data diri dan kontak notifikasi', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-person-circle' },
+    keamanan: { file: 'KeamananAkun', init: 'initKeamananAkun', judul: 'Username & Password', sub: 'Ubah kredensial masuk Anda', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-shield-lock' },
+    pengaturan: { file: 'Pengaturan', init: 'initPengaturan', judul: 'Pengaturan', sub: 'Ambang status, reminder, dan ekspor', roles: ['SA', 'HC'], ikon: 'bi-sliders' }
+  };
+
+  function bolehAkses(namaView) {
+    var v = VIEWS[namaView];
+    if (!v) return false;
+    return v.roles.indexOf(role()) !== -1;
+  }
+
+  function daftarView() {
+    return Object.keys(VIEWS).map(function (k) {
+      var v = VIEWS[k];
+      return { key: k, file: v.file, judul: v.judul, sub: v.sub, ikon: v.ikon, roles: v.roles };
+    });
+  }
+
+  function navigasi(namaView, opsi) {
+    var v = VIEWS[namaView];
+    if (!v) { gagal('Halaman "' + namaView + '" tidak dikenal.'); return; }
+    if (!bolehAkses(namaView)) { gagal('Anda tidak punya akses ke halaman ini.'); return; }
+    var o = opsi || {};
+    if (o.hash !== false) {
+      try { location.hash = '#/' + namaView + (o.param ? '?' + o.param : ''); } catch (e) { }
+    }
+    state.view = namaView;
+    state.param = o.param || '';
+    muatView(namaView);
+  }
+
+  function muatView(namaView) {
+    var v = VIEWS[namaView];
+    if (!v) return;
+    var konten = el('siagaContent');
+    if (!konten) return;
+    konten.innerHTML = pemuatHtml('Memuat ' + v.judul + '...');
+
+    // tandai menu aktif
+    qsa('[data-view]').forEach(function (a) {
+      a.classList.toggle('is-active', a.getAttribute('data-view') === namaView);
+    });
+
+    // judul halaman di topbar
+    var jt = el('siagaPageTitle');
+    if (jt) jt.textContent = v.judul;
+    var js = el('siagaPageSub');
+    if (js) js.textContent = v.sub || '';
+
+    gsr('getView', v.file).then(function (html) {
+      if (!html) throw new Error('Halaman ' + v.file + ' tidak ditemukan.');
+      konten.innerHTML = html;
+      jalankanSkrip(konten);          // aktifkan <script> milik view
+      var fn = window[v.init];
+      if (typeof fn === 'function') {
+        try { fn(state.param); } catch (e) {
+          konten.innerHTML = galatHtml(e.message || String(e));
+        }
+      } else {
+        konten.innerHTML = galatHtml('Fungsi ' + v.init + '() belum tersedia.');
+      }
+      perbaruiBadgeNotifikasi();
+      perbaruiBadgeMendesak();
+    }).catch(function (err) {
+      konten.innerHTML = galatHtml(err.message || String(err));
+    });
+  }
+
+  function pemuatHtml(teks) {
+    return '<div class="siaga-loader"><div class="siaga-loader__ring"></div>'
+      + '<p>' + esc(teks || 'Memuat...') + '</p></div>';
+  }
+
+  function galatHtml(pesan) {
+    return '<div class="gde-card"><div class="gde-card__body">'
+      + '<div class="gde-alert gde-alert--danger">'
+      + '<i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>'
+      + '<div class="gde-alert__body"><strong>Terjadi kesalahan</strong>' + esc(pesan) + '</div>'
+      + '</div></div></div>';
+  }
+
+  function kosongHtml(ikon, judul, pesan, aksiHtml) {
+    return '<div class="gde-empty">'
+      + '<div class="gde-empty__icon"><i class="bi ' + attr(ikon || 'bi-inbox') + '"></i></div>'
+      + '<h4>' + esc(judul || 'Belum ada data') + '</h4>'
+      + '<p>' + esc(pesan || '') + '</p>'
+      + (aksiHtml || '') + '</div>';
+  }
+
+  /**
+   * PENTING: skrip yang disuntikkan lewat innerHTML TIDAK dijalankan browser.
+   * Fungsi ini membuat ulang setiap <script> di dalam `root` supaya
+   * initXxx() milik view benar-benar terdefinisi.
+   */
+  function jalankanSkrip(root) {
+    if (!root) return;
+    qsa('script', root).forEach(function (lama) {
+      var baru = document.createElement('script');
+      baru.type = 'text/javascript';
+      if (lama.src) { baru.src = lama.src; }
+      else { baru.textContent = lama.textContent; }
+      lama.parentNode.replaceChild(baru, lama);
+    });
+  }
+
+  /** Jumlah sertifikasi yang perlu ditindaklanjuti (badge menu Data Sertifikasi). */
+  function perbaruiBadgeMendesak() {
+    if (!state.token) return;
+    api('apiGetRingkasanCepat', []).then(function (r) {
+      var n = num(r.mendesak) + num(r.perlu_verifikasi);
+      qsa('[data-urgent-badge]').forEach(function (b) {
+        b.textContent = n > 99 ? '99+' : String(n);
+        b.style.display = n > 0 ? '' : 'none';
+        b.title = num(r.kadaluarsa) + ' kadaluarsa · ' + num(r.perlu_verifikasi) + ' menunggu verifikasi';
+      });
+    }).catch(function () { });
+  }
+
+  function perbaruiBadgeNotifikasi() {    if (!state.token) return;
+    api('apiListNotifications', [{ limit: 1 }]).then(function (d) {
+      var n = num(d.belum_dibaca);
+      qsa('[data-notif-badge]').forEach(function (b) {
+        b.textContent = n > 99 ? '99+' : String(n);
+        b.style.display = n > 0 ? '' : 'none';
+      });
+      var mb = el('siagaTopbarNotifCount');
+      if (mb) { mb.textContent = n > 0 ? String(n) : ''; mb.style.display = n > 0 ? '' : 'none'; }
+    }).catch(function () { });
+  }
+
+  /* ========================================================================
+     8. FORM HELPER
+     ======================================================================== */
+  function nilaiForm(form) {
+    var out = {};
+    qsa('input, select, textarea', form).forEach(function (f) {
+      if (!f.name) return;
+      if (f.type === 'checkbox') { out[f.name] = f.checked; return; }
+      if (f.type === 'radio') { if (f.checked) out[f.name] = f.value; return; }
+      out[f.name] = f.value;
+    });
+    return out;
+  }
+
+  function isiForm(form, data) {
+    qsa('input, select, textarea', form).forEach(function (f) {
+      if (!f.name) return;
+      var v = data[f.name];
+      if (v === undefined || v === null) v = '';
+      if (f.type === 'checkbox') { f.checked = (v === true || String(v).toUpperCase() === 'TRUE'); return; }
+      if (f.type === 'radio') { f.checked = (String(f.value) === String(v)); return; }
+      f.value = v;
+    });
+  }
+
+  function resetForm(form) {
+    if (!form) return;
+    form.reset();
+    qsa('.is-invalid', form).forEach(function (f) { f.classList.remove('is-invalid'); });
+    qsa('.gde-error', form).forEach(function (f) { f.remove(); });
+  }
+
+  function tandaiInvalid(input, pesan) {
+    if (!input) return;
+    input.classList.add('is-invalid');
+    var lama = input.parentNode.querySelector('.gde-error');
+    if (lama) lama.remove();
+    var d = document.createElement('div');
+    d.className = 'gde-error';
+    d.textContent = pesan;
+    input.parentNode.appendChild(d);
+    try { input.focus(); } catch (e) { }
+  }
+
+  function bersihkanInvalid(form) {
+    if (!form) return;
+    qsa('.is-invalid', form).forEach(function (f) { f.classList.remove('is-invalid'); });
+    qsa('.gde-error', form).forEach(function (f) { f.remove(); });
+  }
+
+  function tombolSibuk(btn, sibuk, teksSibuk) {
+    if (!btn) return;
+    if (sibuk) {
+      btn.dataset.teksAsli = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="gde-spinner" style="border-color:rgba(255,255,255,.4);border-top-color:#fff"></span> '
+        + esc(teksSibuk || 'Memproses...');
+    } else {
+      btn.disabled = false;
+      if (btn.dataset.teksAsli) { btn.innerHTML = btn.dataset.teksAsli; delete btn.dataset.teksAsli; }
+    }
+  }
+
+  /* ========================================================================
+     9. BERKAS
+     ======================================================================== */
+  var ATURAN_BERKAS = {
+    ext: ['pdf', 'xls', 'xlsx', 'csv', 'doc', 'docx', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'heic', 'tif', 'tiff'],
+    mime: ['application/pdf', 'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp', 'image/heic', 'image/tiff'],
+    maksMb: 12
+  };
+
+  function extDari(nama) {
+    var s = String(nama || '');
+    var i = s.lastIndexOf('.');
+    return i === -1 ? '' : s.substring(i + 1).toLowerCase();
+  }
+
+  function ikonBerkas(nama) {
+    var e = extDari(nama);
+    if (e === 'pdf') return 'bi-file-earmark-pdf';
+    if (e === 'xls' || e === 'xlsx' || e === 'csv') return 'bi-file-earmark-excel';
+    if (e === 'doc' || e === 'docx') return 'bi-file-earmark-word';
+    if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'heic', 'tif', 'tiff'].indexOf(e) !== -1) return 'bi-file-earmark-image';
+    return 'bi-file-earmark';
+  }
+
+  function validasiBerkas(file) {
+    if (!file) return 'Berkas tidak terbaca.';
+    var e = extDari(file.name);
+    if (ATURAN_BERKAS.ext.indexOf(e) === -1) {
+      return 'Jenis berkas .' + e + ' belum didukung. Gunakan PDF, Excel, Word, atau gambar.';
+    }
+    if (file.size > ATURAN_BERKAS.maksMb * 1024 * 1024) {
+      return 'Ukuran berkas ' + ukuran(file.size) + ' melebihi batas ' + ATURAN_BERKAS.maksMb + ' MB.';
+    }
+    return '';
+  }
+
+  function bacaBerkas(file) {
+    return new Promise(function (resolve, reject) {
+      var r = new FileReader();
+      r.onload = function () {
+        var s = String(r.result || '');
+        var koma = s.indexOf(',');
+        resolve(koma === -1 ? s : s.substring(koma + 1));
+      };
+      r.onerror = function () { reject(new Error('Gagal membaca berkas.')); };
+      r.readAsDataURL(file);
+    });
+  }
+
+  function pratinjauUrl(fileId, mime, nama) {
+    if (!fileId) return '';
+    var m = String(mime || '');
+    if (m.indexOf('image/') === 0 || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].indexOf(extDari(nama)) !== -1) {
+      return 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(fileId) + '&sz=w1000';
+    }
+    return 'https://drive.google.com/file/d/' + encodeURIComponent(fileId) + '/preview';
+  }
+
+  /* ========================================================================
+     10. SIDEBAR / TOPBAR
+     ======================================================================== */
+  function renderSidebar() {
+    var menuUtama = [
+      { key: 'dashboard', label: 'Dashboard', ikon: 'bi-speedometer2' },
+      { key: 'data', label: 'Data Sertifikasi', ikon: 'bi-card-checklist', urgent: true },
+      { key: 'register', label: 'Input Data', ikon: 'bi-plus-circle' },
+      { key: 'pekerja', label: 'Profil Pekerja', ikon: 'bi-person-vcard' },
+      { key: 'notifikasi', label: 'Notifikasi', ikon: 'bi-bell', badge: true }
+    ];
+    var menuAdmin = [
+      { key: 'masteruser', label: 'Master User', ikon: 'bi-people' },
+      { key: 'mastersertifikasi', label: 'Jenis Sertifikasi', ikon: 'bi-award' },
+      { key: 'pengaturan', label: 'Pengaturan', ikon: 'bi-sliders' }
+    ];
+    var menuAkun = [
+      { key: 'profil', label: 'Profil Saya', ikon: 'bi-person-circle' },
+      { key: 'keamanan', label: 'Username & Password', ikon: 'bi-shield-lock' }
+    ];
+
+    function item(m) {
+      if (!bolehAkses(m.key)) return '';
+      return '<li><a href="#/' + m.key + '" data-view="' + m.key + '">'
+        + '<i class="bi ' + m.ikon + '"></i><span>' + esc(m.label) + '</span>'
+        + (m.badge ? '<span class="gde-nav__count" data-notif-badge style="display:none">0</span>' : '')
+        + (m.urgent ? '<span class="gde-nav__count" data-urgent-badge style="display:none">0</span>' : '')
+        + '</a></li>';
+    }
+
+    var adminHtml = menuAdmin.map(item).join('');
+    var u = pengguna();
+
+    return ''
+      + '<aside class="gde-sidebar" id="siagaSidebar">'
+      + '  <div class="gde-sidebar__brand">'
+      + '    <div class="gde-sidebar__mark">S</div>'
+      + '    <div class="gde-sidebar__brandmeta">'
+      + '      <span class="gde-sidebar__brandname">SIAGA</span>'
+      + '      <span class="gde-sidebar__brandsub">Sertifikasi Patuha</span>'
+      + '    </div>'
+      + '  </div>'
+      + '  <div class="siaga-user-chip">'
+      + '    <span class="gde-avatar">' + esc(inisial(u.nama_lengkap)) + '</span>'
+      + '    <div class="siaga-user-chip__meta">'
+      + '      <span class="siaga-user-chip__nama">' + esc(u.nama_lengkap || '-') + '</span>'
+      + '      <span class="siaga-user-chip__role">' + esc(u.role_label || u.role || '') + '</span>'
+      + '    </div>'
+      + '  </div>'
+      + '  <div class="gde-sidebar__label">Menu Utama</div>'
+      + '  <ul class="gde-nav">' + menuUtama.map(item).join('') + '</ul>'
+      + (adminHtml ? ('<div class="gde-sidebar__label">Administrasi</div><ul class="gde-nav">' + adminHtml + '</ul>') : '')
+      + '  <div class="gde-sidebar__label">Akun</div>'
+      + '  <ul class="gde-nav">' + menuAkun.map(item).join('') + '</ul>'
+      + '  <div class="gde-sidebar__cta">'
+      + '    <strong><i class="bi bi-shield-check"></i> Pengingat otomatis</strong>'
+      + '    <p>Reminder dikirim ke karyawan, HC, dan atasan pada H-9, H-6, H-3, H-2, dan H-1 bulan.</p>'
+      + '    <a href="#/notifikasi"><i class="bi bi-bell"></i> Lihat notifikasi</a>'
+      + '  </div>'
+      + '</aside>';
+  }
+
+  function renderTopbar() {
+    var u = pengguna();
+    return ''
+      + '<header class="gde-topbar">'
+      + '  <div class="gde-topbar__inner">'
+      + '    <button class="gde-icon-btn gde-sidebar__toggle" id="siagaSidebarToggle" type="button" aria-label="Buka menu">'
+      + '      <i class="bi bi-list"></i></button>'
+      + '    <div class="gde-brand">'
+      + '      <div class="gde-brand__divider"></div>'
+      + '      <div>'
+      + '        <span class="gde-brand__section" id="siagaPageTitle">Dashboard</span>'
+      + '        <span class="gde-brand__sub" id="siagaPageSub">Ringkasan masa berlaku sertifikasi</span>'
+      + '      </div>'
+      + '    </div>'
+      + '    <div class="gde-topbar__spacer"></div>'
+      + '    <div class="gde-topbar__actions">'
+      + '      <button class="gde-icon-btn" type="button" data-view="notifikasi" title="Notifikasi" style="position:relative">'
+      + '        <i class="bi bi-bell"></i>'
+      + '        <span id="siagaTopbarNotifCount" class="gde-nav__count" style="position:absolute;top:-6px;right:-6px;display:none">0</span>'
+      + '      </button>'
+      + '      <div class="gde-dropdown" id="siagaUserDropdown">'
+      + '        <button class="gde-icon-btn" type="button" data-gde-dropdown title="Akun" style="width:auto;padding:0 .5rem;gap:6px">'
+      + '          <span class="gde-avatar gde-avatar--sm">' + esc(inisial(u.nama_lengkap)) + '</span>'
+      + '          <i class="bi bi-chevron-down" style="font-size:.7rem"></i>'
+      + '        </button>'
+      + '        <div class="gde-dropdown__menu">'
+      + '          <div style="padding:.6rem .8rem">'
+      + '            <div style="font-size:12px;font-weight:600;color:var(--gde-ink)">' + esc(u.nama_lengkap || '-') + '</div>'
+      + '            <div style="font-size:11px;color:var(--gde-muted)">' + esc(u.employee_code || '') + ' · ' + esc(u.role_label || '') + '</div>'
+      + '          </div>'
+      + '          <div class="gde-dropdown__divider"></div>'
+      + '          <a class="gde-dropdown__item" href="#/profil"><i class="bi bi-person-circle"></i> Profil saya</a>'
+      + '          <a class="gde-dropdown__item" href="#/keamanan"><i class="bi bi-shield-lock"></i> Username &amp; password</a>'
+      + '          <div class="gde-dropdown__divider"></div>'
+      + '          <a class="gde-dropdown__item" href="#" id="siagaLogout"><i class="bi bi-box-arrow-right"></i> Keluar</a>'
+      + '        </div>'
+      + '      </div>'
+      + '    </div>'
+      + '  </div>'
+      + '</header>';
+  }
+
+  function renderShell() {
+    var wadah = el('siagaApp');
+    wadah.innerHTML = ''
+      + '<div class="siaga-app">'
+      + renderTopbar()
+      + '<div class="gde-shell" id="siagaShell">'
+      + renderSidebar()
+      + '<main class="gde-content" id="siagaContent"></main>'
+      + '</div>'
+      + '<footer class="gde-footer"><div class="gde-footer__inner">'
+      + '<p>&copy; ' + new Date().getFullYear() + ' ' + esc(APP.owner) + '</p>'
+      + '<p>' + esc(APP.name) + ' ' + esc(APP.version) + '</p>'
+      + '</div></footer>'
+      + '</div>'
+      + '<div class="gde-scrim" id="siagaScrim"></div>';
+    pasangPerilakuShell();
+  }
+
+  function pasangPerilakuShell() {
+    var sidebar = el('siagaSidebar');
+    var scrim = el('siagaScrim');
+    var toggle = el('siagaSidebarToggle');
+
+    if (toggle) {
+      toggle.addEventListener('click', function () {
+        var terbuka = sidebar.classList.toggle('is-open');
+        if (scrim) scrim.classList.toggle('is-open', terbuka);
+      });
+    }
+    if (scrim) {
+      scrim.addEventListener('click', function () {
+        sidebar.classList.remove('is-open');
+        scrim.classList.remove('is-open');
+      });
+    }
+
+    /* Listener tingkat dokumen hanya dipasang SEKALI, walau shell
+       di-render ulang (mis. setelah profil diperbarui). */
+    if (state._shellGlobalBound) return;
+    state._shellGlobalBound = true;
+
+    document.addEventListener('click', function (e) {
+      var pemicu = e.target.closest('[data-gde-dropdown]');
+      qsa('.gde-dropdown.is-open').forEach(function (d) {
+        if (!pemicu || d !== pemicu.closest('.gde-dropdown')) d.classList.remove('is-open');
+      });
+      if (pemicu) {
+        e.preventDefault();
+        pemicu.closest('.gde-dropdown').classList.toggle('is-open');
+      }
+    });
+
+    document.addEventListener('click', function (e) {
+      var link = e.target.closest('[data-view]');
+      if (!link) return;
+      var key = link.getAttribute('data-view');
+      if (!VIEWS[key]) return;
+      e.preventDefault();
+      var drawer = el('siagaSidebar');
+      var sc = el('siagaScrim');
+      if (drawer) drawer.classList.remove('is-open');
+      if (sc) sc.classList.remove('is-open');
+      navigasi(key);
+    });
+
+    /* tombol keluar dipasang ulang tiap render, jadi pakai delegasi */
+    document.addEventListener('click', function (e) {
+      var keluar = e.target.closest('#siagaLogout');
+      if (!keluar) return;
+      e.preventDefault();
+      konfirmasi({
+        judul: 'Keluar dari aplikasi',
+        pesan: 'Anda akan keluar dari sesi ini.',
+        labelOk: 'Keluar',
+        bahaya: true
+      }).then(function (ya) { if (ya) logout(); });
+    });
+  }
+
+  function viewAwal() {
+    var hash = String(location.hash || '').replace(/^#\/?/, '');
+    var nama = hash.split('?')[0];
+    if (nama && VIEWS[nama] && bolehAkses(nama)) return { view: nama, param: hash.split('?')[1] || '' };
+    if (bolehAkses('dashboard')) return { view: 'dashboard', param: '' };
+    if (bolehAkses('data')) return { view: 'data', param: '' };
+    return { view: 'profil', param: '' };
+  }
+
+  function mulaiRouter() {
+    if (!state._routerBound) {
+      state._routerBound = true;
+      window.addEventListener('hashchange', function () {
+        var t = viewAwal();
+        if (t.view !== state.view) navigasi(t.view, { hash: false, param: t.param });
+      });
+    }
+    var awal = viewAwal();
+    navigasi(awal.view, { hash: false, param: awal.param });
+  }
+
+  /* ========================================================================
+     11. HALAMAN LOGIN
+     ======================================================================== */
+  function tampilkanLogin(pesanAwal) {
+    var wadah = el('siagaApp');
+    wadah.innerHTML = pemuatHtml('Menyiapkan halaman masuk...');
+    gsr('getView', 'Login').then(function (html) {
+      wadah.innerHTML = html;
+      jalankanSkrip(wadah);           // aktifkan <script> halaman login
+      if (typeof window.initLogin === 'function') window.initLogin(pesanAwal || '');
+    }).catch(function (err) {
+      wadah.innerHTML = galatHtml(err.message || String(err));
+    });
+  }
+
+  /* ========================================================================
+     12. INISIALISASI
+     ======================================================================== */
+  function mulai(bootstrap) {
+    if (bootstrap) {
+      APP.name = bootstrap.appName || APP.name;
+      APP.sub = bootstrap.appSub || APP.sub;
+      APP.owner = bootstrap.appOwner || APP.owner;
+      APP.version = bootstrap.version || APP.version;
+      state.bootstrap = bootstrap;
+    }
+    bootSesi().then(function (masuk) {
+      if (!masuk) { tampilkanLogin(); return; }
+      return muatMeta().then(function () {
+        renderShell();
+        mulaiRouter();
+        perbaruiBadgeNotifikasi();
+        perbaruiBadgeMendesak();
+        if (pengguna().must_change_password) {
+          ingat('Password Anda masih password awal. Segera ganti di menu Username & Password.', 'Perhatian keamanan');
+        }
+      });
+    }).catch(function (err) {
+      tampilkanLogin(err.message || '');
+    });
+  }
+
+  /* ========================================================================
+     13. EKSPOR PUBLIK
+     ======================================================================== */
+  return {
+    APP: APP,
+    state: state,
+    VIEWS: VIEWS,
+    ATURAN_BERKAS: ATURAN_BERKAS,
+    BULAN: BULAN,
+    BULAN_SINGKAT: BULAN_SINGKAT,
+    HARI: HARI,
+
+    // dom
+    qs: qs, qsa: qsa, el: el, esc: esc, attr: attr, on: on, debounce: debounce, num: num,
+
+    // format
+    tglIndo: tglIndo, tglSingkat: tglSingkat, iso: iso, waktuLalu: waktuLalu,
+    angka: angka, ukuran: ukuran, inisial: inisial, pad: pad, toDate: toDate,
+    sisaTeks: sisaTeks, sisaBulanTeks: sisaBulanTeks,
+    statusBadge: statusBadge, statusTone: statusTone, statusLabel: statusLabel, statusIcon: statusIcon,
+
+    // ui
+    toast: toast, sukses: sukses, gagal: gagal, info: info, ingat: ingat,
+    modalBuka: modalBuka, modalTutup: modalTutup, modalTutupSemua: modalTutupSemua,
+    konfirmasi: konfirmasi, pemuatHtml: pemuatHtml, galatHtml: galatHtml, kosongHtml: kosongHtml,
+    jalankanSkrip: jalankanSkrip,
+
+    // api & sesi
+    gsr: gsr, api: api, login: login, logout: logout, bootSesi: bootSesi, muatMeta: muatMeta,
+    pengguna: pengguna, role: role, isHc: isHc, isSa: isSa, namaSaya: namaSaya,
+    simpanSesi: simpanSesi, hapusSesi: hapusSesi, perbaruiBadgeNotifikasi: perbaruiBadgeNotifikasi,
+    perbaruiBadgeMendesak: perbaruiBadgeMendesak,
+
+    // router
+    navigasi: navigasi, muatView: muatView, daftarView: daftarView, bolehAkses: bolehAkses,
+    mulaiRouter: mulaiRouter,
+
+    // form & berkas
+    nilaiForm: nilaiForm, isiForm: isiForm, resetForm: resetForm,
+    tandaiInvalid: tandaiInvalid, bersihkanInvalid: bersihkanInvalid, tombolSibuk: tombolSibuk,
+    validasiBerkas: validasiBerkas, bacaBerkas: bacaBerkas, pratinjauUrl: pratinjauUrl,
+    ikonBerkas: ikonBerkas, extDari: extDari,
+
+    // boot
+    mulai: mulai, tampilkanLogin: tampilkanLogin,
+    renderShell: renderShell, renderSidebar: renderSidebar, renderTopbar: renderTopbar
+  };
+})();
+
+/* Dijalankan setelah Index.html selesai memuat DOM. */
+window.SIAGA_READY = false;
+</script>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="SIAGA Sertifikasi — sistem informasi dan pengingat masa berlaku sertifikasi, Unit Patuha.">
+  <title>SIAGA Sertifikasi — Unit Patuha</title>
+  <?!= include('Stylesheet'); ?>
+</head>
+<body class="gde-body">
+
+  <!-- Wadah utama: diisi halaman login atau kerangka aplikasi oleh SIAGA.mulai() -->
+  <div id="siagaApp">
+    <div class="siaga-loader" style="min-height:100vh">
+      <div class="siaga-loader__ring"></div>
+      <p>Menyiapkan SIAGA Sertifikasi...</p>
+    </div>
+  </div>
+
+  <!-- Wadah toast global -->
+  <div id="siagaToasts" class="siaga-toasts" role="status" aria-live="polite"></div>
+
+  <script>
+    /* Nilai dari server (doGet) — dibaca SIAGA.mulai() */
+    var SIAGA_BOOTSTRAP = <?!= bootstrap ?>;
+  </script>
+
+  <?!= include('Javascript'); ?>
+
+  <script>
+  (function () {
+    'use strict';
+
+    function mulai() {
+      try {
+        SIAGA.mulai(SIAGA_BOOTSTRAP || {});
+      } catch (e) {
+        document.getElementById('siagaApp').innerHTML =
+          '<div class="siaga-loader" style="min-height:100vh"><p style="color:#C4142A">'
+          + 'Gagal memuat aplikasi: ' + (e && e.message ? e.message : e) + '</p></div>';
+      }
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', mulai);
+    } else {
+      mulai();
+    }
+
+    /* Lindungi dari iframe tertanam: keluar dari frame bila diminta */
+    if (window.top !== window.self && !/^https?:/.test(document.referrer || '')) {
+      /* dibiarkan: aplikasi memang tampil di dalam iframe Google */
+    }
+  })();
+  </script>
+</body>
+</html>
