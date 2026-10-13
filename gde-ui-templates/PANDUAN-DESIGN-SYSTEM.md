@@ -1,6 +1,6 @@
 # GDE UI Templates — Panduan Design System
 
-Pustaka tampilan resmi **PT Geo Dipa Energi (Persero) — Unit Patuha** untuk aplikasi SIAGA.
+Pustaka tampilan resmi **PT Geo Dipa Energi (Persero) — Unit Patuha** untuk aplikasi myCertif.
 Satu sumber gaya untuk seluruh antarmuka: warna, tipografi, komponen, dan kerangka aplikasi.
 
 Versi: **1.0** · Pemilik: Divisi General Affairs &amp; tim IT Unit Patuha ·

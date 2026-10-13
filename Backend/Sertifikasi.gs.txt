@@ -1,0 +1,798 @@
+/**
+ * ============================================================================
+ * myCertif — Sertifikasi.gs.txt
+ * PT Geo Dipa Energi (Persero) — Unit Patuha
+ * ============================================================================
+ *
+ * Berkas ini adalah hasil PEMECAHAN subprocess.gs supaya setiap berkas fokus
+ * pada satu tanggung jawab. Di Google Apps Script seluruh berkas .gs berbagi
+ * satu lingkup global, jadi pemecahan ini murni soal keterbacaan & kemudahan
+ * penelusuran — bukan pemisahan proses.
+ *
+ * ISI BERKAS INI
+ * ---------------------------------------------------------------------------
+ *   5. MASTER FILE (data sertifikasi)
+ *   6. PROFIL PEKERJA
+ *   7. DASHBOARD
+ *
+ * Akses spreadsheet TIDAK boleh langsung dari sini: pakai helper di Data.gs
+ * (sheetToObjects_, sheetValues_, findRowByCol_, updateRowByCol_, appendObject_,
+ *  tulisBanyak_, invalidateSheet_) supaya cache dan batch write tetap dipakai.
+ */
+
+var MARKER_SERTIFIKASI_ = 'v1.4.0';
+var SERTIFIKASI_BUILD_ = 'Sertifikasi.gs v1.4.0 — data sertifikasi, profil pekerja, dashboard';
+
+// ============================================================================
+// 5. MASTER FILE (data sertifikasi)
+// ============================================================================
+
+function kodeAksesFile_(auth, fileObj) {
+  if (!auth) return false;
+  if (auth.role === 'HC' || auth.role === 'SA') return true;
+  return String(fileObj.Employee_Code) === String(auth.employee_code);
+}
+
+/** Ubah baris T_Sertifikasi menjadi objek siap-pakai frontend. */
+function fileDto_(f, petaUser) {
+  var u = petaUser ? petaUser[String(f.Employee_Code)] : null;
+  var hit = hitungMasaBerlaku_(f.Expired_at);
+  var def = hit.status ? STATUS_MAP_[hit.status] : null;
+  var ext = extFromName_(f.File_name);
+  var fileId = String(f.File_id || '');
+  return {
+    doc_id: String(f.Cert_Id || ''),
+    employee_id: String(f.Employee_Code || ''),
+    nama_pemegang: u ? String(u.Nama_Lengkap || '') : '',
+    username: u ? String(u.Username || '') : '',
+    divisi: u ? String(u.Divisi || '') : '',
+    jabatan: u ? String(u.Jabatan || '') : '',
+    email_perusahaan: u ? String(u.Email_Perusahaan || '') : '',
+    nama_sertifikasi: String(f.Nama_Sertifikasi || ''),
+    start_pelaksanaan: f.Start_Pelaksanaan ? fmtDate_(f.Start_Pelaksanaan, 'yyyy-MM-dd') : '',
+    end_pelaksanaan: f.End_Pelaksanaan ? fmtDate_(f.End_Pelaksanaan, 'yyyy-MM-dd') : '',
+    tanggal_sertifikasi: f.Tanggal_sertifikasi ? fmtDate_(f.Tanggal_sertifikasi, 'yyyy-MM-dd') : '',
+    tanggal_waktu_perpanjangan: f.Tanggal_waktu_perpanjangan ? fmtDate_(f.Tanggal_waktu_perpanjangan, 'yyyy-MM-dd') : '',
+    expired_at: f.Expired_at ? fmtDate_(f.Expired_at, 'yyyy-MM-dd') : '',
+    recom_update: f.Recom_Update ? fmtDate_(f.Recom_Update, 'yyyy-MM-dd') : String(hit.recom_update || ''),
+    sisa_hari: hit.ada_tanggal ? hit.sisa_hari : null,
+    sisa_bulan: hit.ada_tanggal ? hit.sisa_bulan : null,
+    sisa_teks: hit.ada_tanggal ? hit.sisa_teks : '',
+    status: hit.status,
+    status_label: def ? def.label : 'Belum ada tanggal',
+    status_tone: def ? def.tone : 'gray',
+    status_icon: def ? def.icon : 'bi-dash-circle',
+    prioritas: def ? def.prioritas : 99,
+    link_file: String(f.Link_file || ''),
+    file_id: fileId,
+    file_name: String(f.File_name || ''),
+    mime_type: String(f.Mime_type || ''),
+    ukuran_file: Number(f.Ukuran_file) || 0,
+    ukuran_label: humanSize_(Number(f.Ukuran_file) || 0),
+    ext: ext,
+    file_icon: FILE_ICON_[ext] || 'bi-file-earmark',
+    masa_berlaku_bulan: Number(f.Masa_berlaku_bulan) || 0,
+    penyelenggara: String(f.Penyelenggara || ''),
+    no_sertifikat: String(f.No_Sertifikat || ''),
+    status_verifikasi: normalkanVerifikasi_(f.Status_Verifikasi),
+    status_verifikasi_label: verifikasiDef_(f.Status_Verifikasi).label,
+    catatan: String(f.Catatan || ''),
+    verified_by: String(f.Verified_By || ''),
+    verified_at: fmtWaktu_(f.Verified_At),
+    created_at: fmtWaktu_(f.Created_At),
+    updated_at: fmtWaktu_(f.Updated_At),
+    created_by: String(f.Created_By || ''),
+    preview_url: fileId ? ('https://drive.google.com/file/d/' + fileId + '/preview') : '',
+    view_url: fileId ? ('https://drive.google.com/file/d/' + fileId + '/view') : String(f.Link_file || ''),
+    download_url: fileId ? ('https://drive.google.com/uc?export=download&id=' + fileId) : ''
+  };
+}
+
+function petaUser_() {
+  var peta = {};
+  sheetToObjects_('Master_User').forEach(function (u) {
+    peta[String(u.Employee_code)] = u;
+  });
+  return peta;
+}
+
+function cariFile_(docId) {
+  var row = findRowByCol_('T_Sertifikasi', 'Cert_Id', docId);
+  if (row === -1) return null;
+  return rowToObject_('T_Sertifikasi', row);
+}
+
+/**
+ * Daftar data sertifikasi dengan filter + paginasi.
+ * @param {Object} filter { q, status, divisi, employee_code, verifikasi,
+ *                          dari, sampai, sort, dir, page, per_page, semua_status }
+ */
+function apiListFiles(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var peta = petaUser_();
+    var rows = sheetToObjects_('T_Sertifikasi').map(function (x) { return fileDto_(x, peta); });
+
+    // karyawan hanya melihat miliknya sendiri
+    if (auth.role === 'EMP') rows = rows.filter(function (r) { return r.employee_id === auth.employee_code; });
+
+    var q = String(f.q || '').trim().toLowerCase();
+    var st = String(f.status || '').trim().toUpperCase();
+    var div = String(f.divisi || '').trim();
+    var ver = f.verifikasi ? normalkanVerifikasi_(f.verifikasi) : '';
+    var emp = String(f.employee_code || '').trim();
+    var dari = toDate_(f.dari);
+    var sampai = toDate_(f.sampai);
+    var hanyaKadaluarsa = toBool_(f.hanya_kadaluarsa);
+
+    var hasil = rows.filter(function (r) {
+      if (emp && r.employee_id !== emp) return false;
+      if (st && r.status !== st) return false;
+      if (div && r.divisi !== div) return false;
+      if (ver && r.status_verifikasi !== ver) return false;
+      if (hanyaKadaluarsa && r.status !== 'KADALUARSA') return false;
+      if (dari || sampai) {
+        var exp = toDate_(r.expired_at);
+        if (!exp) return false;
+        if (dari && exp.getTime() < dari.getTime()) return false;
+        if (sampai && exp.getTime() > sampai.getTime()) return false;
+      }
+      if (q) {
+        var gab = [r.employee_id, r.nama_pemegang, r.nama_sertifikasi, r.divisi, r.jabatan,
+          r.no_sertifikat, r.penyelenggara].join(' ').toLowerCase();
+        if (gab.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    // ---------- urutkan ----------
+    // Setiap kunci punya pembanding sendiri supaya kolom angka (sisa hari,
+    // prioritas) tidak dibandingkan sebagai teks.
+    var sort = String(f.sort || 'prioritas');
+    var kali = String(f.dir || 'asc').toLowerCase() === 'desc' ? -1 : 1;
+
+    function angkaSisa(x) {
+      return (x.sisa_hari === null || x.sisa_hari === undefined || x.sisa_hari === '')
+        ? Number.MAX_SAFE_INTEGER : Number(x.sisa_hari);
+    }
+
+    var pembanding = {
+      prioritas: function (a, b) {
+        if (a.prioritas !== b.prioritas) return (a.prioritas - b.prioritas) * kali;
+        var sa = angkaSisa(a), sb = angkaSisa(b);
+        if (sa !== sb) return (sa - sb) * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      status: function (a, b) {
+        if (a.prioritas !== b.prioritas) return (a.prioritas - b.prioritas) * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      sisa: function (a, b) {
+        var sa = angkaSisa(a), sb = angkaSisa(b);
+        if (sa !== sb) return (sa - sb) * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      expired: function (a, b) {
+        var ea = a.expired_at || '9999-99-99';
+        var eb = b.expired_at || '9999-99-99';
+        if (ea !== eb) return ea < eb ? -kali : kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      nama: function (a, b) {
+        var n = String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+        if (n !== 0) return n * kali;
+        return String(a.nama_sertifikasi).localeCompare(String(b.nama_sertifikasi));
+      },
+      sertifikasi: function (a, b) {
+        var n = String(a.nama_sertifikasi).localeCompare(String(b.nama_sertifikasi));
+        if (n !== 0) return n * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      },
+      divisi: function (a, b) {
+        var n = String(a.divisi).localeCompare(String(b.divisi));
+        if (n !== 0) return n * kali;
+        return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+      }
+    };
+    hasil.sort(pembanding[sort] || pembanding.prioritas);
+
+    // ---------- ringkasan ----------
+    var ringkas = {};
+    STATUS_DEFS.forEach(function (s) { ringkas[s.key] = 0; });
+    ringkas.BELUM_ADA = 0;
+    rows.forEach(function (r) {
+      if (!r.status) ringkas.BELUM_ADA++; else ringkas[r.status]++;
+    });
+
+    // ---------- paginasi ----------
+    var total = hasil.length;
+    var perPage = Number(f.per_page) || getConfigNum_('tabel_baris_per_halaman', 25);
+    var page = Math.max(Number(f.page) || 1, 1);
+    if (perPage > 0) {
+      var mulai = (page - 1) * perPage;
+      hasil = hasil.slice(mulai, mulai + perPage);
+    }
+
+    return {
+      rows: hasil,
+      total: total,
+      page: page,
+      per_page: perPage,
+      pages: perPage > 0 ? Math.max(Math.ceil(total / perPage), 1) : 1,
+      ringkasan: ringkas,
+      status_defs: STATUS_DEFS,
+      pada: nowStr_()
+    };
+  });
+}
+
+function apiGetFile(token, docId) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = cariFile_(docId);
+    if (!f) throw new Error('Data sertifikasi tidak ditemukan.');
+    if (!kodeAksesFile_(auth, f)) throw new Error('Anda tidak berhak melihat data ini.');
+    return { file: fileDto_(f, petaUser_()) };
+  });
+}
+
+/**
+ * Simpan data sertifikasi (baru / ubah) beserta lampiran.
+ * @param {Object} data {
+ *   doc_id, employee_id, nama_sertifikasi, start_pelaksanaan, end_pelaksanaan,
+ *   tanggal_sertifikasi, tanggal_waktu_perpanjangan, expired_at, masa_berlaku_bulan,
+ *   penyelenggara, no_sertifikat, catatan, hapus_lampiran,
+ *   file: { name, mimeType, base64 }
+ * }
+ */
+function apiSaveFile(token, data) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var d = data || {};
+    var isHc = (auth.role === 'HC' || auth.role === 'SA');
+
+    var docId = String(d.doc_id || '').trim();
+    var lama = docId ? cariFile_(docId) : null;
+    if (docId && !lama) throw new Error('Data yang akan diubah tidak ditemukan.');
+    if (lama && !kodeAksesFile_(auth, lama)) throw new Error('Anda tidak berhak mengubah data ini.');
+
+    // ----- pemilik data -----
+    var employeeId = String(d.employee_id || '').trim();
+    if (!isHc) employeeId = auth.employee_code;
+    if (!employeeId) throw new Error('Pemegang sertifikasi wajib dipilih.');
+    var pemilik = cariUser_(employeeId);
+    if (!pemilik) throw new Error('Employee Code "' + employeeId + '" tidak terdaftar di Master User.');
+
+    // ----- kolom wajib -----
+    var nama = String(d.nama_sertifikasi || '').trim();
+    if (!nama) throw new Error('Nama sertifikasi wajib diisi.');
+
+    var start = toDate_(d.start_pelaksanaan);
+    var end = toDate_(d.end_pelaksanaan);
+    if (!start) throw new Error('Tanggal mulai pelaksanaan wajib diisi.');
+    if (!end) throw new Error('Tanggal selesai pelaksanaan wajib diisi.');
+    if (end.getTime() < start.getTime()) throw new Error('Tanggal selesai tidak boleh lebih awal dari tanggal mulai.');
+
+    var tglSert = toDate_(d.tanggal_sertifikasi);
+    if (d.tanggal_sertifikasi && !tglSert) throw new Error('Tanggal sertifikasi tidak valid.');
+    var tglPerpanjang = toDate_(d.tanggal_waktu_perpanjangan);
+    if (d.tanggal_waktu_perpanjangan && !tglPerpanjang) throw new Error('Tanggal perpanjangan tidak valid.');
+
+    // ----- masa berlaku & expired_at -----
+    var masaBulan = Number(d.masa_berlaku_bulan);
+    if (!masaBulan || masaBulan <= 0) masaBulan = masaBerlakuDariNama_(nama);
+
+    // kalau sudah diperpanjang, dasar perhitungan diambil dari tanggal perpanjangan
+    var dasar = tglPerpanjang || end;
+    var expired = toDate_(d.expired_at);
+    var eksplisit = false;
+    if (d.expired_at && !expired) throw new Error('Expired_at tidak valid.');
+    if (expired) {
+      var otomatis = deriveExpiredAt_(dasar, masaBulan);
+      if (!otomatis || otomatis.getTime() !== expired.getTime()) eksplisit = true;
+    } else {
+      expired = deriveExpiredAt_(dasar, masaBulan);
+    }
+    if (!expired) throw new Error('Expired_at tidak bisa dihitung. Isi tanggal kedaluwarsa secara manual.');
+    if (expired.getTime() < dasar.getTime()) throw new Error('Expired_at tidak boleh lebih awal dari tanggal pelaksanaan.');
+
+    var hit = hitungMasaBerlaku_(expired);
+
+    // ----- lampiran -----
+    var fileId = lama ? String(lama.File_id || '') : '';
+    var fileName = lama ? String(lama.File_name || '') : '';
+    var mime = lama ? String(lama.Mime_type || '') : '';
+    var ukuran = lama ? (Number(lama.Ukuran_file) || 0) : 0;
+    var link = lama ? String(lama.Link_file || '') : '';
+
+    if (toBool_(d.hapus_lampiran) && fileId) {
+      try { DriveApp.getFileById(fileId).setTrashed(true); } catch (e) { Logger.log('hapus lampiran: ' + errMsg_(e)); }
+      fileId = ''; fileName = ''; mime = ''; ukuran = 0; link = '';
+    }
+    if (d.file && (d.file.base64 || d.file.fileId)) {
+      // buang lampiran lama bila ada
+      if (fileId) { try { DriveApp.getFileById(fileId).setTrashed(true); } catch (e) { } }
+      var up = uploadAttachment_(d.file, employeeId, nama);
+      fileId = up.fileId; fileName = up.name; mime = up.mime; ukuran = up.size; link = up.url;
+    }
+
+    var obj = {
+      Employee_Code: employeeId,
+      Nama_Sertifikasi: nama,
+      Start_Pelaksanaan: fmtDate_(start, 'yyyy-MM-dd'),
+      End_Pelaksanaan: fmtDate_(end, 'yyyy-MM-dd'),
+      Tanggal_sertifikasi: tglSert ? fmtDate_(tglSert, 'yyyy-MM-dd') : '',
+      Tanggal_waktu_perpanjangan: tglPerpanjang ? fmtDate_(tglPerpanjang, 'yyyy-MM-dd') : '',
+      Expired_at: fmtDate_(expired, 'yyyy-MM-dd'),
+      Recom_Update: recomUpdate_(expired),
+      Sisa_masa_berlaku_day: hit.sisa_hari,
+      Sisa_masa_berlaku_by_month: hit.sisa_bulan,
+      Status: hit.status,
+      Link_file: link,
+      File_id: fileId,
+      File_name: fileName,
+      Mime_type: mime,
+      Ukuran_file: ukuran,
+      Masa_berlaku_bulan: masaBulan,
+      Penyelenggara: String(d.penyelenggara || d.penerbit || '').trim(),
+      No_Sertifikat: String(d.no_sertifikat || '').trim(),
+      Catatan: String(d.catatan || '').trim(),
+      Updated_At: nowStr_()
+    };
+
+    if (isHc) {
+      obj.Status_Verifikasi = 'VERIFIED';
+      obj.Verified_By = auth.employee_code;
+      obj.Verified_At = nowStr_();
+    } else if (lama) {
+      // karyawan mengubah datanya sendiri -> perlu verifikasi ulang
+      obj.Status_Verifikasi = 'PENDING';
+      obj.Verified_By = '';
+      obj.Verified_At = '';
+    } else {
+      obj.Status_Verifikasi = 'PENDING';
+    }
+
+    var mode;
+    if (lama) {
+      updateRowByCol_('T_Sertifikasi', lama.__row, obj);
+      mode = 'update';
+    } else {
+      var newId = buatDocId_();
+      obj.Cert_Id = newId;
+      obj.Created_At = nowStr_();
+      obj.Created_By = auth.employee_code;
+      appendObject_('T_Sertifikasi', obj);
+      docId = newId;
+      mode = 'insert';
+    }
+
+
+    logAudit_(auth.employee_code, auth.username, auth.role,
+      (mode === 'insert' ? 'TAMBAH_SERTIFIKASI' : 'UBAH_SERTIFIKASI'), 'FILE', docId,
+      { nama: nama, pemegang: employeeId, expired: obj.Expired_at, status: obj.Status, lampiran: !!fileId });
+
+    // notifikasi in-app bila status sudah mendesak
+    try { notifikasiStatusMendesak_(docId); } catch (e) { }
+
+    return {
+      mode: mode,
+      doc_id: docId,
+      file: fileDto_(cariFile_(docId), petaUser_())
+    };
+  });
+}
+
+/** Cert_Id: DOC-YYYYMM-#### (nomor urut bulan berjalan). */
+function buatDocId_() {
+  var prefix = 'DOC-' + Utilities.formatDate(new Date(), tz_(), 'yyyyMM') + '-';
+  var sh = getSheet_('T_Sertifikasi');
+  var max = 0;
+  if (sh && sh.getLastRow() > 1) {
+    var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
+      .map(function (h) { return String(h).trim(); });
+    var idx = header.indexOf('Cert_Id');
+    if (idx !== -1) {
+      var vals = sh.getRange(2, idx + 1, sh.getLastRow() - 1, 1).getValues();
+      vals.forEach(function (r) {
+        var s = String(r[0] || '');
+        if (s.indexOf(prefix) === 0) {
+          var n = parseInt(s.substring(prefix.length), 10);
+          if (!isNaN(n) && n > max) max = n;
+        }
+      });
+    }
+  }
+  return prefix + pad_(max + 1, 4);
+}
+
+function apiDeleteFile(token, docId) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = cariFile_(docId);
+    if (!f) throw new Error('Data sertifikasi tidak ditemukan.');
+    if (auth.role !== 'HC' && auth.role !== 'SA') {
+      throw new Error('Hanya Human Capital yang dapat menghapus data sertifikasi.');
+    }
+
+    if (f.File_id) {
+      try { DriveApp.getFileById(String(f.File_id)).setTrashed(true); } catch (e) { Logger.log('trash lampiran: ' + errMsg_(e)); }
+    }
+    deleteRowByCol_('T_Sertifikasi', 'Cert_Id', docId);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'HAPUS_SERTIFIKASI', 'FILE', docId,
+      { nama: f.Nama_Sertifikasi, pemegang: f.Employee_Code });
+    return { ok: true, doc_id: docId };
+  });
+}
+
+/**
+ * Tiga keadaan verifikasi. Dipakai bersama oleh badge di UI, filter, ekspor, dan
+ * notifikasi supaya istilahnya konsisten di seluruh aplikasi.
+ *
+ * CATATAN ISTILAH: keadaan ketiga bernama "Perlu Revisi" (kode REVISI), BUKAN
+ * "Ditolak". Datanya tidak dibuang dan pemiliknya tidak dihukum — HC hanya
+ * meminta diperbaiki. Kode lama 'REJECTED' tetap diterima sebagai masukan dan
+ * dikonversi otomatis (lihat normalkanVerifikasi_) supaya data lama tidak rusak.
+ */
+var VERIFIKASI_DEFS_ = [
+  {
+    key: 'PENDING', label: 'Menunggu Verifikasi', short: 'Menunggu', tone: 'yellow',
+    icon: 'bi-hourglass-split',
+    ket: 'Data yang diinput karyawan, menunggu pemeriksaan Human Capital.'
+  },
+  {
+    key: 'VERIFIED', label: 'Terverifikasi', short: 'Terverifikasi', tone: 'green',
+    icon: 'bi-patch-check-fill',
+    ket: 'Sudah diperiksa dan dianggap benar oleh Human Capital.'
+  },
+  {
+    key: 'REVISI', label: 'Perlu Revisi', short: 'Perlu Revisi', tone: 'red',
+    icon: 'bi-arrow-counterclockwise',
+    ket: 'Human Capital meminta pemilik data memperbaiki data atau lampirannya.'
+  }
+];
+
+var VERIFIKASI_MAP_ = (function () {
+  var m = {};
+  for (var i = 0; i < VERIFIKASI_DEFS_.length; i++) m[VERIFIKASI_DEFS_[i].key] = VERIFIKASI_DEFS_[i];
+  return m;
+})();
+
+/** Definisi verifikasi dari kode (selalu ada; default PENDING). */
+function verifikasiDef_(kode) {
+  return VERIFIKASI_MAP_[normalkanVerifikasi_(kode)];
+}
+
+/**
+ * Samakan kode verifikasi. 'REJECTED' adalah istilah LAMA dan diperlakukan
+ * sebagai 'REVISI' supaya data yang sudah ada tidak perlu diperbaiki manual.
+ */
+function normalkanVerifikasi_(v) {
+  var s = String(v === null || v === undefined ? '' : v).trim().toUpperCase();
+  if (!s) return 'PENDING';
+  if (s === 'REJECTED' || s === 'DITOLAK' || s === 'REVISI' || s === 'PERLU_REVISI') return 'REVISI';
+  if (s === 'VERIFIED' || s === 'TERVERIFIKASI' || s === 'OK') return 'VERIFIED';
+  return 'PENDING';
+}
+
+/**
+ * HC memverifikasi data yang diinput karyawan.
+ *
+ * @param {string} docId Cert_Id
+ * @param {string} keputusan 'VERIFIED' atau 'REVISI' ('REJECTED' diterima, dianggap REVISI)
+ * @param {string=} catatan alasan / catatan untuk pemilik data (WAJIB bila REVISI)
+ */
+function apiVerifyFile(token, docId, keputusan, catatan) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var f = cariFile_(docId);
+    if (!f) throw new Error('Data sertifikasi tidak ditemukan.');
+
+    var kep = normalkanVerifikasi_(keputusan || 'VERIFIED');
+    var pesan = String(catatan === undefined ? (f.Catatan || '') : catatan).trim();
+    if (kep === 'REVISI' && !pesan) {
+      throw new Error('Catatan wajib diisi bila data diminta direvisi, '
+        + 'supaya pemiliknya tahu bagian mana yang perlu diperbaiki.');
+    }
+
+    updateRowByCol_('T_Sertifikasi', f.__row, {
+      Status_Verifikasi: kep,
+      Verified_By: auth.employee_code,
+      Verified_At: nowStr_(),
+      Catatan: pesan,
+      Updated_At: nowStr_()
+    });
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'VERIFIKASI_SERTIFIKASI', 'FILE', docId,
+      { keputusan: kep, catatan: pesan });
+
+    // Beri tahu pemilik data (in-app). Dilewati bila HC memverifikasi datanya sendiri.
+    var pemilik = String(f.Employee_Code || '');
+    if (pemilik && pemilik !== auth.employee_code) {
+      try {
+        notifikasiVerifikasi_(docId, pemilik, kep, pesan, auth, f);
+      } catch (eNotif) {
+        Logger.log('notifikasi verifikasi gagal: ' + errMsg_(eNotif));
+      }
+    }
+
+    return {
+      doc_id: docId,
+      status_verifikasi: kep,
+      status_verifikasi_label: verifikasiDef_(kep).label,
+      catatan: pesan
+    };
+  });
+}
+
+// ============================================================================
+// 6. PROFIL PEKERJA
+// ============================================================================
+
+/**
+ * Profil lengkap satu pekerja: identitas + seluruh sertifikasi + ringkasan.
+ * @return {Object} { user, files, ringkasan }
+ */
+function apiGetEmployeeProfile(token, employeeCode) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var code = String(employeeCode || auth.employee_code).trim();
+    if (code !== auth.employee_code && auth.role === 'EMP') {
+      throw new Error('Anda hanya dapat melihat profil sendiri.');
+    }
+    var u = cariUser_(code);
+    if (!u) throw new Error('Pekerja dengan Employee Code ' + code + ' tidak ditemukan.');
+
+    var peta = petaUser_();
+    var files = sheetToObjects_('T_Sertifikasi')
+      .filter(function (f) { return String(f.Employee_Code) === code; })
+      .map(function (f) { return fileDto_(f, peta); });
+
+    files.sort(function (a, b) {
+      if (a.prioritas !== b.prioritas) return a.prioritas - b.prioritas;
+      return String(a.nama_sertifikasi).localeCompare(String(b.nama_sertifikasi));
+    });
+
+    var ringkasan = { total: files.length, belum_ada: 0, kadaluarsa: 0, mendesak: 0, aman: 0, ada_lampiran: 0 };
+    STATUS_DEFS.forEach(function (s) { ringkasan[s.key] = 0; });
+    files.forEach(function (f) {
+      if (!f.status) ringkasan.belum_ada++;
+      else ringkasan[f.status]++;
+      if (f.status === 'KADALUARSA' || f.status === 'MENDEKATI_KADALUARSA' || f.status === 'SEGERA_PERPANJANG') ringkasan.mendesak++;
+      if (f.status === 'MASIH_BERLAKU' || f.status === 'PERINGATAN') ringkasan.aman++;
+      if (f.file_id) ringkasan.ada_lampiran++;
+    });
+    ringkasan.persen_lengkap = files.length ? Math.round((ringkasan.ada_lampiran / files.length) * 100) : 0;
+
+    return {
+      user: userPublic_(u),
+      files: files,
+      ringkasan: ringkasan,
+      boleh_edit: (auth.role === 'HC' || auth.role === 'SA' || code === auth.employee_code),
+      status_defs: STATUS_DEFS
+    };
+  });
+}
+
+/** Daftar pekerja ringkas untuk dropdown / pencarian. */
+function apiListEmployees(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var q = String(f.q || '').trim().toLowerCase();
+
+    var jumlah = {};
+    sheetToObjects_('T_Sertifikasi').forEach(function (x) {
+      var k = String(x.Employee_Code || '');
+      jumlah[k] = (jumlah[k] || 0) + 1;
+    });
+
+    var rows = sheetToObjects_('Master_User').map(function (u) {
+      return {
+        employee_code: String(u.Employee_code || ''),
+        nama_lengkap: String(u.Nama_Lengkap || ''),
+        username: String(u.Username || ''),
+        role: String(u.Role || 'EMP'),
+        role_label: ROLE_LABEL_[String(u.Role || 'EMP')] || 'Employee',
+        divisi: String(u.Divisi || ''),
+        jabatan: String(u.Jabatan || ''),
+        email_perusahaan: String(u.Email_Perusahaan || ''),
+        email_pribadi: String(u.Email_Pribadi || ''),
+        status: String(u.Status || 'ACTIVE'),
+        inisial: inisial_(u.Nama_Lengkap),
+        jumlah_sertifikasi: jumlah[String(u.Employee_code)] || 0
+      };
+    }).filter(function (u) {
+      if (f.aktif_only && u.status.toUpperCase() !== 'ACTIVE') return false;
+      if (f.hanya_emp && u.role !== 'EMP') return false;
+      if (q) {
+        var gab = [u.employee_code, u.nama_lengkap, u.username, u.divisi, u.jabatan].join(' ').toLowerCase();
+        if (gab.indexOf(q) === -1) return false;
+      }
+      return true;
+    });
+
+    rows.sort(function (a, b) { return a.nama_lengkap.localeCompare(b.nama_lengkap); });
+    return { rows: rows, total: rows.length };
+  });
+}
+
+// ============================================================================
+// 7. DASHBOARD
+// ============================================================================
+
+function apiGetDashboard(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var div = String(f.divisi || '').trim();
+    var peta = petaUser_();
+
+    var semuaFile = sheetToObjects_('T_Sertifikasi').map(function (x) { return fileDto_(x, peta); });
+    var semuaUser = sheetToObjects_('Master_User').map(function (u) { return userPublic_(u); });
+
+    if (div) {
+      semuaFile = semuaFile.filter(function (x) { return x.divisi === div; });
+      semuaUser = semuaUser.filter(function (u) { return u.divisi === div; });
+    }
+
+    // kalau EMP: hanya milik sendiri
+    if (auth.role === 'EMP') {
+      semuaFile = semuaFile.filter(function (x) { return x.employee_id === auth.employee_code; });
+      semuaUser = semuaUser.filter(function (u) { return u.employee_code === auth.employee_code; });
+    }
+
+    var hariIni = todayDate_();
+
+    // ---------- KPI ----------
+    var kpi = {
+      total_pekerja: semuaUser.length,
+      total_sertifikasi: semuaFile.length,
+      rata_sertifikasi: semuaUser.length ? Math.round((semuaFile.length / semuaUser.length) * 10) / 10 : 0,
+      kadaluarsa: 0,
+      mendesak: 0,
+      peringatan: 0,
+      aman: 0,
+      belum_ada_tanggal: 0,
+      ada_lampiran: 0,
+      perlu_verifikasi: 0,
+      perlu_revisi: 0,
+      kedaluwarsa_30_hari: 0
+    };
+    STATUS_DEFS.forEach(function (s) { kpi[s.key.toLowerCase()] = 0; });
+
+    var hitungStatus = {};
+    STATUS_DEFS.forEach(function (s) { hitungStatus[s.key] = 0; });
+
+    semuaFile.forEach(function (x) {
+      if (!x.status) { kpi.belum_ada_tanggal++; return; }
+      hitungStatus[x.status]++;
+      if (x.status === 'KADALUARSA') kpi.kadaluarsa++;
+      if (x.status === 'KADALUARSA' || x.status === 'MENDEKATI_KADALUARSA' || x.status === 'SEGERA_PERPANJANG') kpi.mendesak++;
+      if (x.status === 'PERINGATAN' || x.status === 'PERLU_PERHATIAN') kpi.peringatan++;
+      if (x.status === 'MASIH_BERLAKU') kpi.aman++;
+      if (x.file_id) kpi.ada_lampiran++;
+      if (x.status_verifikasi === 'PENDING') kpi.perlu_verifikasi++;
+      if (x.status_verifikasi === 'REVISI') kpi.perlu_revisi++;
+      if (x.sisa_hari !== null && x.sisa_hari >= 0 && x.sisa_hari <= 30) kpi.kedaluwarsa_30_hari++;
+    });
+
+    // ---------- sebaran status (untuk donut/bar) ----------
+    var sebaran = STATUS_DEFS.map(function (s) {
+      return { key: s.key, label: s.label, tone: s.tone, jumlah: hitungStatus[s.key] || 0 };
+    });
+
+    // ---------- per divisi ----------
+    var perDivisi = {};
+    semuaFile.forEach(function (x) {
+      var k = x.divisi || '(Belum ada divisi)';
+      if (!perDivisi[k]) perDivisi[k] = { divisi: k, total: 0, kadaluarsa: 0, mendesak: 0, aman: 0, pekerja: {} };
+      perDivisi[k].total++;
+      perDivisi[k].pekerja[x.employee_id] = 1;
+      if (x.status === 'KADALUARSA') perDivisi[k].kadaluarsa++;
+      if (x.status === 'KADALUARSA' || x.status === 'MENDEKATI_KADALUARSA' || x.status === 'SEGERA_PERPANJANG') perDivisi[k].mendesak++;
+      if (x.status === 'MASIH_BERLAKU') perDivisi[k].aman++;
+    });
+    var divisiArr = Object.keys(perDivisi).map(function (k) {
+      var d = perDivisi[k];
+      d.jumlah_pekerja = Object.keys(d.pekerja).length;
+      delete d.pekerja;
+      return d;
+    }).sort(function (a, b) { return b.total - a.total; });
+
+    // ---------- daftar prioritas ----------
+    var limit = getConfigNum_('dashboard_prioritas_limit', 8);
+    var prioritas = semuaFile
+      .filter(function (x) { return x.status && x.prioritas <= 3; })
+      .sort(function (a, b) {
+        if (a.prioritas !== b.prioritas) return a.prioritas - b.prioritas;
+        return (a.sisa_hari === null ? 0 : a.sisa_hari) - (b.sisa_hari === null ? 0 : b.sisa_hari);
+      });
+
+    // ---------- top jenis sertifikasi ----------
+    var perJenis = {};
+    semuaFile.forEach(function (x) {
+      var k = x.nama_sertifikasi || '(Tanpa nama)';
+      if (!perJenis[k]) perJenis[k] = { nama: k, total: 0, kadaluarsa: 0 };
+      perJenis[k].total++;
+      if (x.status === 'KADALUARSA') perJenis[k].kadaluarsa++;
+    });
+    var jenisArr = Object.keys(perJenis).map(function (k) { return perJenis[k]; })
+      .sort(function (a, b) { return b.total - a.total; }).slice(0, 10);
+
+    // ---------- tren 12 bulan (berdasarkan Expired_at) ----------
+    var tren = [];
+    for (var i = 0; i < 12; i++) {
+      var anchor = addMonths_(new Date(hariIni.getFullYear(), hariIni.getMonth(), 1), i);
+      var labelBulan = BULAN_SINGKAT_ID_[anchor.getMonth()] + ' ' + String(anchor.getFullYear()).substring(2);
+      var jumlah = 0;
+      semuaFile.forEach(function (x) {
+        var e = toDate_(x.expired_at);
+        if (!e) return;
+        if (e.getFullYear() === anchor.getFullYear() && e.getMonth() === anchor.getMonth()) jumlah++;
+      });
+      tren.push({ label: labelBulan, bulan: anchor.getMonth() + 1, tahun: anchor.getFullYear(), jumlah: jumlah });
+    }
+
+    // ---------- pekerja paling perlu perhatian ----------
+    var perPekerja = {};
+    semuaFile.forEach(function (x) {
+      var k = x.employee_id;
+      if (!perPekerja[k]) {
+        perPekerja[k] = {
+          employee_code: k, nama: x.nama_pemegang, divisi: x.divisi, jabatan: x.jabatan,
+          total: 0, kadaluarsa: 0, mendesak: 0, skor: 0
+        };
+      }
+      perPekerja[k].total++;
+      if (x.status === 'KADALUARSA') { perPekerja[k].kadaluarsa++; perPekerja[k].skor += 100; }
+      else if (x.status === 'MENDEKATI_KADALUARSA') { perPekerja[k].mendesak++; perPekerja[k].skor += 60; }
+      else if (x.status === 'SEGERA_PERPANJANG') { perPekerja[k].mendesak++; perPekerja[k].skor += 30; }
+      else if (x.status === 'PERLU_PERHATIAN') perPekerja[k].skor += 10;
+      else if (x.status === 'PERINGATAN') perPekerja[k].skor += 4;
+    });
+    var pekerjaKritis = Object.keys(perPekerja).map(function (k) { return perPekerja[k]; })
+      .filter(function (p) { return p.skor > 0; })
+      .sort(function (a, b) { return b.skor - a.skor; })
+      .slice(0, 6);
+
+    // ---------- ringkasan notifikasi ----------
+    var belumDibaca = 0;
+    try {
+      belumDibaca = sheetToObjects_('T_Notifikasi').filter(function (n) {
+        if (auth.role === 'EMP') return String(n.Employee_code) === auth.employee_code && String(n.Is_Read).toUpperCase() !== 'TRUE';
+        return String(n.Is_Read).toUpperCase() !== 'TRUE';
+      }).length;
+    } catch (e) { }
+
+    return {
+      kpi: kpi,
+      sebaran: sebaran,
+      per_divisi: divisiArr,
+      prioritas: prioritas.slice(0, limit),
+      prioritas_total: prioritas.length,
+      per_jenis: jenisArr,
+      tren: tren,
+      pekerja_kritis: pekerjaKritis,
+      notifikasi_belum_dibaca: belumDibaca,
+      divisi_options: opsiDivisi_(),
+      pada: nowStr_(),
+      zona_waktu: tz_(),
+      status_defs: STATUS_DEFS
+    };
+  });
+}
+
+function opsiDivisi_() {
+  var s = String(getConfig_('divisi_options') || '');
+  var arr = s ? s.split('|').map(function (x) { return x.trim(); }).filter(function (x) { return x; }) : [];
+  if (!arr.length) arr = DIVISI_SEED_.slice();
+  try {
+    sheetToObjects_('Master_User').forEach(function (u) {
+      var v = String(u.Divisi || '').trim();
+      if (v && arr.indexOf(v) === -1) arr.push(v);
+    });
+  } catch (e) { }
+  return arr.sort();
+}

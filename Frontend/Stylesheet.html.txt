@@ -1,9 +1,9 @@
 <!--
   ============================================================================
-  SIAGA SERTIFIKASI — Stylesheet.html
+  myCertif — Stylesheet.html
   Berisi seluruh gaya aplikasi. Disusun dari folder gde-ui-templates:
      css/gde-tokens.css + gde-base.css + gde-components.css + gde-app.css
-  lalu ditambah lapisan aplikasi SIAGA di bagian paling bawah.
+  lalu ditambah lapisan aplikasi myCertif di bagian paling bawah.
 
   CATATAN PENTING
   ---------------
@@ -11,7 +11,7 @@
   pustaka GDE disalin apa adanya (verbatim) ke dalam <style> di bawah ini.
   Isi blok GDE TIDAK diubah agar tampilan tetap identik dengan design system.
   Perubahan gaya khusus aplikasi ditulis pada bagian terakhir:
-  "16. LAPISAN APLIKASI SIAGA" — atau lebih baik ditambahkan ke
+  "16. LAPISAN APLIKASI myCertif" — atau lebih baik ditambahkan ke
   gde-components.css lalu salin ulang blok ini.
 
   VENDOR (CDN) yang dipakai hanya font Poppins + Bootstrap Icons.
@@ -1024,11 +1024,11 @@ img, svg, video { max-width: 100%; height: auto; vertical-align: middle; }
 @media (min-width: 993px) { .gde-sidebar__toggle { display: none; } }
 
 /* ==========================================================================
-   16. LAPISAN APLIKASI SIAGA   (khusus aplikasi ini)
+   16. LAPISAN APLIKASI myCertif   (khusus aplikasi ini)
    ========================================================================== */
 
 /* ==========================================================================
-   SIAGA SERTIFIKASI — LAPISAN APLIKASI (di atas GDE Design System)
+   myCertif — LAPISAN APLIKASI (di atas GDE Design System)
    Khusus untuk kebutuhan aplikasi: badge status, halaman login, dropzone
    unggah, panel PDF, kartu profil dua kolom, grafik ringan tanpa pustaka.
    ========================================================================== */
@@ -1063,87 +1063,87 @@ img, svg, video { max-width: 100%; height: auto; vertical-align: middle; }
 .gde-dot--green-l { background: var(--gde-green-l2); }
 
 /* ---------- 2. LOADER / SKELETON ---------- */
-.siaga-loader {
+.mycertif-loader {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: var(--gde-sp-3); padding: var(--gde-sp-12) var(--gde-sp-5); color: var(--gde-muted);
 }
-.siaga-loader__ring {
+.mycertif-loader__ring {
   width: 38px; height: 38px; border-radius: 50%;
   border: 3px solid var(--gde-line); border-top-color: var(--gde-blue);
   animation: gde-spin .8s linear infinite;
 }
-.siaga-loader p { margin: 0; font-size: var(--gde-fs-base); }
+.mycertif-loader p { margin: 0; font-size: var(--gde-fs-base); }
 
 /* ---------- 3. HALAMAN LOGIN ---------- */
-.siaga-login {
+.mycertif-login {
   min-height: 100vh; display: grid; grid-template-columns: 1.05fr .95fr;
   background: var(--gde-surface-3);
 }
-.siaga-login__brand {
+.mycertif-login__brand {
   position: relative; overflow: hidden; color: #fff;
   background: linear-gradient(150deg, #062E5E 0%, #093D7D 45%, #0B50A1 100%);
   padding: var(--gde-sp-12) var(--gde-sp-10);
   display: flex; flex-direction: column; justify-content: space-between;
 }
-.siaga-login__brand::after {
+.mycertif-login__brand::after {
   content: ''; position: absolute; width: 520px; height: 520px; border-radius: 50%;
   right: -180px; bottom: -190px; background: radial-gradient(circle, rgba(141,198,63,.28), transparent 68%);
 }
-.siaga-login__brand::before {
+.mycertif-login__brand::before {
   content: ''; position: absolute; width: 320px; height: 320px; border-radius: 50%;
   left: -120px; top: -90px; background: radial-gradient(circle, rgba(255,255,255,.14), transparent 70%);
 }
-.siaga-login__logo {
+.mycertif-login__logo {
   position: relative; z-index: 1; display: flex; align-items: center; gap: var(--gde-sp-3);
 }
-.siaga-login__mark {
+.mycertif-login__mark {
   width: 46px; height: 46px; border-radius: var(--gde-r-sm); flex: none;
   background: var(--gde-green); color: #0B2A05;
   display: flex; align-items: center; justify-content: center;
   font-weight: var(--gde-fw-extrabold); font-size: 1.25rem;
 }
-.siaga-login__title { position: relative; z-index: 1; margin: var(--gde-sp-10) 0 auto; }
-.siaga-login__title h1 { color: #fff; font-size: var(--gde-fs-3xl); margin-bottom: var(--gde-sp-3); }
-.siaga-login__title p { color: rgba(255,255,255,.78); font-size: var(--gde-fs-md); max-width: 46ch; margin: 0; line-height: 1.7; }
-.siaga-login__points { position: relative; z-index: 1; list-style: none; margin: var(--gde-sp-8) 0 0; padding: 0; display: grid; gap: var(--gde-sp-3); }
-.siaga-login__points li { display: flex; gap: var(--gde-sp-3); align-items: flex-start; font-size: var(--gde-fs-base); color: rgba(255,255,255,.86); }
-.siaga-login__points .bi { color: var(--gde-green); font-size: 1.05rem; margin-top: 2px; }
-.siaga-login__foot { position: relative; z-index: 1; font-size: var(--gde-fs-xs); color: rgba(255,255,255,.5); }
+.mycertif-login__title { position: relative; z-index: 1; margin: var(--gde-sp-10) 0 auto; }
+.mycertif-login__title h1 { color: #fff; font-size: var(--gde-fs-3xl); margin-bottom: var(--gde-sp-3); }
+.mycertif-login__title p { color: rgba(255,255,255,.78); font-size: var(--gde-fs-md); max-width: 46ch; margin: 0; line-height: 1.7; }
+.mycertif-login__points { position: relative; z-index: 1; list-style: none; margin: var(--gde-sp-8) 0 0; padding: 0; display: grid; gap: var(--gde-sp-3); }
+.mycertif-login__points li { display: flex; gap: var(--gde-sp-3); align-items: flex-start; font-size: var(--gde-fs-base); color: rgba(255,255,255,.86); }
+.mycertif-login__points .bi { color: var(--gde-green); font-size: 1.05rem; margin-top: 2px; }
+.mycertif-login__foot { position: relative; z-index: 1; font-size: var(--gde-fs-xs); color: rgba(255,255,255,.5); }
 
-.siaga-login__panel {
+.mycertif-login__panel {
   display: flex; align-items: center; justify-content: center;
   padding: var(--gde-sp-8) var(--gde-sp-6);
 }
-.siaga-login__card { width: min(420px, 100%); }
-.siaga-login__card h2 { font-size: var(--gde-fs-2xl); margin-bottom: var(--gde-sp-1); }
-.siaga-login__card > p { color: var(--gde-muted); font-size: var(--gde-fs-base); margin-bottom: var(--gde-sp-6); }
-.siaga-login__hint {
+.mycertif-login__card { width: min(420px, 100%); }
+.mycertif-login__card h2 { font-size: var(--gde-fs-2xl); margin-bottom: var(--gde-sp-1); }
+.mycertif-login__card > p { color: var(--gde-muted); font-size: var(--gde-fs-base); margin-bottom: var(--gde-sp-6); }
+.mycertif-login__hint {
   margin-top: var(--gde-sp-5); padding: var(--gde-sp-3) var(--gde-sp-4);
   background: var(--gde-blue-l); border: 1px solid var(--gde-blue-l2);
   border-radius: var(--gde-r-sm); font-size: var(--gde-fs-sm); color: #0A3F7E; line-height: 1.6;
 }
-.siaga-login__hint b { color: #062E5E; }
-.siaga-pass { position: relative; }
-.siaga-pass .gde-input { padding-right: 2.8rem; }
-.siaga-pass__toggle {
+.mycertif-login__hint b { color: #062E5E; }
+.mycertif-pass { position: relative; }
+.mycertif-pass .gde-input { padding-right: 2.8rem; }
+.mycertif-pass__toggle {
   position: absolute; right: .5rem; top: 50%; transform: translateY(-50%);
   border: 0; background: transparent; color: var(--gde-muted); cursor: pointer;
   padding: .3rem .4rem; border-radius: var(--gde-r-xs); font-size: 1rem; line-height: 1;
 }
-.siaga-pass__toggle:hover { color: var(--gde-blue); background: var(--gde-surface-3); }
+.mycertif-pass__toggle:hover { color: var(--gde-blue); background: var(--gde-surface-3); }
 
 @media (max-width: 900px) {
-  .siaga-login { grid-template-columns: 1fr; min-height: 100vh; }
-  .siaga-login__brand { padding: var(--gde-sp-8) var(--gde-sp-5); }
-  .siaga-login__title { margin: var(--gde-sp-6) 0; }
-  .siaga-login__title h1 { font-size: var(--gde-fs-2xl); }
-  .siaga-login__points { display: none; }
-  .siaga-login__foot { display: none; }
-  .siaga-login__panel { padding: var(--gde-sp-6) var(--gde-sp-4) var(--gde-sp-10); }
+  .mycertif-login { grid-template-columns: 1fr; min-height: 100vh; }
+  .mycertif-login__brand { padding: var(--gde-sp-8) var(--gde-sp-5); }
+  .mycertif-login__title { margin: var(--gde-sp-6) 0; }
+  .mycertif-login__title h1 { font-size: var(--gde-fs-2xl); }
+  .mycertif-login__points { display: none; }
+  .mycertif-login__foot { display: none; }
+  .mycertif-login__panel { padding: var(--gde-sp-6) var(--gde-sp-4) var(--gde-sp-10); }
 }
 
 /* ---------- 4. SHELL & SIDEBAR (penyempurnaan) ---------- */
-.siaga-app { min-height: 100vh; display: flex; flex-direction: column; }
+.mycertif-app { min-height: 100vh; display: flex; flex-direction: column; }
 .gde-shell { width: 100%; }
 .gde-sidebar__brand {
   display: flex; align-items: center; gap: var(--gde-sp-3);
@@ -1158,302 +1158,321 @@ img, svg, video { max-width: 100%; height: auto; vertical-align: middle; }
 .gde-sidebar__brandmeta { min-width: 0; }
 .gde-sidebar__brandname { display: block; color: #fff; font-weight: var(--gde-fw-bold); font-size: var(--gde-fs-base); line-height: 1.2; }
 .gde-sidebar__brandsub { display: block; color: rgba(255,255,255,.5); font-size: .6rem; letter-spacing: .06em; text-transform: uppercase; }
-.siaga-user-chip {
+.mycertif-user-chip {
   display: flex; align-items: center; gap: var(--gde-sp-3);
   margin: 0 var(--gde-sp-3) var(--gde-sp-4);
   padding: var(--gde-sp-3); border-radius: var(--gde-r-md);
   background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.1);
 }
-.siaga-user-chip .gde-avatar { background: rgba(141,198,63,.22); color: #fff; }
-.siaga-user-chip__meta { min-width: 0; }
-.siaga-user-chip__nama { display: block; color: #fff; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.siaga-user-chip__role { display: block; color: rgba(255,255,255,.55); font-size: .62rem; text-transform: uppercase; letter-spacing: .06em; }
+.mycertif-user-chip .gde-avatar { background: rgba(141,198,63,.22); color: #fff; }
+.mycertif-user-chip__meta { min-width: 0; }
+.mycertif-user-chip__nama { display: block; color: #fff; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mycertif-user-chip__role { display: block; color: rgba(255,255,255,.55); font-size: .62rem; text-transform: uppercase; letter-spacing: .06em; }
 
 /* ---------- 4b. PENCARIAN-PILIH (combobox, pengganti dropdown) ---------- */
-.siaga-cb { position: relative; }
-.siaga-cb input[type="text"] { padding-right: 2.4rem; }
-.siaga-cb__icon {
+.mycertif-cb { position: relative; }
+.mycertif-cb input[type="text"] { padding-right: 2.4rem; }
+.mycertif-cb__icon {
   position: absolute; right: .8rem; top: 50%; transform: translateY(-50%);
   color: var(--gde-muted-2); pointer-events: none; font-size: .95rem;
 }
-.siaga-cb__panel {
+.mycertif-cb__panel {
   position: absolute; z-index: var(--gde-z-dropdown); left: 0; right: 0;
   top: calc(100% + 4px); max-height: 320px; overflow-y: auto;
   background: #fff; border: 1px solid var(--gde-line); border-radius: var(--gde-r-md);
   box-shadow: var(--gde-sh-2); padding: var(--gde-sp-1); display: none;
 }
-.siaga-cb.is-open .siaga-cb__panel { display: block; animation: gde-fade-in var(--gde-t-base); }
-.siaga-cb__item {
+.mycertif-cb.is-open .mycertif-cb__panel { display: block; animation: gde-fade-in var(--gde-t-base); }
+.mycertif-cb__item {
   display: flex; align-items: center; gap: var(--gde-sp-3);
   padding: .5rem .65rem; border-radius: var(--gde-r-sm); cursor: pointer;
   transition: background var(--gde-t-fast);
 }
-.siaga-cb__item:hover, .siaga-cb__item.is-active { background: var(--gde-blue-l); }
-.siaga-cb__item.is-dipilih { background: var(--gde-green-l); }
-.siaga-cb__meta { min-width: 0; flex: 1; }
-.siaga-cb__nama {
+.mycertif-cb__item:hover, .mycertif-cb__item.is-active { background: var(--gde-blue-l); }
+.mycertif-cb__item.is-dipilih { background: var(--gde-green-l); }
+.mycertif-cb__meta { min-width: 0; flex: 1; }
+.mycertif-cb__nama {
   display: block; font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold);
   color: var(--gde-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.siaga-cb__sub {
+.mycertif-cb__sub {
   display: block; font-size: var(--gde-fs-xs); color: var(--gde-muted);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.siaga-cb__info {
+.mycertif-cb__info {
   padding: var(--gde-sp-3) var(--gde-sp-4); text-align: center;
   font-size: var(--gde-fs-sm); color: var(--gde-muted);
 }
-.siaga-cb__hitung {
+.mycertif-cb__hitung {
   padding: .35rem .65rem; font-size: var(--gde-fs-xs); color: var(--gde-muted-2);
   border-bottom: 1px solid var(--gde-line-2); margin-bottom: var(--gde-sp-1);
 }
 
 /* ---------- 5. KARTU PROFIL DUA KOLOM (kiri profil, kanan lampiran) ---------- */
-.siaga-2col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--gde-sp-5); align-items: start; }
-.siaga-2col--wide-right { grid-template-columns: minmax(0, 380px) minmax(0, 1fr); }
-@media (max-width: 1100px) { .siaga-2col, .siaga-2col--wide-right { grid-template-columns: 1fr; } }
+.mycertif-2col { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--gde-sp-5); align-items: start; }
+.mycertif-2col--wide-right { grid-template-columns: minmax(0, 380px) minmax(0, 1fr); }
+@media (max-width: 1100px) { .mycertif-2col, .mycertif-2col--wide-right { grid-template-columns: 1fr; } }
 
-.siaga-panel-head {
+.mycertif-panel-head {
   display: flex; align-items: center; gap: var(--gde-sp-3);
   padding: var(--gde-sp-4) var(--gde-sp-5);
   border-bottom: 1px solid var(--gde-line-2);
 }
-.siaga-panel-head h3 { margin: 0; font-size: var(--gde-fs-md); }
-.siaga-panel-head .siaga-panel-head__sub { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
-.siaga-panel-head__actions { margin-left: auto; display: flex; gap: var(--gde-sp-2); align-items: center; }
+.mycertif-panel-head h3 { margin: 0; font-size: var(--gde-fs-md); }
+.mycertif-panel-head .mycertif-panel-head__sub { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.mycertif-panel-head__actions { margin-left: auto; display: flex; gap: var(--gde-sp-2); align-items: center; }
 
-.siaga-profil-hero {
+.mycertif-profil-hero {
   display: flex; align-items: center; gap: var(--gde-sp-4);
   padding: var(--gde-sp-5);
   background: linear-gradient(135deg, var(--gde-blue-d), var(--gde-blue));
   color: #fff;
 }
-.siaga-profil-hero .gde-avatar { width: 62px; height: 62px; font-size: 1.3rem; background: rgba(141,198,63,.24); color: #fff; }
-.siaga-profil-hero h2 { color: #fff; margin: 0; font-size: var(--gde-fs-xl); }
-.siaga-profil-hero p { margin: 2px 0 0; color: rgba(255,255,255,.75); font-size: var(--gde-fs-sm); }
-.siaga-profil-hero__badges { margin-top: var(--gde-sp-2); display: flex; flex-wrap: wrap; gap: var(--gde-sp-2); }
-.siaga-profil-hero .gde-chip { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.18); color: rgba(255,255,255,.9); }
-.siaga-profil-hero .gde-chip b { color: #fff; }
+.mycertif-profil-hero .gde-avatar { width: 62px; height: 62px; font-size: 1.3rem; background: rgba(141,198,63,.24); color: #fff; }
+.mycertif-profil-hero h2 { color: #fff; margin: 0; font-size: var(--gde-fs-xl); }
+.mycertif-profil-hero p { margin: 2px 0 0; color: rgba(255,255,255,.75); font-size: var(--gde-fs-sm); }
+.mycertif-profil-hero__badges { margin-top: var(--gde-sp-2); display: flex; flex-wrap: wrap; gap: var(--gde-sp-2); }
+.mycertif-profil-hero .gde-chip { background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.18); color: rgba(255,255,255,.9); }
+.mycertif-profil-hero .gde-chip b { color: #fff; }
 
 /* ---------- 6. PANEL LAMPIRAN (PDF / berkas) ---------- */
-.siaga-lampiran { display: flex; flex-direction: column; }
-.siaga-lampiran__toolbar {
+.mycertif-lampiran { display: flex; flex-direction: column; }
+.mycertif-lampiran__toolbar {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--gde-sp-2);
   padding: var(--gde-sp-3) var(--gde-sp-5); background: var(--gde-surface-2);
   border-bottom: 1px solid var(--gde-line-2);
 }
-.siaga-lampiran__viewer {
+.mycertif-lampiran__viewer {
   background: #EEF2F7; min-height: 460px; flex: 1;
   display: flex; align-items: center; justify-content: center; overflow: hidden;
 }
-.siaga-lampiran__viewer iframe { width: 100%; height: 560px; border: 0; background: #fff; display: block; }
-.siaga-lampiran__viewer img { max-width: 100%; max-height: 560px; object-fit: contain; display: block; }
-.siaga-lampiran__empty { text-align: center; padding: var(--gde-sp-10); color: var(--gde-muted); }
-.siaga-lampiran__empty .bi { font-size: 2.4rem; color: var(--gde-muted-2); display: block; margin-bottom: var(--gde-sp-3); }
-.siaga-lampiran__list { border-top: 1px solid var(--gde-line-2); }
-.siaga-lampiran__item {
+.mycertif-lampiran__viewer iframe { width: 100%; height: 560px; border: 0; background: #fff; display: block; }
+.mycertif-lampiran__viewer img { max-width: 100%; max-height: 560px; object-fit: contain; display: block; }
+.mycertif-lampiran__empty { text-align: center; padding: var(--gde-sp-10); color: var(--gde-muted); }
+.mycertif-lampiran__empty .bi { font-size: 2.4rem; color: var(--gde-muted-2); display: block; margin-bottom: var(--gde-sp-3); }
+.mycertif-lampiran__list { border-top: 1px solid var(--gde-line-2); }
+.mycertif-lampiran__item {
   display: flex; align-items: center; gap: var(--gde-sp-3);
   padding: var(--gde-sp-3) var(--gde-sp-5); border-bottom: 1px solid var(--gde-line-2);
   cursor: pointer; transition: background var(--gde-t-fast);
 }
-.siaga-lampiran__item:hover { background: var(--gde-surface-2); }
-.siaga-lampiran__item.is-active { background: var(--gde-blue-l); }
-.siaga-lampiran__item .bi { font-size: 1.35rem; color: var(--gde-blue); flex: none; }
-.siaga-lampiran__itemmeta { min-width: 0; flex: 1; }
-.siaga-lampiran__itemnama { display: block; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-semibold); color: var(--gde-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.siaga-lampiran__itemsub { display: block; font-size: var(--gde-fs-xs); color: var(--gde-muted); }
-.siaga-collapse__body.is-hidden { display: none; }
+.mycertif-lampiran__item:hover { background: var(--gde-surface-2); }
+.mycertif-lampiran__item.is-active { background: var(--gde-blue-l); }
+.mycertif-lampiran__item .bi { font-size: 1.35rem; color: var(--gde-blue); flex: none; }
+.mycertif-lampiran__itemmeta { min-width: 0; flex: 1; }
+.mycertif-lampiran__itemnama { display: block; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-semibold); color: var(--gde-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mycertif-lampiran__itemsub { display: block; font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.mycertif-collapse__body.is-hidden { display: none; }
 
 /* ---------- 7. DROPZONE UNGGAH BERKAS ---------- */
-.siaga-drop {
+.mycertif-drop {
   border: 2px dashed var(--gde-line); border-radius: var(--gde-r-md);
   background: var(--gde-surface-2); padding: var(--gde-sp-6) var(--gde-sp-4);
   text-align: center; cursor: pointer; transition: var(--gde-t-fast);
 }
-.siaga-drop:hover, .siaga-drop.is-over { border-color: var(--gde-green); background: var(--gde-green-l); }
-.siaga-drop .bi { font-size: 1.9rem; color: var(--gde-blue); display: block; margin-bottom: var(--gde-sp-2); }
-.siaga-drop strong { display: block; font-size: var(--gde-fs-base); margin-bottom: 2px; }
-.siaga-drop span { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
-.siaga-drop input[type=file] { display: none; }
-.siaga-filecard {
+.mycertif-drop:hover, .mycertif-drop.is-over { border-color: var(--gde-green); background: var(--gde-green-l); }
+.mycertif-drop .bi { font-size: 1.9rem; color: var(--gde-blue); display: block; margin-bottom: var(--gde-sp-2); }
+.mycertif-drop strong { display: block; font-size: var(--gde-fs-base); margin-bottom: 2px; }
+.mycertif-drop span { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.mycertif-drop input[type=file] { display: none; }
+.mycertif-filecard {
   display: flex; align-items: center; gap: var(--gde-sp-3);
   padding: var(--gde-sp-3); border: 1px solid var(--gde-line);
   border-radius: var(--gde-r-sm); background: #fff; margin-top: var(--gde-sp-3);
 }
-.siaga-filecard .bi { font-size: 1.5rem; color: var(--gde-blue); flex: none; }
-.siaga-filecard__meta { flex: 1; min-width: 0; }
-.siaga-filecard__nama { display: block; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.siaga-filecard__sub { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
-.siaga-progress { margin-top: var(--gde-sp-3); }
+.mycertif-filecard .bi { font-size: 1.5rem; color: var(--gde-blue); flex: none; }
+.mycertif-filecard__meta { flex: 1; min-width: 0; }
+.mycertif-filecard__nama { display: block; font-size: var(--gde-fs-sm); font-weight: var(--gde-fw-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mycertif-filecard__sub { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.mycertif-progress { margin-top: var(--gde-sp-3); }
 
 /* ---------- 8. TOAST & NOTIFIKASI ---------- */
-.siaga-toasts {
+.mycertif-toasts {
   position: fixed; right: var(--gde-sp-5); bottom: var(--gde-sp-5);
   z-index: var(--gde-z-toast); display: flex; flex-direction: column; gap: var(--gde-sp-2);
   max-width: min(380px, calc(100vw - 2rem));
 }
-.siaga-toast {
+.mycertif-toast {
   display: flex; gap: var(--gde-sp-3); align-items: flex-start;
   padding: var(--gde-sp-3) var(--gde-sp-4);
   background: #fff; border: 1px solid var(--gde-line); border-left: 4px solid var(--gde-blue);
   border-radius: var(--gde-r-sm); box-shadow: var(--gde-sh-2);
   animation: gde-rise var(--gde-t-slow);
 }
-.siaga-toast__icon { font-size: 1.1rem; flex: none; margin-top: 1px; }
-.siaga-toast__body { flex: 1; min-width: 0; }
-.siaga-toast__title { display: block; font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold); }
-.siaga-toast__msg { font-size: var(--gde-fs-sm); color: var(--gde-muted); word-break: break-word; }
-.siaga-toast--success { border-left-color: var(--gde-green-d); }
-.siaga-toast--success .siaga-toast__icon { color: var(--gde-green-d); }
-.siaga-toast--danger { border-left-color: var(--gde-red); }
-.siaga-toast--danger .siaga-toast__icon { color: var(--gde-red); }
-.siaga-toast--warning { border-left-color: var(--gde-warning); }
-.siaga-toast--warning .siaga-toast__icon { color: var(--gde-warning); }
-.siaga-toast__close { border: 0; background: transparent; color: var(--gde-muted-2); cursor: pointer; font-size: 1.1rem; line-height: 1; }
+.mycertif-toast__icon { font-size: 1.1rem; flex: none; margin-top: 1px; }
+.mycertif-toast__body { flex: 1; min-width: 0; }
+.mycertif-toast__title { display: block; font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold); }
+.mycertif-toast__msg { font-size: var(--gde-fs-sm); color: var(--gde-muted); word-break: break-word; }
+.mycertif-toast--success { border-left-color: var(--gde-green-d); }
+.mycertif-toast--success .mycertif-toast__icon { color: var(--gde-green-d); }
+.mycertif-toast--danger { border-left-color: var(--gde-red); }
+.mycertif-toast--danger .mycertif-toast__icon { color: var(--gde-red); }
+.mycertif-toast--warning { border-left-color: var(--gde-warning); }
+.mycertif-toast--warning .mycertif-toast__icon { color: var(--gde-warning); }
+.mycertif-toast__close { border: 0; background: transparent; color: var(--gde-muted-2); cursor: pointer; font-size: 1.1rem; line-height: 1; }
 
 /* ---------- 9. GRAFIK RINGAN (tanpa pustaka) ---------- */
-.siaga-bars { display: flex; align-items: flex-end; gap: var(--gde-sp-2); height: 168px; padding-top: var(--gde-sp-2); }
-.siaga-bars__col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: var(--gde-sp-2); min-width: 0; }
-.siaga-bars__bar {
+.mycertif-bars { display: flex; align-items: flex-end; gap: var(--gde-sp-2); height: 168px; padding-top: var(--gde-sp-2); }
+.mycertif-bars__col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: var(--gde-sp-2); min-width: 0; }
+.mycertif-bars__bar {
   width: 100%; max-width: 42px; border-radius: var(--gde-r-xs) var(--gde-r-xs) 0 0;
   background: linear-gradient(180deg, var(--gde-blue), var(--gde-blue-d));
   min-height: 3px; transition: height var(--gde-t-slow); position: relative;
 }
-.siaga-bars__bar:hover { filter: brightness(1.08); }
-.siaga-bars__val { font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold); color: var(--gde-ink-2); }
-.siaga-bars__label { font-size: .62rem; color: var(--gde-muted-2); text-align: center; white-space: nowrap; }
+.mycertif-bars__bar:hover { filter: brightness(1.08); }
+.mycertif-bars__val { font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold); color: var(--gde-ink-2); }
+.mycertif-bars__label { font-size: .62rem; color: var(--gde-muted-2); text-align: center; white-space: nowrap; }
 
-.siaga-stack { display: flex; height: 14px; border-radius: var(--gde-r-pill); overflow: hidden; background: var(--gde-surface-3); }
-.siaga-stack > span { display: block; height: 100%; }
-.siaga-legend { display: flex; flex-wrap: wrap; gap: var(--gde-sp-2) var(--gde-sp-4); margin-top: var(--gde-sp-3); }
-.siaga-legend__item { display: flex; align-items: center; gap: 6px; font-size: var(--gde-fs-xs); color: var(--gde-muted); }
-.siaga-legend__item b { color: var(--gde-ink); }
+.mycertif-stack { display: flex; height: 14px; border-radius: var(--gde-r-pill); overflow: hidden; background: var(--gde-surface-3); }
+.mycertif-stack > span { display: block; height: 100%; }
+.mycertif-legend { display: flex; flex-wrap: wrap; gap: var(--gde-sp-2) var(--gde-sp-4); margin-top: var(--gde-sp-3); }
+.mycertif-legend__item { display: flex; align-items: center; gap: 6px; font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.mycertif-legend__item b { color: var(--gde-ink); }
 
-.siaga-donut { width: 168px; height: 168px; border-radius: 50%; position: relative; flex: none; }
-.siaga-donut::after {
+.mycertif-donut { width: 168px; height: 168px; border-radius: 50%; position: relative; flex: none; }
+.mycertif-donut::after {
   content: ''; position: absolute; inset: 26px; border-radius: 50%; background: #fff;
 }
-.siaga-donut__center {
+.mycertif-donut__center {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; z-index: 1;
 }
-.siaga-donut__center b { font-size: var(--gde-fs-2xl); color: var(--gde-blue); line-height: 1; }
-.siaga-donut__center span { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.mycertif-donut__center b { font-size: var(--gde-fs-2xl); color: var(--gde-blue); line-height: 1; }
+.mycertif-donut__center span { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
 
-.siaga-rank { list-style: none; margin: 0; padding: 0; }
-.siaga-rank li { display: flex; align-items: center; gap: var(--gde-sp-3); padding: var(--gde-sp-3) 0; border-bottom: 1px dashed var(--gde-line); }
-.siaga-rank li:last-child { border-bottom: 0; }
-.siaga-rank__no {
+.mycertif-rank { list-style: none; margin: 0; padding: 0; }
+.mycertif-rank li { display: flex; align-items: center; gap: var(--gde-sp-3); padding: var(--gde-sp-3) 0; border-bottom: 1px dashed var(--gde-line); }
+.mycertif-rank li:last-child { border-bottom: 0; }
+.mycertif-rank__no {
   width: 26px; height: 26px; border-radius: 50%; flex: none;
   display: flex; align-items: center; justify-content: center;
   font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold);
   background: var(--gde-surface-3); color: var(--gde-muted);
 }
-.siaga-rank li:nth-child(1) .siaga-rank__no { background: #7F1D1D; color: #fff; }
-.siaga-rank li:nth-child(2) .siaga-rank__no { background: var(--gde-red); color: #fff; }
-.siaga-rank li:nth-child(3) .siaga-rank__no { background: #E07B14; color: #fff; }
-.siaga-rank__meta { min-width: 0; flex: 1; }
-.siaga-rank__nama { display: block; font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold); color: var(--gde-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.siaga-rank__sub { display: block; font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.mycertif-rank li:nth-child(1) .mycertif-rank__no { background: #7F1D1D; color: #fff; }
+.mycertif-rank li:nth-child(2) .mycertif-rank__no { background: var(--gde-red); color: #fff; }
+.mycertif-rank li:nth-child(3) .mycertif-rank__no { background: #E07B14; color: #fff; }
+.mycertif-rank__meta { min-width: 0; flex: 1; }
+.mycertif-rank__nama { display: block; font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold); color: var(--gde-ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mycertif-rank__sub { display: block; font-size: var(--gde-fs-xs); color: var(--gde-muted); }
 
 /* ---------- 10. TABEL DATA ---------- */
-.siaga-tablewrap { overflow: auto; max-height: 70vh; }
-.siaga-tablewrap .gde-table thead th { position: sticky; top: 0; z-index: 2; }
-.siaga-table td.siaga-td-nama { max-width: 220px; }
-.siaga-td-nama strong { display: block; font-size: var(--gde-fs-base); }
-.siaga-td-nama span { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
-.siaga-td-sert { max-width: 280px; }
-.siaga-td-sert strong { display: block; font-weight: var(--gde-fw-semibold); }
-.siaga-td-sert span { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
-.siaga-sisa { font-variant-numeric: tabular-nums; font-weight: var(--gde-fw-bold); }
-.siaga-sisa small { display: block; font-weight: var(--gde-fw-normal); color: var(--gde-muted); font-size: .65rem; }
-.siaga-aksi { display: flex; gap: 4px; justify-content: flex-end; }
+.mycertif-tablewrap { overflow: auto; max-height: 70vh; }
+.mycertif-tablewrap .gde-table thead th { position: sticky; top: 0; z-index: 2; }
+.mycertif-table td.mycertif-td-nama { max-width: 220px; }
+.mycertif-td-nama strong { display: block; font-size: var(--gde-fs-base); }
+.mycertif-td-nama span { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.mycertif-td-sert { max-width: 280px; }
+.mycertif-td-sert strong { display: block; font-weight: var(--gde-fw-semibold); }
+.mycertif-td-sert span { font-size: var(--gde-fs-xs); color: var(--gde-muted); }
+.mycertif-sisa { font-variant-numeric: tabular-nums; font-weight: var(--gde-fw-bold); }
+.mycertif-sisa small { display: block; font-weight: var(--gde-fw-normal); color: var(--gde-muted); font-size: .65rem; }
 
-.siaga-toolbar {
+/* Kolom "Berlaku Hingga": tanggal kedaluwarsa + sisa masa berlaku
+   berjenjang tahun/bulan/hari sebagai teks kecil di bawahnya. */
+.mycertif-berlaku { font-variant-numeric: tabular-nums; }
+.mycertif-berlaku strong { display: block; font-weight: var(--gde-fw-semibold); }
+.mycertif-berlaku small {
+  display: block; font-size: .66rem; font-weight: var(--gde-fw-medium);
+  line-height: 1.35; margin-top: 1px;
+}
+
+/* Kotak pratinjau kondisi sheet pada dialog migrasi skema. */
+.mycertif-kode {
+  background: var(--gde-surface-2); border: 1px solid var(--gde-line-2);
+  border-radius: var(--gde-r-sm); padding: 10px 12px;
+  font-size: .76rem; font-family: var(--gde-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  color: var(--gde-ink-2); line-height: 1.75; max-height: 230px; overflow: auto;
+}
+.mycertif-aksi { display: flex; gap: 4px; justify-content: flex-end; }
+
+.mycertif-toolbar {
   display: flex; flex-wrap: wrap; gap: var(--gde-sp-3); align-items: flex-end;
   padding: var(--gde-sp-4) var(--gde-sp-5); border-bottom: 1px solid var(--gde-line-2);
   background: var(--gde-surface-2);
 }
-.siaga-toolbar__field { min-width: 150px; }
-.siaga-toolbar__field--grow { flex: 1 1 220px; }
-.siaga-toolbar .gde-label { margin-bottom: 4px; }
+.mycertif-toolbar__field { min-width: 150px; }
+.mycertif-toolbar__field--grow { flex: 1 1 220px; }
+.mycertif-toolbar .gde-label { margin-bottom: 4px; }
 
-.siaga-pager {
+.mycertif-pager {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
   gap: var(--gde-sp-3); padding: var(--gde-sp-3) var(--gde-sp-5);
   border-top: 1px solid var(--gde-line-2); background: var(--gde-surface-2);
 }
-.siaga-pager__info { font-size: var(--gde-fs-sm); color: var(--gde-muted); }
+.mycertif-pager__info { font-size: var(--gde-fs-sm); color: var(--gde-muted); }
 
 /* ---------- 11. KARTU KPI KECIL ---------- */
-.siaga-mini {
+.mycertif-mini {
   display: flex; align-items: center; gap: var(--gde-sp-3);
   padding: var(--gde-sp-3) var(--gde-sp-4);
   border: 1px solid var(--gde-line); border-radius: var(--gde-r-md); background: #fff;
 }
-.siaga-mini__icon {
+.mycertif-mini__icon {
   width: 40px; height: 40px; border-radius: var(--gde-r-sm); flex: none;
   display: flex; align-items: center; justify-content: center; font-size: 1.05rem;
 }
-.siaga-mini__label { font-size: var(--gde-fs-xs); color: var(--gde-muted); text-transform: uppercase; letter-spacing: .05em; font-weight: var(--gde-fw-semibold); }
-.siaga-mini__value { font-size: var(--gde-fs-xl); font-weight: var(--gde-fw-extrabold); line-height: 1.1; color: var(--gde-ink); }
-.siaga-mini--green .siaga-mini__icon { background: var(--gde-green-l2); color: #3F6B18; }
-.siaga-mini--yellow .siaga-mini__icon { background: var(--gde-yellow-l2); color: #6B5F00; }
-.siaga-mini--orange .siaga-mini__icon { background: #FDEBD7; color: #8A4B00; }
-.siaga-mini--red .siaga-mini__icon { background: var(--gde-red-l); color: #C4142A; }
-.siaga-mini--black .siaga-mini__icon { background: #1B2430; color: #fff; }
-.siaga-mini--dead .siaga-mini__icon { background: #7F1D1D; color: #fff; }
-.siaga-mini--blue .siaga-mini__icon { background: var(--gde-blue-l); color: var(--gde-blue); }
+.mycertif-mini__label { font-size: var(--gde-fs-xs); color: var(--gde-muted); text-transform: uppercase; letter-spacing: .05em; font-weight: var(--gde-fw-semibold); }
+.mycertif-mini__value { font-size: var(--gde-fs-xl); font-weight: var(--gde-fw-extrabold); line-height: 1.1; color: var(--gde-ink); }
+.mycertif-mini--green .mycertif-mini__icon { background: var(--gde-green-l2); color: #3F6B18; }
+.mycertif-mini--yellow .mycertif-mini__icon { background: var(--gde-yellow-l2); color: #6B5F00; }
+.mycertif-mini--orange .mycertif-mini__icon { background: #FDEBD7; color: #8A4B00; }
+.mycertif-mini--red .mycertif-mini__icon { background: var(--gde-red-l); color: #C4142A; }
+.mycertif-mini--black .mycertif-mini__icon { background: #1B2430; color: #fff; }
+.mycertif-mini--dead .mycertif-mini__icon { background: #7F1D1D; color: #fff; }
+.mycertif-mini--blue .mycertif-mini__icon { background: var(--gde-blue-l); color: var(--gde-blue); }
 
 /* ---------- 12. TIMELINE SERTIFIKASI ---------- */
-.siaga-tl { list-style: none; margin: 0; padding: 0; }
-.siaga-tl li {
+.mycertif-tl { list-style: none; margin: 0; padding: 0; }
+.mycertif-tl li {
   position: relative; padding: 0 0 var(--gde-sp-4) var(--gde-sp-6);
   border-left: 2px solid var(--gde-line); margin-left: 7px;
 }
-.siaga-tl li:last-child { border-left-color: transparent; padding-bottom: 0; }
-.siaga-tl li::before {
+.mycertif-tl li:last-child { border-left-color: transparent; padding-bottom: 0; }
+.mycertif-tl li::before {
   content: ''; position: absolute; left: -8px; top: 3px; width: 14px; height: 14px;
   border-radius: 50%; background: #fff; border: 3px solid var(--gde-muted-2);
 }
-.siaga-tl li.tl-green::before { border-color: var(--gde-green-d); }
-.siaga-tl li.tl-yellow::before { border-color: var(--gde-yellow-d); }
-.siaga-tl li.tl-orange::before { border-color: #E07B14; }
-.siaga-tl li.tl-red::before { border-color: var(--gde-red); }
-.siaga-tl li.tl-black::before { border-color: #1B2430; }
-.siaga-tl li.tl-dead::before { border-color: #7F1D1D; }
-.siaga-tl__tgl { font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold); color: var(--gde-blue); text-transform: uppercase; letter-spacing: .05em; }
-.siaga-tl__judul { font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold); margin: 2px 0; }
-.siaga-tl__sub { font-size: var(--gde-fs-sm); color: var(--gde-muted); }
+.mycertif-tl li.tl-green::before { border-color: var(--gde-green-d); }
+.mycertif-tl li.tl-yellow::before { border-color: var(--gde-yellow-d); }
+.mycertif-tl li.tl-orange::before { border-color: #E07B14; }
+.mycertif-tl li.tl-red::before { border-color: var(--gde-red); }
+.mycertif-tl li.tl-black::before { border-color: #1B2430; }
+.mycertif-tl li.tl-dead::before { border-color: #7F1D1D; }
+/* Notifikasi hasil pemeriksaan HC memakai tl-green (terverifikasi) atau tl-red (perlu revisi) */
+.mycertif-tl__tgl { font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold); color: var(--gde-blue); text-transform: uppercase; letter-spacing: .05em; }
+.mycertif-tl__judul { font-size: var(--gde-fs-base); font-weight: var(--gde-fw-semibold); margin: 2px 0; }
+.mycertif-tl__sub { font-size: var(--gde-fs-sm); color: var(--gde-muted); }
 
 /* ---------- 13. FORM ---------- */
-.siaga-formgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gde-sp-4); }
-.siaga-formgrid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.siaga-formgrid .span-2 { grid-column: span 2; }
-.siaga-formgrid .span-all { grid-column: 1 / -1; }
+.mycertif-formgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gde-sp-4); }
+.mycertif-formgrid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.mycertif-formgrid .span-2 { grid-column: span 2; }
+.mycertif-formgrid .span-all { grid-column: 1 / -1; }
 @media (max-width: 860px) {
-  .siaga-formgrid, .siaga-formgrid--3 { grid-template-columns: 1fr; }
-  .siaga-formgrid .span-2 { grid-column: auto; }
+  .mycertif-formgrid, .mycertif-formgrid--3 { grid-template-columns: 1fr; }
+  .mycertif-formgrid .span-2 { grid-column: auto; }
 }
-.siaga-fieldset { border: 1px solid var(--gde-line); border-radius: var(--gde-r-md); padding: var(--gde-sp-4); }
-.siaga-fieldset__legend {
+.mycertif-fieldset { border: 1px solid var(--gde-line); border-radius: var(--gde-r-md); padding: var(--gde-sp-4); }
+.mycertif-fieldset__legend {
   font-size: var(--gde-fs-xs); font-weight: var(--gde-fw-bold); letter-spacing: .08em;
   text-transform: uppercase; color: var(--gde-blue); padding: 0 var(--gde-sp-2);
 }
-.siaga-inline-note { font-size: var(--gde-fs-sm); color: var(--gde-muted); }
+.mycertif-inline-note { font-size: var(--gde-fs-sm); color: var(--gde-muted); }
 
 /* ---------- 14. MODAL & UTIL ---------- */
 .gde-modal__body { max-height: 70vh; }
-.siaga-modal-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gde-sp-4); }
-@media (max-width: 700px) { .siaga-modal-grid { grid-template-columns: 1fr; } }
-.siaga-dl { display: grid; grid-template-columns: 42% 1fr; gap: var(--gde-sp-2) var(--gde-sp-3); margin: 0; font-size: var(--gde-fs-base); }
-.siaga-dl dt { color: var(--gde-muted); }
-.siaga-dl dd { margin: 0; font-weight: var(--gde-fw-semibold); color: var(--gde-ink); word-break: break-word; }
-.siaga-scroll-y { max-height: 420px; overflow-y: auto; }
-.siaga-mt-3 { margin-top: var(--gde-sp-3); }
-.siaga-mt-4 { margin-top: var(--gde-sp-4); }
-.siaga-mb-4 { margin-bottom: var(--gde-sp-4); }
-.siaga-gap-2 { gap: var(--gde-sp-2); }
+.mycertif-modal-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gde-sp-4); }
+@media (max-width: 700px) { .mycertif-modal-grid { grid-template-columns: 1fr; } }
+.mycertif-dl { display: grid; grid-template-columns: 42% 1fr; gap: var(--gde-sp-2) var(--gde-sp-3); margin: 0; font-size: var(--gde-fs-base); }
+.mycertif-dl dt { color: var(--gde-muted); }
+.mycertif-dl dd { margin: 0; font-weight: var(--gde-fw-semibold); color: var(--gde-ink); word-break: break-word; }
+.mycertif-scroll-y { max-height: 420px; overflow-y: auto; }
+.mycertif-mt-3 { margin-top: var(--gde-sp-3); }
+.mycertif-mt-4 { margin-top: var(--gde-sp-4); }
+.mycertif-mb-3 { margin-bottom: var(--gde-sp-3); }
+.mycertif-mb-4 { margin-bottom: var(--gde-sp-4); }
+.mycertif-gap-2 { gap: var(--gde-sp-2); }
 .gde-u-flex { display: flex; }
 .gde-u-flex-wrap { flex-wrap: wrap; }
 .gde-u-items-center { align-items: center; }
@@ -1464,8 +1483,13 @@ img, svg, video { max-width: 100%; height: auto; vertical-align: middle; }
 
 /* ---------- 15. CETAK ---------- */
 @media print {
-  .gde-sidebar, .gde-topbar, .gde-footer, .siaga-toasts, .siaga-no-print { display: none !important; }
+  .gde-sidebar, .gde-topbar, .gde-footer, .mycertif-toasts, .mycertif-no-print { display: none !important; }
   .gde-shell { display: block !important; }
   .gde-content { padding: 0 !important; }
 }
 </style>
+
+/* Badge antrean verifikasi pada menu samping.
+   Dibedakan dari badge masa berlaku (merah) supaya HC bisa membedakan
+   "dokumen hampir habis" dan "data menunggu diperiksa". */
+.gde-nav__count--verif { background: var(--gde-yellow); color: #4A3F00; }

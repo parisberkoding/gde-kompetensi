@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * SIAGA SERTIFIKASI — Session.gs  (AUTENTIKASI & SESI)
+ * myCertif — Session.gs  (AUTENTIKASI & SESI)
  * PT Geo Dipa Energi (Persero) — Unit Patuha
  * ============================================================================
  *
@@ -66,8 +66,8 @@
  * ============================================================================
  */
 
-var MARKER_SESSION_ = 'v1.2.0';
-var SESSION_BUILD_ = 'Session.gs v1.2.0 — login Employee Code + sesi berlapis';
+var MARKER_SESSION_ = 'v1.4.0';
+var SESSION_BUILD_ = 'Session.gs v1.4.0 — login Employee Code + sesi berlapis';
 
 // ============================================================================
 // 1. PENCARIAN USER
@@ -166,14 +166,14 @@ function userPublic_(u) {
     nama_depan: String(u.Nama_Depan || ''),
     divisi: String(u.Divisi || ''),
     jabatan: String(u.Jabatan || ''),
-    lokasi_kerja: String(u.Lokasi_Kerja || ''),
+    lokasi_kerja: String(u.Working_Location || ''),
     no_hp: String(u.No_HP || ''),
     email_atasan: String(u.Email_Atasan || ''),
     status: String(u.Status || 'ACTIVE'),
     punya_password: String(u.Password || '').trim() !== '',
     must_change_password: String(u.Must_Change_Password || 'FALSE').toUpperCase() === 'TRUE',
-    login_terakhir: u.Login_Terakhir ? String(u.Login_Terakhir) : '',
-    created_at: u.Created_At ? String(u.Created_At) : '',
+    login_terakhir: fmtWaktu_(u.Login_Terakhir),
+    created_at: fmtWaktu_(u.Created_At),
     inisial: inisial_(u.Nama_Lengkap)
   };
 }
@@ -556,6 +556,8 @@ function bersihkanSesiLama_() {
   } else if (kedaluwarsa) {
     sh.getRange(2, 1, vals.length, vals[0].length).setValues(vals);
   }
+  // Baris sesi berubah -> memo sheet ini tidak boleh dipakai lagi.
+  try { invalidateSheet_('Session_Token'); } catch (e) { }
   return { ok: true, kedaluwarsa: kedaluwarsa, dihapus: dihapus };
 }
 

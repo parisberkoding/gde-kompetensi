@@ -1,29 +1,33 @@
 <!--
   ============================================================================
-  SIAGA SERTIFIKASI — JavaScript.html
+  myCertif — JavaScript.html
   Lapisan bersama frontend: pemanggil API, sesi, router, toast, modal,
   format tanggal/angka, badge status, helper unggah berkas, dan pendaftaran
   seluruh view beserta hak akses per role.
 
   Dimuat SETELAH Stylesheet dan SEBELUM skrip tiap view.
-  Semua view memakai namespace global `SIAGA`.
+  Semua view memakai namespace global `MyCertif`.
   ============================================================================
 -->
 <script>
 /* ==========================================================================
    0. NAMESPACE & KONSTANTA
    ========================================================================== */
-var SIAGA = (function () {
+var MyCertif = (function () {
   'use strict';
 
-  var TOKEN_KEY = 'siaga.token';
-  var USER_KEY = 'siaga.user';
+  var TOKEN_KEY = 'mycertif.token';
+  /* Kunci LAMA (saat aplikasi masih bernama SIAGA). Dibaca sebagai cadangan
+     supaya pengguna yang sedang login tidak terlempar ke halaman masuk hanya
+     karena aplikasi berganti nama. */
+  var TOKEN_KEY_LAMA = 'siaga.token';
+  var USER_KEY = 'mycertif.user';
 
   var APP = {
-    name: 'SIAGA Sertifikasi',
+    name: 'myCertif',
     sub: 'Sistem Informasi & Pengingat Masa Berlaku Sertifikasi',
     owner: 'PT Geo Dipa Energi (Persero) — Unit Patuha',
-    version: 'v1.0.0',
+    version: 'v1.4.0',
     /**
      * Versi berkas Frontend/Javascript.html ini.
      * Dipakai Index.html untuk memastikan berkas Frontend lain tidak
@@ -100,6 +104,26 @@ var SIAGA = (function () {
     return isNaN(d.getTime()) ? null : d;
   }
 
+  /**
+   * Normalisasi menjadi Date DENGAN jam-menit-detik.
+   *
+   * BERBEDA dari toDate(), yang sengaja memotong ke tengah malam karena dipakai
+   * untuk kolom tanggal (Expired_at, Start_pelaksanaan). Kolom waktu seperti
+   * Updated_At / Login_Terakhir / Created_At butuh jamnya — memakai toDate()
+   * membuat semua waktu tampak "00:00" dan "x jam lalu" jadi salah hitung.
+   */
+  function toDateTime(v) {
+    if (v === null || v === undefined || v === '') return null;
+    if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+    var s = String(v).trim();
+    if (!s) return null;
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?/);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] || 0));
+    // string Date mentah (mis. "Thu Oct 08 2026 15:20:32 GMT+0700")
+    var d = new Date(s);
+    return isNaN(d.getTime()) ? null : d;
+  }
+
   function tglIndo(v, denganHari) {
     var d = toDate(v);
     if (!d) return '—';
@@ -113,6 +137,21 @@ var SIAGA = (function () {
     return d.getDate() + ' ' + BULAN_SINGKAT[d.getMonth()] + ' ' + String(d.getFullYear()).substring(2);
   }
 
+  /**
+   * Tanggal + jam, mis. "8 Oktober 2026, 15:20".
+   * Dipakai untuk kolom waktu (Terakhir diperbarui, Login terakhir, dll.).
+   *
+   * Backend mengirim 'yyyy-MM-dd HH:mm:ss'. Bila nilainya ternyata string Date
+   * mentah (mis. "Thu Oct 08 2026 15:20:32 GMT+0700"), toDate() tetap bisa
+   * membacanya — sehingga tampilan tidak pernah menampilkan format mentah itu.
+   */
+  function waktuIndo(v) {
+    var d = toDateTime(v);
+    if (!d) return '—';
+    return d.getDate() + ' ' + BULAN[d.getMonth()] + ' ' + d.getFullYear()
+      + ', ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
   function iso(v) {
     var d = toDate(v);
     if (!d) return '';
@@ -122,7 +161,7 @@ var SIAGA = (function () {
   function pad(n) { return (n < 10 ? '0' : '') + n; }
 
   function waktuLalu(v) {
-    var d = toDate(v);
+    var d = toDateTime(v);
     if (!d) return '—';
     var detik = Math.floor((Date.now() - d.getTime()) / 1000);
     if (detik < 60) return 'baru saja';
@@ -177,6 +216,34 @@ var SIAGA = (function () {
     return null;
   }
 
+  /**
+   * Definisi verifikasi dari meta server (PENDING / VERIFIED / REVISI).
+   * Sumbernya VERIFIKASI_DEFS_ di Backend/Sertifikasi.gs supaya istilah, warna,
+   * dan ikon tidak pernah berbeda antara server dan tampilan.
+   */
+  function verifikasiDef(kode) {
+    var list = (state.meta && state.meta.verifikasi_defs) || [];
+    var s = String(kode || 'PENDING').trim().toUpperCase();
+    // istilah lama 'REJECTED' tetap dikenali supaya data lama tidak tampil aneh
+    if (s === 'REJECTED' || s === 'DITOLAK') s = 'REVISI';
+    for (var i = 0; i < list.length; i++) { if (list[i].key === s) return list[i]; }
+    return { key: s, label: s || 'Menunggu Verifikasi', short: s || 'Menunggu', tone: 'gray', icon: 'bi-dash-circle', ket: '' };
+  }
+
+  function verifikasiLabel(kode) { return verifikasiDef(kode).label; }
+
+  /** Badge status verifikasi dengan penjelasan saat kursor diarahkan. */
+  function verifikasiBadge(kode) {
+    var d = verifikasiDef(kode);
+    var kelas = 'gde-badge';
+    if (d.tone === 'yellow') kelas += ' gde-badge--yellow';
+    else if (d.tone === 'red') kelas += ' gde-badge--red';
+    else if (d.tone === 'green') kelas += ' gde-badge--solid';
+    else kelas += ' gde-badge--gray';
+    return '<span class="' + kelas + '" title="' + attr(d.ket || d.label) + '">'
+      + '<i class="bi ' + attr(d.icon) + '"></i> ' + esc(d.short || d.label) + '</span>';
+  }
+
   function sisaTeks(hari, bulan) {
     if (hari === null || hari === undefined || hari === '') return '—';
     var h = num(hari);
@@ -189,15 +256,94 @@ var SIAGA = (function () {
     return num(bulan).toLocaleString('id-ID', { maximumFractionDigits: 1 }) + ' bln';
   }
 
+  /**
+   * Sisa masa berlaku berjenjang tahun/bulan/hari, mis. "3 Tahun 2 Bulan 4 Hari".
+   *
+   * Sumber utamanya `r.sisa_teks` dari backend. Bila kosong, nilainya dihitung
+   * ulang dari `r.expired_at` memakai algoritma kalender yang SAMA dengan
+   * backend (durasiKalender), sehingga tampilan tidak pernah berbeda tergantung
+   * jalur mana yang dipakai. `r.sisa_hari` hanya dipakai sebagai upaya terakhir.
+   */
+  function masaBerlakuTeks(r) {
+    if (!r) return '—';
+    if (r.sisa_teks) return r.sisa_teks;
+    if (r.expired_at) {
+      var kal = durasiKalender(r.expired_at);
+      if (kal) return kal;
+    }
+    if (r.sisa_hari !== null && r.sisa_hari !== undefined && r.sisa_hari !== '') {
+      return durasiDariHari(r.sisa_hari);
+    }
+    return '—';
+  }
+
+  /**
+   * Selisih dua tanggal sebagai "x Tahun y Bulan z Hari".
+   * Meniru durasiTeks_() di Backend/subprocess.gs supaya hasil backend dan
+   * frontend tidak pernah berbeda. Tanpa `ref`, acuannya hari ini.
+   */
+  function durasiKalender(tanggalAkhir, ref) {
+    var akhir = toDate(tanggalAkhir);
+    if (!akhir) return '';
+    var acuan = ref ? toDate(ref) : (function () {
+      var t = new Date();
+      return new Date(t.getFullYear(), t.getMonth(), t.getDate());
+    })();
+    if (!acuan) return '';
+
+    var lewat = akhir.getTime() < acuan.getTime();
+    var a = lewat ? akhir : acuan;
+    var b = lewat ? acuan : akhir;
+
+    var tahun = b.getFullYear() - a.getFullYear();
+    var bulan = b.getMonth() - a.getMonth();
+    var hari = b.getDate() - a.getDate();
+
+    if (hari < 0) {
+      bulan -= 1;
+      hari += new Date(b.getFullYear(), b.getMonth(), 0).getDate();
+    }
+    if (bulan < 0) {
+      tahun -= 1;
+      bulan += 12;
+    }
+
+    var bagian = [];
+    if (tahun > 0) bagian.push(tahun + ' Tahun');
+    if (bulan > 0) bagian.push(bulan + ' Bulan');
+    if (hari > 0 || !bagian.length) bagian.push(hari + ' Hari');
+    return (lewat ? 'Lewat ' : '') + bagian.join(' ');
+  }
+
+  /**
+   * Perkiraan kasar dari jumlah hari -> "x Tahun y Bulan z Hari".
+   * Hanya dipakai bila `expired_at` tidak ada sama sekali; hasilnya bisa
+   * berbeda 1–5 hari dari durasiKalender karena bulan punya jumlah hari berbeda.
+   */
+  function durasiDariHari(hari) {
+    var h = num(hari);
+    var lewat = h < 0;
+    var sisa = Math.abs(h);
+    var tahun = Math.floor(sisa / 365);
+    sisa -= tahun * 365;
+    var bulan = Math.floor(sisa / 30);
+    sisa -= bulan * 30;
+    var bagian = [];
+    if (tahun) bagian.push(tahun + ' Tahun');
+    if (bulan) bagian.push(bulan + ' Bulan');
+    if (sisa || !bagian.length) bagian.push(sisa + ' Hari');
+    return (lewat ? 'Lewat ' : '') + bagian.join(' ');
+  }
+
   /* ========================================================================
      3. TOAST
      ======================================================================== */
   function toastContainer() {
-    var c = el('siagaToasts');
+    var c = el('mycertifToasts');
     if (!c) {
       c = document.createElement('div');
-      c.id = 'siagaToasts';
-      c.className = 'siaga-toasts';
+      c.id = 'mycertifToasts';
+      c.className = 'mycertif-toasts';
       document.body.appendChild(c);
     }
     return c;
@@ -207,15 +353,15 @@ var SIAGA = (function () {
     var t = tipe || 'info';
     var ikon = { success: 'bi-check-circle-fill', danger: 'bi-x-circle-fill', warning: 'bi-exclamation-triangle-fill', info: 'bi-info-circle-fill' }[t] || 'bi-info-circle-fill';
     var div = document.createElement('div');
-    div.className = 'siaga-toast siaga-toast--' + t;
-    div.innerHTML = '<i class="bi ' + ikon + ' siaga-toast__icon"></i>'
-      + '<div class="siaga-toast__body">'
-      + (judul ? '<strong class="siaga-toast__title">' + esc(judul) + '</strong>' : '')
-      + '<div class="siaga-toast__msg">' + esc(msg) + '</div></div>'
-      + '<button class="siaga-toast__close" type="button" aria-label="Tutup">&times;</button>';
+    div.className = 'mycertif-toast mycertif-toast--' + t;
+    div.innerHTML = '<i class="bi ' + ikon + ' mycertif-toast__icon"></i>'
+      + '<div class="mycertif-toast__body">'
+      + (judul ? '<strong class="mycertif-toast__title">' + esc(judul) + '</strong>' : '')
+      + '<div class="mycertif-toast__msg">' + esc(msg) + '</div></div>'
+      + '<button class="mycertif-toast__close" type="button" aria-label="Tutup">&times;</button>';
     toastContainer().appendChild(div);
     var tutup = function () { if (div.parentNode) div.parentNode.removeChild(div); };
-    div.querySelector('.siaga-toast__close').addEventListener('click', tutup);
+    div.querySelector('.mycertif-toast__close').addEventListener('click', tutup);
     setTimeout(tutup, t === 'danger' ? 9000 : 5200);
   }
 
@@ -249,9 +395,9 @@ var SIAGA = (function () {
   function konfirmasi(opsi) {
     return new Promise(function (resolve) {
       var o = opsi || {};
-      var id = 'siagaConfirm';
+      var id = 'mycertifConfirm';
       var lama = el(id);
-      if (lama) lama.parentNode.removeChild(lama);
+      if (lama && lama.parentNode) lama.parentNode.removeChild(lama);
 
       var wrap = document.createElement('div');
       wrap.className = 'gde-modal is-open';
@@ -278,6 +424,116 @@ var SIAGA = (function () {
       wrap.querySelector('[data-ok]').addEventListener('click', function () { selesai(true); });
       wrap.querySelector('[data-batal]').addEventListener('click', function () { selesai(false); });
       wrap.querySelector('[data-tutup]').addEventListener('click', function () { selesai(false); });
+    });
+  }
+
+  /**
+   * Dialog dengan isian (bukan sekadar ya/tidak).
+   *
+   * @param {Object} opsi {
+   *   judul, pesanHtml,
+   *   fields: [{ name, label, tipe:'text'|'textarea'|'select'|'number',
+   *              nilai, placeholder, hint, wajib, opsi:[{value,label}] }],
+   *   labelOk, labelBatal, bahaya,
+   *   validasi: function(nilai) -> string pesan error ('' bila valid)
+   * }
+   * @return {Promise<Object|null>} nilai field bila disetujui, null bila dibatalkan.
+   */
+  function dialogForm(opsi) {
+    return new Promise(function (resolve) {
+      var o = opsi || {};
+      var id = 'mycertifFormDialog';
+      var lama = el(id);
+      if (lama && lama.parentNode) lama.parentNode.removeChild(lama);
+
+      var isiField = (o.fields || []).map(function (f) {
+        var fid = id + '_' + f.name;
+        var kontrol;
+        if (f.tipe === 'textarea') {
+          kontrol = '<textarea class="gde-textarea" id="' + fid + '" rows="' + (f.rows || 3) + '" '
+            + 'placeholder="' + attr(f.placeholder || '') + '">' + esc(f.nilai || '') + '</textarea>';
+        } else if (f.tipe === 'select') {
+          kontrol = '<select class="gde-select" id="' + fid + '">'
+            + (f.opsi || []).map(function (op) {
+              return '<option value="' + attr(op.value) + '"'
+                + (String(op.value) === String(f.nilai) ? ' selected' : '') + '>'
+                + esc(op.label) + '</option>';
+            }).join('') + '</select>';
+        } else {
+          kontrol = '<input class="gde-input" id="' + fid + '" type="' + attr(f.tipe || 'text') + '" '
+            + 'value="' + attr(f.nilai === undefined || f.nilai === null ? '' : f.nilai) + '" '
+            + 'placeholder="' + attr(f.placeholder || '') + '">';
+        }
+        return '<div class="mycertif-mb-3">'
+          + '<label class="gde-label" for="' + fid + '">' + esc(f.label || f.name)
+          + (f.wajib ? ' <span class="gde-req">*</span>' : '') + '</label>'
+          + kontrol
+          + (f.hint ? '<div class="gde-hint">' + esc(f.hint) + '</div>' : '')
+          + '</div>';
+      }).join('');
+
+      var wrap = document.createElement('div');
+      wrap.className = 'gde-modal is-open';
+      wrap.id = id;
+      wrap.innerHTML = ''
+        + '<div class="gde-modal__scrim" data-tutup></div>'
+        + '<div class="gde-modal__dialog" style="max-width:520px">'
+        + '  <div class="gde-modal__head"><h3>' + esc(o.judul || 'Formulir') + '</h3></div>'
+        + '  <div class="gde-modal__body">'
+        + (o.pesanHtml ? ('<div style="margin-bottom:14px;color:var(--gde-ink-2)">' + o.pesanHtml + '</div>') : '')
+        + isiField
+        + '    <div class="gde-hint gde-u-hide" data-galat style="color:var(--gde-red)"></div>'
+        + '  </div>'
+        + '  <div class="gde-modal__foot">'
+        + '    <button class="gde-btn gde-btn--outline" data-batal type="button">'
+        + esc(o.labelBatal || 'Batal') + '</button>'
+        + '    <button class="gde-btn ' + (o.bahaya ? 'gde-btn--danger' : 'gde-btn--primary')
+        + '" data-ok type="button">' + esc(o.labelOk || 'Simpan') + '</button>'
+        + '  </div>'
+        + '</div>';
+      document.body.appendChild(wrap);
+      document.body.style.overflow = 'hidden';
+
+      var selesai = function (hasil) {
+        if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+        document.body.style.overflow = '';
+        resolve(hasil);
+      };
+
+      var nilai = function () {
+        var out = {};
+        (o.fields || []).forEach(function (f) {
+          var node = el(id + '_' + f.name);
+          out[f.name] = node ? String(node.value || '').trim() : '';
+        });
+        return out;
+      };
+
+      var galat = wrap.querySelector('[data-galat]');
+      var tampilGalat = function (pesan) {
+        if (!galat) return;
+        galat.textContent = pesan || '';
+        galat.classList.toggle('gde-u-hide', !pesan);
+      };
+
+      wrap.querySelector('[data-ok]').addEventListener('click', function () {
+        var v = nilai();
+        var kosong = (o.fields || []).filter(function (f) { return f.wajib && !v[f.name]; });
+        if (kosong.length) {
+          tampilGalat('Wajib diisi: ' + kosong.map(function (f) { return f.label || f.name; }).join(', ') + '.');
+          return;
+        }
+        if (typeof o.validasi === 'function') {
+          var pesan = o.validasi(v);
+          if (pesan) { tampilGalat(pesan); return; }
+        }
+        selesai(v);
+      });
+      wrap.querySelector('[data-batal]').addEventListener('click', function () { selesai(null); });
+      wrap.querySelector('[data-tutup]').addEventListener('click', function () { selesai(null); });
+
+      var fokus = wrap.querySelector('.gde-input, .gde-textarea, .gde-select');
+      if (fokus) { try { fokus.focus(); } catch (e) { } }
     });
   }
 
@@ -386,7 +642,10 @@ var SIAGA = (function () {
   function hapusSesi() {
     state.token = '';
     state.user = null;
-    try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch (e) { }
+    try {
+      localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY);
+      localStorage.removeItem(TOKEN_KEY_LAMA);
+    } catch (e) { }
     perbaruiTokenDiHash();
   }
 
@@ -395,6 +654,12 @@ var SIAGA = (function () {
     try {
       var t = localStorage.getItem(TOKEN_KEY) || '';
       if (t) return t;
+      // kompatibilitas: sesi yang tersimpan sebelum aplikasi berganti nama
+      var lama = localStorage.getItem(TOKEN_KEY_LAMA) || '';
+      if (lama) {
+        try { localStorage.setItem(TOKEN_KEY, lama); localStorage.removeItem(TOKEN_KEY_LAMA); } catch (e2) { }
+        return lama;
+      }
     } catch (e) { }
     // lapis 3: hash URL
     return tokenDariHash();
@@ -469,7 +734,7 @@ var SIAGA = (function () {
       return true;
     }).catch(function () {
       state.token = '';
-      try { localStorage.removeItem(TOKEN_KEY); } catch (e) { }
+      try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(TOKEN_KEY_LAMA); } catch (e) { }
       return bootSesiOtomatis();
     });
   }
@@ -514,7 +779,6 @@ var SIAGA = (function () {
     notifikasi: { file: 'Notifikasi', init: 'initNotifikasi', judul: 'Notifikasi', sub: 'Pengingat masa berlaku sertifikasi', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-bell' },
     masteruser: { file: 'MasterUser', init: 'initMasterUser', judul: 'Master User', sub: 'Kelola akun, role, dan data pekerja', roles: ['SA', 'HC'], ikon: 'bi-people' },
     impor: { file: 'Import', init: 'initImport', judul: 'Impor Data', sub: 'Impor data lama & buat akun otomatis', roles: ['SA', 'HC'], ikon: 'bi-box-arrow-in-down' },
-    mastersertifikasi: { file: 'MasterSertifikasi', init: 'initMasterSertifikasi', judul: 'Jenis Sertifikasi', sub: 'Master jenis sertifikasi & masa berlaku', roles: ['SA', 'HC'], ikon: 'bi-award' },
     profil: { file: 'ProfilUser', init: 'initProfilUser', judul: 'Profil Saya', sub: 'Data diri dan kontak notifikasi', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-person-circle' },
     keamanan: { file: 'KeamananAkun', init: 'initKeamananAkun', judul: 'Username & Password', sub: 'Ubah kredensial masuk Anda', roles: ['SA', 'HC', 'EMP'], ikon: 'bi-shield-lock' },
     pengaturan: { file: 'Pengaturan', init: 'initPengaturan', judul: 'Pengaturan', sub: 'Ambang status, reminder, dan ekspor', roles: ['SA', 'HC'], ikon: 'bi-sliders' }
@@ -554,7 +818,7 @@ var SIAGA = (function () {
   function muatView(namaView) {
     var v = VIEWS[namaView];
     if (!v) return;
-    var konten = el('siagaContent');
+    var konten = el('mycertifContent');
     if (!konten) return;
 
     // tandai menu aktif
@@ -563,9 +827,9 @@ var SIAGA = (function () {
     });
 
     // judul halaman di topbar
-    var jt = el('siagaPageTitle');
+    var jt = el('mycertifPageTitle');
     if (jt) jt.textContent = v.judul;
-    var js = el('siagaPageSub');
+    var js = el('mycertifPageSub');
     if (js) js.textContent = v.sub || '';
 
     // nomor urut: supaya jawaban permintaan LAMA tidak menimpa halaman baru
@@ -608,7 +872,7 @@ var SIAGA = (function () {
   }
 
   function pemuatHtml(teks) {
-    return '<div class="siaga-loader"><div class="siaga-loader__ring"></div>'
+    return '<div class="mycertif-loader"><div class="mycertif-loader__ring"></div>'
       + '<p>' + esc(teks || 'Memuat...') + '</p></div>';
   }
 
@@ -632,7 +896,7 @@ var SIAGA = (function () {
       // Biasanya karena halaman sudah berganti -> wajar, cukup dicatat.
       // Kalau muncul saat halaman TIDAK berpindah, berarti ada salah ketik id.
       try {
-        console.warn('[SIAGA] #' + id + ' tidak ada — penulisan dilewati '
+        console.warn('[myCertif] #' + id + ' tidak ada — penulisan dilewati '
           + '(wajar bila halaman sudah berganti).');
       } catch (e) { }
       return false;
@@ -646,7 +910,7 @@ var SIAGA = (function () {
     var n = el(id);
     if (!n) {
       try {
-        console.warn('[SIAGA] #' + id + ' tidak ada — penulisan dilewati '
+        console.warn('[myCertif] #' + id + ' tidak ada — penulisan dilewati '
           + '(wajar bila halaman sudah berganti).');
       } catch (e) { }
       return false;
@@ -692,18 +956,26 @@ var SIAGA = (function () {
         b.textContent = notif > 99 ? '99+' : String(notif);
         b.style.display = notif > 0 ? '' : 'none';
       });
-      var mb = el('siagaTopbarNotifCount');
+      var mb = el('mycertifTopbarNotifCount');
       if (mb) {
         mb.textContent = notif > 0 ? String(notif) : '';
         mb.style.display = notif > 0 ? '' : 'none';
       }
 
+      // Masa berlaku kritis dan antrean verifikasi adalah dua hal berbeda,
+      // jadi badge-nya dipisah (dulu digabung sehingga angkanya menyesatkan).
       var n = num(r.badge_mendesak);
       qsa('[data-urgent-badge]').forEach(function (b) {
         b.textContent = n > 99 ? '99+' : String(n);
         b.style.display = n > 0 ? '' : 'none';
-        b.title = num(r.kadaluarsa) + ' kadaluarsa · ' + num(r.perlu_verifikasi)
-          + ' menunggu verifikasi';
+        b.title = num(r.kadaluarsa) + ' kadaluarsa · ' + num(r.mendesak) + ' mendesak';
+      });
+      var v = num(r.badge_verifikasi);
+      qsa('[data-verif-badge]').forEach(function (b) {
+        b.textContent = v > 99 ? '99+' : String(v);
+        b.style.display = v > 0 ? '' : 'none';
+        b.title = num(r.perlu_verifikasi) + ' menunggu verifikasi · '
+          + num(r.perlu_revisi) + ' perlu revisi';
       });
     }).catch(function () { });
   }
@@ -716,7 +988,7 @@ var SIAGA = (function () {
      7b. PENCARIAN-PILIH (COMBOBOX) — pengganti dropdown yang panjang
      ------------------------------------------------------------------------
      Pemakaian:
-       var cb = SIAGA.combobox({
+       var cb = MyCertif.combobox({
          input: elInput, panel: elPanel, items: [...], nilai: 'SA0001',
          placeholder: 'Cari nama atau Employee Code...',
          onPilih: function (item) { ... }
@@ -736,33 +1008,33 @@ var SIAGA = (function () {
    * menyuntikkan gaya sendiri, komponen tetap benar walau Stylesheet lama.
    * (Bila Stylesheet sudah memuat gaya yang sama, blok ini tidak berpengaruh.)
    */
-  var CSS_CB_ID_ = 'siagaCbCss';
+  var CSS_CB_ID_ = 'mycertifCbCss';
   var cssCbSudah_ = false;          // penjaga kedua (selain id elemen <style>)
   function pastikanCssCombobox_() {
     try {
       if (cssCbSudah_) return true;
       if (document.getElementById(CSS_CB_ID_)) { cssCbSudah_ = true; return true; }
       var css = ''
-        + '.siaga-cb{position:relative;min-width:0}'
-        + '.siaga-cb input[type="text"]{padding-right:2.4rem}'
-        + '.siaga-cb__icon{position:absolute;right:.8rem;top:50%;transform:translateY(-50%);'
+        + '.mycertif-cb{position:relative;min-width:0}'
+        + '.mycertif-cb input[type="text"]{padding-right:2.4rem}'
+        + '.mycertif-cb__icon{position:absolute;right:.8rem;top:50%;transform:translateY(-50%);'
         + 'color:#8494A8;pointer-events:none;font-size:.95rem}'
-        + '.siaga-cb__panel{position:absolute;z-index:1040;left:0;right:0;top:calc(100% + 4px);'
+        + '.mycertif-cb__panel{position:absolute;z-index:1040;left:0;right:0;top:calc(100% + 4px);'
         + 'max-height:320px;overflow-y:auto;background:#fff;border:1px solid #E4E9F0;'
         + 'border-radius:14px;box-shadow:0 4px 12px rgba(16,32,46,.06),0 12px 32px rgba(16,32,46,.06);'
         + 'padding:.25rem;display:none}'
-        + '.siaga-cb.is-open .siaga-cb__panel{display:block}'
-        + '.siaga-cb__item{display:flex;align-items:center;gap:.75rem;padding:.5rem .65rem;'
+        + '.mycertif-cb.is-open .mycertif-cb__panel{display:block}'
+        + '.mycertif-cb__item{display:flex;align-items:center;gap:.75rem;padding:.5rem .65rem;'
         + 'border-radius:10px;cursor:pointer}'
-        + '.siaga-cb__item:hover,.siaga-cb__item.is-active{background:#EAF1FA}'
-        + '.siaga-cb__item.is-dipilih{background:#F2F9E8}'
-        + '.siaga-cb__meta{min-width:0;flex:1}'
-        + '.siaga-cb__nama{display:block;font-size:.875rem;font-weight:600;color:#16202E;'
+        + '.mycertif-cb__item:hover,.mycertif-cb__item.is-active{background:#EAF1FA}'
+        + '.mycertif-cb__item.is-dipilih{background:#F2F9E8}'
+        + '.mycertif-cb__meta{min-width:0;flex:1}'
+        + '.mycertif-cb__nama{display:block;font-size:.875rem;font-weight:600;color:#16202E;'
         + 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
-        + '.siaga-cb__sub{display:block;font-size:.6875rem;color:#5B6B80;'
+        + '.mycertif-cb__sub{display:block;font-size:.6875rem;color:#5B6B80;'
         + 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
-        + '.siaga-cb__info{padding:.75rem 1rem;text-align:center;font-size:.75rem;color:#5B6B80}'
-        + '.siaga-cb__hitung{padding:.35rem .65rem;font-size:.6875rem;color:#8494A8;'
+        + '.mycertif-cb__info{padding:.75rem 1rem;text-align:center;font-size:.75rem;color:#5B6B80}'
+        + '.mycertif-cb__hitung{padding:.35rem .65rem;font-size:.6875rem;color:#8494A8;'
         + 'border-bottom:1px solid #F1F5F9;margin-bottom:.25rem}';
 
       var st = document.createElement('style');
@@ -792,10 +1064,10 @@ var SIAGA = (function () {
 
     // Pembungkus wajib ada agar panel bisa diposisikan relatif terhadap input.
     // Bila markup tidak menyediakannya, dibuat otomatis (lebih tahan salah tempel).
-    var wrap = input.closest('.siaga-cb') || input.parentNode;
+    var wrap = input.closest('.mycertif-cb') || input.parentNode;
     if (!wrap || wrap === document.body) {
       wrap = document.createElement('div');
-      wrap.className = 'siaga-cb';
+      wrap.className = 'mycertif-cb';
       if (input.parentNode) input.parentNode.insertBefore(wrap, input);
       wrap.appendChild(input);
     }
@@ -813,10 +1085,10 @@ var SIAGA = (function () {
     input.setAttribute('autocomplete', 'off');
     if (o.placeholder) input.setAttribute('placeholder', o.placeholder);
     try {
-      var idIkon = (panel.id || 'siagaCb') + '_ikon';
+      var idIkon = (panel.id || 'mycertifCb') + '_ikon';
       if (!document.getElementById(idIkon)) {
         var ikon = document.createElement('i');
-        ikon.className = 'bi bi-search siaga-cb__icon';
+        ikon.className = 'bi bi-search mycertif-cb__icon';
         ikon.id = idIkon;
         wrap.appendChild(ikon);
       }
@@ -841,13 +1113,13 @@ var SIAGA = (function () {
       // Badge hanya ditampilkan bila memang informatif (mis. HC / Super Admin).
       var badge = String(it.badge || '');
       if (/^(employee|emp)$/i.test(badge)) badge = '';
-      return '<div class="siaga-cb__item' + (terpilih && terpilih.value === it.value ? ' is-dipilih' : '')
+      return '<div class="mycertif-cb__item' + (terpilih && terpilih.value === it.value ? ' is-dipilih' : '')
         + '" data-cb-val="' + esc(it.value) + '" '
         + 'style="display:flex;align-items:center;gap:.75rem;padding:.5rem .65rem;cursor:pointer">'
-        + '<div class="siaga-cb__meta" style="min-width:0;flex:1">'
-        + '<span class="siaga-cb__nama" style="display:block;font-weight:600">'
+        + '<div class="mycertif-cb__meta" style="min-width:0;flex:1">'
+        + '<span class="mycertif-cb__nama" style="display:block;font-weight:600">'
         + esc(it.label || it.value) + '</span>'
-        + (it.sub ? '<span class="siaga-cb__sub" style="display:block;font-size:.7rem;opacity:.75">'
+        + (it.sub ? '<span class="mycertif-cb__sub" style="display:block;font-size:.7rem;opacity:.75">'
           + esc(it.sub) + '</span>' : '')
         + '</div>'
         + (badge ? '<span class="gde-status' + tone + '">' + esc(badge) + '</span>' : '')
@@ -862,18 +1134,18 @@ var SIAGA = (function () {
         return gab.indexOf(q) !== -1;
       });
       if (!tersaring.length) {
-        panel.innerHTML = '<div class="siaga-cb__info">Tidak ada yang cocok dengan "' + esc(q) + '".</div>';
+        panel.innerHTML = '<div class="mycertif-cb__info">Tidak ada yang cocok dengan "' + esc(q) + '".</div>';
         return;
       }
       var potong = tersaring.slice(0, 60);
-      var kepala = q ? ('<div class="siaga-cb__hitung">' + potong.length + ' dari ' + tersaring.length + ' hasil</div>') : '';
+      var kepala = q ? ('<div class="mycertif-cb__hitung">' + potong.length + ' dari ' + tersaring.length + ' hasil</div>') : '';
       panel.innerHTML = kepala + potong.map(labelItem).join('')
         + (tersaring.length > potong.length
-          ? '<div class="siaga-cb__info">Persempit pencarian untuk melihat sisanya.</div>' : '');
+          ? '<div class="mycertif-cb__info">Persempit pencarian untuk melihat sisanya.</div>' : '');
     }
 
     function sorot(idx) {
-      var nodes = qsa('.siaga-cb__item', panel);
+      var nodes = qsa('.mycertif-cb__item', panel);
       if (!nodes.length) return;
       if (idx < 0) idx = 0;
       if (idx >= nodes.length) idx = nodes.length - 1;
@@ -922,7 +1194,7 @@ var SIAGA = (function () {
       if (e.key === 'ArrowDown') { e.preventDefault(); if (!wrap.classList.contains('is-open')) { render(); buka(); } sorot(aktif + 1); return; }
       if (e.key === 'ArrowUp') { e.preventDefault(); sorot(aktif - 1); return; }
       if (e.key === 'Enter') {
-        var nodes = qsa('.siaga-cb__item', panel);
+        var nodes = qsa('.mycertif-cb__item', panel);
         if (wrap.classList.contains('is-open') && nodes.length) {
           e.preventDefault();
           e.stopPropagation();
@@ -1115,7 +1387,7 @@ var SIAGA = (function () {
   function renderSidebar() {
     var menuUtama = [
       { key: 'dashboard', label: 'Dashboard', ikon: 'bi-speedometer2' },
-      { key: 'data', label: 'Data Sertifikasi', ikon: 'bi-card-checklist', urgent: true },
+      { key: 'data', label: 'Data Sertifikasi', ikon: 'bi-card-checklist', urgent: true, verif: true },
       { key: 'register', label: 'Input Data', ikon: 'bi-plus-circle' },
       { key: 'pekerja', label: 'Profil Pekerja', ikon: 'bi-person-vcard' },
       { key: 'notifikasi', label: 'Notifikasi', ikon: 'bi-bell', badge: true }
@@ -1123,7 +1395,6 @@ var SIAGA = (function () {
     var menuAdmin = [
       { key: 'masteruser', label: 'Master User', ikon: 'bi-people' },
       { key: 'impor', label: 'Impor Data', ikon: 'bi-box-arrow-in-down' },
-      { key: 'mastersertifikasi', label: 'Jenis Sertifikasi', ikon: 'bi-award' },
       { key: 'pengaturan', label: 'Pengaturan', ikon: 'bi-sliders' }
     ];
     var menuAkun = [
@@ -1137,6 +1408,7 @@ var SIAGA = (function () {
         + '<i class="bi ' + m.ikon + '"></i><span>' + esc(m.label) + '</span>'
         + (m.badge ? '<span class="gde-nav__count" data-notif-badge style="display:none">0</span>' : '')
         + (m.urgent ? '<span class="gde-nav__count" data-urgent-badge style="display:none">0</span>' : '')
+        + (m.verif ? '<span class="gde-nav__count gde-nav__count--verif" data-verif-badge style="display:none">0</span>' : '')
         + '</a></li>';
     }
 
@@ -1144,19 +1416,19 @@ var SIAGA = (function () {
     var u = pengguna();
 
     return ''
-      + '<aside class="gde-sidebar" id="siagaSidebar">'
+      + '<aside class="gde-sidebar" id="mycertifSidebar">'
       + '  <div class="gde-sidebar__brand">'
       + '    <div class="gde-sidebar__mark">S</div>'
       + '    <div class="gde-sidebar__brandmeta">'
-      + '      <span class="gde-sidebar__brandname">SIAGA</span>'
+      + '      <span class="gde-sidebar__brandname">myCertif</span>'
       + '      <span class="gde-sidebar__brandsub">Sertifikasi Patuha</span>'
       + '    </div>'
       + '  </div>'
-      + '  <div class="siaga-user-chip">'
+      + '  <div class="mycertif-user-chip">'
       + '    <span class="gde-avatar">' + esc(inisial(u.nama_lengkap)) + '</span>'
-      + '    <div class="siaga-user-chip__meta">'
-      + '      <span class="siaga-user-chip__nama">' + esc(u.nama_lengkap || '-') + '</span>'
-      + '      <span class="siaga-user-chip__role">' + esc(u.role_label || u.role || '') + '</span>'
+      + '    <div class="mycertif-user-chip__meta">'
+      + '      <span class="mycertif-user-chip__nama">' + esc(u.nama_lengkap || '-') + '</span>'
+      + '      <span class="mycertif-user-chip__role">' + esc(u.role_label || u.role || '') + '</span>'
       + '    </div>'
       + '  </div>'
       + '  <div class="gde-sidebar__label">Menu Utama</div>'
@@ -1177,22 +1449,22 @@ var SIAGA = (function () {
     return ''
       + '<header class="gde-topbar">'
       + '  <div class="gde-topbar__inner">'
-      + '    <button class="gde-icon-btn gde-sidebar__toggle" id="siagaSidebarToggle" type="button" aria-label="Buka menu">'
+      + '    <button class="gde-icon-btn gde-sidebar__toggle" id="mycertifSidebarToggle" type="button" aria-label="Buka menu">'
       + '      <i class="bi bi-list"></i></button>'
       + '    <div class="gde-brand">'
       + '      <div class="gde-brand__divider"></div>'
       + '      <div>'
-      + '        <span class="gde-brand__section" id="siagaPageTitle">Dashboard</span>'
-      + '        <span class="gde-brand__sub" id="siagaPageSub">Ringkasan masa berlaku sertifikasi</span>'
+      + '        <span class="gde-brand__section" id="mycertifPageTitle">Dashboard</span>'
+      + '        <span class="gde-brand__sub" id="mycertifPageSub">Ringkasan masa berlaku sertifikasi</span>'
       + '      </div>'
       + '    </div>'
       + '    <div class="gde-topbar__spacer"></div>'
       + '    <div class="gde-topbar__actions">'
       + '      <button class="gde-icon-btn" type="button" data-view="notifikasi" title="Notifikasi" style="position:relative">'
       + '        <i class="bi bi-bell"></i>'
-      + '        <span id="siagaTopbarNotifCount" class="gde-nav__count" style="position:absolute;top:-6px;right:-6px;display:none">0</span>'
+      + '        <span id="mycertifTopbarNotifCount" class="gde-nav__count" style="position:absolute;top:-6px;right:-6px;display:none">0</span>'
       + '      </button>'
-      + '      <div class="gde-dropdown" id="siagaUserDropdown">'
+      + '      <div class="gde-dropdown" id="mycertifUserDropdown">'
       + '        <button class="gde-icon-btn" type="button" data-gde-dropdown title="Akun" style="width:auto;padding:0 .5rem;gap:6px">'
       + '          <span class="gde-avatar gde-avatar--sm">' + esc(inisial(u.nama_lengkap)) + '</span>'
       + '          <i class="bi bi-chevron-down" style="font-size:.7rem"></i>'
@@ -1206,7 +1478,7 @@ var SIAGA = (function () {
       + '          <a class="gde-dropdown__item" href="#/profil"><i class="bi bi-person-circle"></i> Profil saya</a>'
       + '          <a class="gde-dropdown__item" href="#/keamanan"><i class="bi bi-shield-lock"></i> Username &amp; password</a>'
       + '          <div class="gde-dropdown__divider"></div>'
-      + '          <a class="gde-dropdown__item" href="#" id="siagaLogout"><i class="bi bi-box-arrow-right"></i> Keluar</a>'
+      + '          <a class="gde-dropdown__item" href="#" id="mycertifLogout"><i class="bi bi-box-arrow-right"></i> Keluar</a>'
       + '        </div>'
       + '      </div>'
       + '    </div>'
@@ -1215,27 +1487,27 @@ var SIAGA = (function () {
   }
 
   function renderShell() {
-    var wadah = el('siagaApp');
+    var wadah = el('mycertifApp');
     wadah.innerHTML = ''
-      + '<div class="siaga-app">'
+      + '<div class="mycertif-app">'
       + renderTopbar()
-      + '<div class="gde-shell" id="siagaShell">'
+      + '<div class="gde-shell" id="mycertifShell">'
       + renderSidebar()
-      + '<main class="gde-content" id="siagaContent"></main>'
+      + '<main class="gde-content" id="mycertifContent"></main>'
       + '</div>'
       + '<footer class="gde-footer"><div class="gde-footer__inner">'
       + '<p>&copy; ' + new Date().getFullYear() + ' ' + esc(APP.owner) + '</p>'
       + '<p>' + esc(APP.name) + ' ' + esc(APP.version) + '</p>'
       + '</div></footer>'
       + '</div>'
-      + '<div class="gde-scrim" id="siagaScrim"></div>';
+      + '<div class="gde-scrim" id="mycertifScrim"></div>';
     pasangPerilakuShell();
   }
 
   function pasangPerilakuShell() {
-    var sidebar = el('siagaSidebar');
-    var scrim = el('siagaScrim');
-    var toggle = el('siagaSidebarToggle');
+    var sidebar = el('mycertifSidebar');
+    var scrim = el('mycertifScrim');
+    var toggle = el('mycertifSidebarToggle');
 
     if (toggle) {
       toggle.addEventListener('click', function () {
@@ -1272,8 +1544,8 @@ var SIAGA = (function () {
       var key = link.getAttribute('data-view');
       if (!VIEWS[key]) return;
       e.preventDefault();
-      var drawer = el('siagaSidebar');
-      var sc = el('siagaScrim');
+      var drawer = el('mycertifSidebar');
+      var sc = el('mycertifScrim');
       if (drawer) drawer.classList.remove('is-open');
       if (sc) sc.classList.remove('is-open');
       navigasi(key);
@@ -1281,7 +1553,7 @@ var SIAGA = (function () {
 
     /* tombol keluar dipasang ulang tiap render, jadi pakai delegasi */
     document.addEventListener('click', function (e) {
-      var keluar = e.target.closest('#siagaLogout');
+      var keluar = e.target.closest('#mycertifLogout');
       if (!keluar) return;
       e.preventDefault();
       konfirmasi({
@@ -1319,7 +1591,7 @@ var SIAGA = (function () {
      11. HALAMAN LOGIN
      ======================================================================== */
   function tampilkanLogin(pesanAwal) {
-    var wadah = el('siagaApp');
+    var wadah = el('mycertifApp');
     if (typeof window.tutupSemuaModal === 'function') { try { window.tutupSemuaModal(); } catch (e) { } }
     modalTutupSemua();
     wadah.innerHTML = pemuatHtml('Menyiapkan halaman masuk...');
@@ -1387,13 +1659,15 @@ var SIAGA = (function () {
     qs: qs, qsa: qsa, el: el, esc: esc, attr: attr, on: on, debounce: debounce, num: num,
 
     // format
-    tglIndo: tglIndo, tglSingkat: tglSingkat, iso: iso, waktuLalu: waktuLalu,
-    angka: angka, ukuran: ukuran, inisial: inisial, pad: pad, toDate: toDate,
+    tglIndo: tglIndo, tglSingkat: tglSingkat, waktuIndo: waktuIndo, iso: iso, waktuLalu: waktuLalu,
+    angka: angka, ukuran: ukuran, inisial: inisial, pad: pad, toDate: toDate, toDateTime: toDateTime,
     sisaTeks: sisaTeks, sisaBulanTeks: sisaBulanTeks,
+    masaBerlakuTeks: masaBerlakuTeks, durasiKalender: durasiKalender, durasiDariHari: durasiDariHari,
     statusBadge: statusBadge, statusTone: statusTone, statusLabel: statusLabel, statusIcon: statusIcon,
+    verifikasiBadge: verifikasiBadge, verifikasiLabel: verifikasiLabel, verifikasiDef: verifikasiDef,
 
     // ui
-    toast: toast, sukses: sukses, gagal: gagal, info: info, ingat: ingat,
+    toast: toast, sukses: sukses, gagal: gagal, info: info, ingat: ingat, dialogForm: dialogForm,
     modalBuka: modalBuka, modalTutup: modalTutup, modalTutupSemua: modalTutupSemua,
     konfirmasi: konfirmasi, pemuatHtml: pemuatHtml, galatHtml: galatHtml, kosongHtml: kosongHtml,
     isiHtml: isiHtml, isiTeks: isiTeks,
@@ -1426,5 +1700,5 @@ var SIAGA = (function () {
 })();
 
 /* Dijalankan setelah Index.html selesai memuat DOM. */
-window.SIAGA_READY = false;
+window.MYCERTIF_READY = false;
 </script>

@@ -1,7 +1,7 @@
 <!--
   ============================================================================
-  SIAGA SERTIFIKASI — Login.html
-  Halaman masuk. Dimuat oleh SIAGA.tampilkanLogin() lewat getView('Login').
+  myCertif — Login.html
+  Halaman masuk. Dimuat oleh MyCertif.tampilkanLogin() lewat getView('Login').
 
   CARA MASUK — dua kolom:
       Username = potongan NAMA DEPAN   (contoh: adiasa)
@@ -16,21 +16,21 @@
   Master_User, aplikasi langsung masuk tanpa halaman ini.
   ============================================================================
 -->
-<div class="siaga-login">
+<div class="mycertif-login">
 
   <!-- ============================ KIRI: BRANDING ============================ -->
-  <section class="siaga-login__brand">
-    <div class="siaga-login__logo">
-      <div class="siaga-login__mark">S</div>
+  <section class="mycertif-login__brand">
+    <div class="mycertif-login__logo">
+      <div class="mycertif-login__mark">S</div>
       <div>
-        <div style="font-weight:700;font-size:1.05rem;line-height:1.2">SIAGA Sertifikasi</div>
+        <div style="font-weight:700;font-size:1.05rem;line-height:1.2">myCertif</div>
         <div style="font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.6)">
           Unit Patuha
         </div>
       </div>
     </div>
 
-    <div class="siaga-login__title">
+    <div class="mycertif-login__title">
       <h1>Pengingat Masa Berlaku Sertifikasi Karyawan</h1>
       <p>
         Satu tempat untuk memantau seluruh sertifikasi kompetensi karyawan Unit Patuha —
@@ -38,7 +38,7 @@
         sebelum masa berlaku habis.
       </p>
 
-      <ul class="siaga-login__points">
+      <ul class="mycertif-login__points">
         <li>
           <i class="bi bi-clock-history"></i>
           <span><b>Pengingat berjenjang</b> — notifikasi terkirim saat sisa 9, 6, 3, 2, dan 1 bulan.</span>
@@ -54,14 +54,14 @@
       </ul>
     </div>
 
-    <div class="siaga-login__foot">
-      &copy; <span id="siagaLoginTahun"></span> PT Geo Dipa Energi (Persero) — Unit Patuha
+    <div class="mycertif-login__foot">
+      &copy; <span id="mycertifLoginTahun"></span> PT Geo Dipa Energi (Persero) — Unit Patuha
     </div>
   </section>
 
   <!-- ============================ KANAN: FORM ============================ -->
-  <section class="siaga-login__panel">
-    <div class="siaga-login__card">
+  <section class="mycertif-login__panel">
+    <div class="mycertif-login__card">
       <div class="gde-card">
         <div class="gde-card__body" style="padding:2rem">
 
@@ -69,27 +69,27 @@
           <p>Masuk dengan <b>nama depan</b> sebagai username dan <b>Employee Code</b> sebagai password.</p>
 
           <!-- notifikasi login otomatis (kalau ada) -->
-          <div id="siagaLoginAuto" class="gde-alert gde-alert--info gde-u-hide" style="margin-bottom:1rem">
+          <div id="mycertifLoginAuto" class="gde-alert gde-alert--info gde-u-hide" style="margin-bottom:1rem">
             <i class="bi bi-stars gde-alert__icon"></i>
             <div class="gde-alert__body">
               <strong>Masuk otomatis</strong>
-              <span id="siagaLoginAutoMsg"></span>
+              <span id="mycertifLoginAutoMsg"></span>
             </div>
           </div>
 
-          <div id="siagaLoginAlert" class="gde-alert gde-alert--danger gde-u-hide" style="margin-bottom:1rem">
+          <div id="mycertifLoginAlert" class="gde-alert gde-alert--danger gde-u-hide" style="margin-bottom:1rem">
             <i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>
-            <div class="gde-alert__body"><strong>Tidak dapat masuk</strong><span id="siagaLoginAlertMsg"></span></div>
+            <div class="gde-alert__body"><strong>Tidak dapat masuk</strong><span id="mycertifLoginAlertMsg"></span></div>
           </div>
 
-          <form id="siagaLoginForm" autocomplete="on" novalidate>
+          <form id="mycertifLoginForm" autocomplete="on" novalidate>
 
             <!-- ===================== USERNAME (NAMA DEPAN) ===================== -->
             <div style="margin-bottom:1rem">
-              <label class="gde-label" for="siagaLoginKode">
+              <label class="gde-label" for="mycertifLoginKode">
                 Username <span class="gde-req">*</span>
               </label>
-              <input class="gde-input" type="text" id="siagaLoginKode" name="username"
+              <input class="gde-input" type="text" id="mycertifLoginKode" name="username"
                      placeholder="contoh: adiasa" autocomplete="username"
                      autocapitalize="none" spellcheck="false" required
                      style="font-size:1.05rem;font-weight:600;letter-spacing:.02em">
@@ -99,34 +99,34 @@
             </div>
 
             <!-- ===================== PASSWORD (EMPLOYEE CODE) ===================== -->
-            <div id="siagaLoginPassWrap" style="margin-bottom:1rem">
-              <label class="gde-label" for="siagaLoginPassword">
+            <div id="mycertifLoginPassWrap" style="margin-bottom:1rem">
+              <label class="gde-label" for="mycertifLoginPassword">
                 Password <span class="gde-req">*</span>
               </label>
-              <div class="siaga-pass">
-                <input class="gde-input" type="password" id="siagaLoginPassword" name="password"
+              <div class="mycertif-pass">
+                <input class="gde-input" type="password" id="mycertifLoginPassword" name="password"
                        placeholder="contoh: 4122196-C" autocomplete="current-password">
-                <button class="siaga-pass__toggle" type="button" id="siagaLoginTogglePass"
+                <button class="mycertif-pass__toggle" type="button" id="mycertifLoginTogglePass"
                         aria-label="Tampilkan password"><i class="bi bi-eye"></i></button>
               </div>
-              <div class="gde-hint" id="siagaLoginPassHint">
+              <div class="gde-hint" id="mycertifLoginPassHint">
                 Password Anda adalah <b>Employee Code</b> lengkap (contoh: 4122196-C).
                 Bila sudah diganti lalu lupa, minta Human Capital melakukan reset.
               </div>
             </div>
 
-            <button class="gde-btn gde-btn--primary gde-btn--block gde-btn--lg" type="submit" id="siagaLoginSubmit">
+            <button class="gde-btn gde-btn--primary gde-btn--block gde-btn--lg" type="submit" id="mycertifLoginSubmit">
               <i class="bi bi-box-arrow-in-right"></i> Masuk
             </button>
           </form>
 
           <div style="margin-top:.9rem;text-align:center">
-            <button class="gde-btn gde-btn--link gde-btn--sm" type="button" id="siagaLoginCobaAuto">
+            <button class="gde-btn gde-btn--link gde-btn--sm" type="button" id="mycertifLoginCobaAuto">
               <i class="bi bi-arrow-repeat"></i> Coba masuk otomatis lewat akun Google
             </button>
           </div>
 
-          <div class="siaga-login__hint">
+          <div class="mycertif-login__hint">
             <b>Tidak bisa masuk?</b> Username = nama depan Anda, password = Employee Code penuh.
             Daftar lengkap username &amp; password ada pada sheet <code>Master_User</code>
             (kolom Username dan Password). Bila akun terkunci karena percobaan gagal berulang,
@@ -137,7 +137,7 @@
       </div>
 
       <p style="text-align:center;margin:.85rem 0 0;font-size:.7rem;color:var(--gde-muted-2)">
-        SIAGA Sertifikasi <span id="siagaLoginVersi"></span> — akses hanya untuk karyawan terdaftar.
+        myCertif <span id="mycertifLoginVersi"></span> — akses hanya untuk karyawan terdaftar.
       </p>
     </div>
   </section>
@@ -150,30 +150,30 @@
 function initLogin(pesanAwal) {
   'use strict';
 
-  var form = SIAGA.el('siagaLoginForm');
-  var inputKode = SIAGA.el('siagaLoginKode');
-  var wrapPass = SIAGA.el('siagaLoginPassWrap');
-  var inputPass = SIAGA.el('siagaLoginPassword');
-  var tombol = SIAGA.el('siagaLoginSubmit');
-  var toggle = SIAGA.el('siagaLoginTogglePass');
-  var kotakAlert = SIAGA.el('siagaLoginAlert');
-  var alertMsg = SIAGA.el('siagaLoginAlertMsg');
-  var kotakAuto = SIAGA.el('siagaLoginAuto');
-  var autoMsg = SIAGA.el('siagaLoginAutoMsg');
-  var tombolAuto = SIAGA.el('siagaLoginCobaAuto');
+  var form = MyCertif.el('mycertifLoginForm');
+  var inputKode = MyCertif.el('mycertifLoginKode');
+  var wrapPass = MyCertif.el('mycertifLoginPassWrap');
+  var inputPass = MyCertif.el('mycertifLoginPassword');
+  var tombol = MyCertif.el('mycertifLoginSubmit');
+  var toggle = MyCertif.el('mycertifLoginTogglePass');
+  var kotakAlert = MyCertif.el('mycertifLoginAlert');
+  var alertMsg = MyCertif.el('mycertifLoginAlertMsg');
+  var kotakAuto = MyCertif.el('mycertifLoginAuto');
+  var autoMsg = MyCertif.el('mycertifLoginAutoMsg');
+  var tombolAuto = MyCertif.el('mycertifLoginCobaAuto');
   // Password selalu ditampilkan. Akun yang passwordnya belum diisi (jarang)
   // tetap bisa masuk — server mengabaikan password pada kasus itu.
   var passDiminta = true;
   var sedangProses = false;
 
-  var tahun = SIAGA.el('siagaLoginTahun');
+  var tahun = MyCertif.el('mycertifLoginTahun');
   if (tahun) tahun.textContent = new Date().getFullYear();
-  var versi = SIAGA.el('siagaLoginVersi');
-  if (versi) versi.textContent = SIAGA.APP.version;
+  var versi = MyCertif.el('mycertifLoginVersi');
+  if (versi) versi.textContent = MyCertif.APP.version;
 
   /* ---------------- pesan ---------------- */
   function tampilkanGalat(pesan) {
-    if (!kotakAlert) { SIAGA.gagal(pesan); return; }
+    if (!kotakAlert) { MyCertif.gagal(pesan); return; }
     alertMsg.textContent = pesan;
     kotakAlert.classList.remove('gde-u-hide');
   }
@@ -187,7 +187,7 @@ function initLogin(pesanAwal) {
   }
 
   if (pesanAwal) tampilkanGalat(pesanAwal);
-  if (SIAGA.state.autoLoginInfo) tampilkanInfoAuto(SIAGA.state.autoLoginInfo);
+  if (MyCertif.state.autoLoginInfo) tampilkanInfoAuto(MyCertif.state.autoLoginInfo);
 
   setTimeout(function () { try { inputKode.focus(); } catch (e) { } }, 120);
 
@@ -204,7 +204,7 @@ function initLogin(pesanAwal) {
   /* ---------------- fokus & tanda ke kolom password ---------------- */
   function mintaPassword(pesan) {
     if (pesan) {
-      var hint = SIAGA.el('siagaLoginPassHint');
+      var hint = MyCertif.el('mycertifLoginPassHint');
       if (hint) hint.textContent = pesan;
     }
     try { inputPass.focus(); } catch (e) { }
@@ -213,35 +213,35 @@ function initLogin(pesanAwal) {
   /* ---------------- proses masuk ---------------- */
   function kirim() {
     sembunyikanGalat();
-    SIAGA.bersihkanInvalid(form);
+    MyCertif.bersihkanInvalid(form);
 
     var kode = String(inputKode.value || '').trim();
     var pass = String(inputPass.value || '');
 
-    if (!kode) { SIAGA.tandaiInvalid(inputKode, 'Username (nama depan) wajib diisi.'); return; }
-    if (!pass) { SIAGA.tandaiInvalid(inputPass, 'Password wajib diisi (Employee Code Anda).'); return; }
+    if (!kode) { MyCertif.tandaiInvalid(inputKode, 'Username (nama depan) wajib diisi.'); return; }
+    if (!pass) { MyCertif.tandaiInvalid(inputPass, 'Password wajib diisi (Employee Code Anda).'); return; }
     if (sedangProses) return;
     sedangProses = true;
 
-    SIAGA.tombolSibuk(tombol, true, 'Memeriksa...');
-    SIAGA.login(kode, pass).then(function (data) {
+    MyCertif.tombolSibuk(tombol, true, 'Memeriksa...');
+    MyCertif.login(kode, pass).then(function (data) {
       // ---- akun tidak punya password (mis. dibuat manual) ----
       if (data && data.butuh_password) {
         sedangProses = false;
-        SIAGA.tombolSibuk(tombol, false);
-        SIAGA.ingat('Akun ' + (data.nama_lengkap || kode)
+        MyCertif.tombolSibuk(tombol, false);
+        MyCertif.ingat('Akun ' + (data.nama_lengkap || kode)
           + ' belum memiliki password. Minta Human Capital melengkapi, atau tekan Masuk sekali lagi.',
           'Password belum diisi');
         return null;
       }
 
       // ---- berhasil ----
-      SIAGA.sukses('Selamat datang, ' + ((data.user && data.user.nama_lengkap) || kode) + '.',
+      MyCertif.sukses('Selamat datang, ' + ((data.user && data.user.nama_lengkap) || kode) + '.',
         'Berhasil masuk');
-      return SIAGA.masukKeAplikasi();
+      return MyCertif.masukKeAplikasi();
     }).catch(function (err) {
       sedangProses = false;
-      SIAGA.tombolSibuk(tombol, false);
+      MyCertif.tombolSibuk(tombol, false);
       var msg = (err && err.message) ? err.message : 'Tidak dapat masuk. Coba lagi.';
       tampilkanGalat(msg);
       if (/password/i.test(msg)) {
@@ -273,18 +273,18 @@ function initLogin(pesanAwal) {
   if (tombolAuto) {
     tombolAuto.addEventListener('click', function () {
       sembunyikanGalat();
-      SIAGA.tombolSibuk(tombolAuto, true, 'Memeriksa akun Google...');
-      SIAGA.cobaLoginOtomatis().then(function (berhasil) {
-        SIAGA.tombolSibuk(tombolAuto, false);
+      MyCertif.tombolSibuk(tombolAuto, true, 'Memeriksa akun Google...');
+      MyCertif.cobaLoginOtomatis().then(function (berhasil) {
+        MyCertif.tombolSibuk(tombolAuto, false);
         if (!berhasil) {
-          tampilkanInfoAuto(SIAGA.state.autoLoginInfo
+          tampilkanInfoAuto(MyCertif.state.autoLoginInfo
             || 'Email akun Google Anda belum terdaftar pada Master User. Masukkan Employee Code secara manual.');
           return;
         }
-        SIAGA.sukses('Berhasil masuk otomatis.', 'Masuk otomatis');
-        SIAGA.masukKeAplikasi();
+        MyCertif.sukses('Berhasil masuk otomatis.', 'Masuk otomatis');
+        MyCertif.masukKeAplikasi();
       }).catch(function (e) {
-        SIAGA.tombolSibuk(tombolAuto, false);
+        MyCertif.tombolSibuk(tombolAuto, false);
         tampilkanGalat(e.message || 'Login otomatis gagal.');
       });
     });

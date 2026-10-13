@@ -1,7 +1,7 @@
 # gde-ui-templates — Vendored UI Assets
 
 Folder ini berisi aset font, ikon, dan library JS yang **di-self-host** (vendored) agar
-aplikasi SIAGA tidak lagi bergantung pada CDN eksternal. Semua berkas di sini dilayani
+aplikasi myCertif tidak lagi bergantung pada CDN eksternal. Semua berkas di sini dilayani
 langsung dari `public/`, sehingga tidak ada request keluar ke `fonts.googleapis.com`,
 `fonts.gstatic.com`, atau `cdn.jsdelivr.net` saat runtime.
 

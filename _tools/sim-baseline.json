@@ -1,0 +1,80 @@
+{
+  "pada": "2026-10-12T04:04:20.535Z",
+  "volume": {
+    "users": 220,
+    "files": 260,
+    "notif": 140
+  },
+  "skenario": [
+    {
+      "nama": "apiGetSession",
+      "reads": 10,
+      "cellsRead": 408,
+      "writes": 1,
+      "ringkas": "ok"
+    },
+    {
+      "nama": "apiGetMeta",
+      "reads": 24,
+      "cellsRead": 6320,
+      "writes": 0,
+      "ringkas": "ok"
+    },
+    {
+      "nama": "apiGetDashboard",
+      "reads": 1316,
+      "cellsRead": 132146,
+      "writes": 0,
+      "ringkas": "ok"
+    },
+    {
+      "nama": "apiListFiles (hal.1)",
+      "reads": 1311,
+      "cellsRead": 121286,
+      "writes": 0,
+      "ringkas": "ok"
+    },
+    {
+      "nama": "apiListFiles (cari)",
+      "reads": 1311,
+      "cellsRead": 121286,
+      "writes": 0,
+      "ringkas": "ok"
+    },
+    {
+      "nama": "apiListEmployees",
+      "reads": 11,
+      "cellsRead": 12086,
+      "writes": 0,
+      "ringkas": "ok"
+    },
+    {
+      "nama": "apiGetEmployeeProfile",
+      "reads": 20,
+      "cellsRead": 12789,
+      "writes": 0,
+      "ringkas": "ok"
+    },
+    {
+      "nama": "apiGetRingkasanHeader",
+      "reads": 1312,
+      "cellsRead": 122696,
+      "writes": 0,
+      "ringkas": "ok"
+    },
+    {
+      "nama": "apiLogin (2 user)",
+      "reads": 15,
+      "cellsRead": 5593,
+      "writes": 10,
+      "ringkas": "ok"
+    },
+    {
+      "nama": "jalankanReminder_",
+      "reads": 1576,
+      "cellsRead": 750982,
+      "writes": 181,
+      "ringkas": "ok"
+    }
+  ]
+}

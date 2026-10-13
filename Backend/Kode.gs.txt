@@ -1,6 +1,6 @@
 /**
  * ============================================================================
- * SIAGA SERTIFIKASI — Kode.gs  (MAIN PROCESS)
+ * myCertif — Kode.gs  (MAIN PROCESS)
  * Sistem Informasi & Pengingat Masa Berlaku Sertifikasi
  * PT Geo Dipa Energi (Persero) — Unit Patuha
  * ============================================================================
@@ -33,7 +33,7 @@
  *   2. membuat sheet yang belum ada + merapikan header yang berubah
  *   3. memastikan semua key Config default ada
  *   4. membuat folder Drive untuk lampiran & hasil export
- *   5. mengisi Master_Sertifikasi (69 jenis hasil normalisasi data lama)
+ *   5. mengisi akun awal Super Admin & Human Capital
  *   6. membuat akun awal: superadmin + HC
  *   7. menandai setup selesai (Script Property)
  *
@@ -45,16 +45,16 @@
 // 1. KONSTANTA APLIKASI
 // ============================================================================
 
-var APP_NAME = 'SIAGA Sertifikasi';
+var APP_NAME = 'myCertif';
 var APP_SUB = 'Sistem Informasi & Pengingat Masa Berlaku Sertifikasi';
 var APP_OWNER = 'PT Geo Dipa Energi (Persero) — Unit Patuha';
-var APP_VERSION = 'v1.3.0';
+var APP_VERSION = 'v1.4.0';
 var DEFAULT_TZ = 'Asia/Jakarta';
 
 /** ID Spreadsheet database. WAJIB diisi (hanya ID, bukan URL). */
 var SPREADSHEET_ID = '1-vyDV5qNFCZ8xLI7RYMAQyftquhq3_V-0cWqEQjajmk';
 
-/** Folder Drive lampiran. Kosong = dibuat otomatis ("SIAGA_Sertifikasi_Lampiran"). */
+/** Folder Drive lampiran. Kosong = dibuat otomatis ("myCertif_Lampiran"). */
 var DRIVE_FOLDER_ID = '13cdj4kuTvc07AEVbWXvTmmCRAdBGEEnO';
 
 /** Folder Drive khusus hasil export. Kosong = subfolder otomatis. */
@@ -64,8 +64,18 @@ var DRIVE_FOLDER_EXPORT_ID = '1IiPx80QnJK8nttMlXZrjL3nMiLNJd-9v';
 var EMAIL_PENGIRIM = 'halopatuha@gmail.com';
 
 // ---------- penanda bootstrap ----------
-var BOOTSTRAP_PROP_ = 'SIAGA_BOOTSTRAP';
-var BOOTSTRAP_VERSION_ = 'v1.3.0';
+var BOOTSTRAP_PROP_ = 'MYCERTIF_BOOTSTRAP';
+/**
+ * Nama properti LAMA (ketika aplikasi masih bernama SIAGA). Dibaca sebagai
+ * cadangan supaya instalasi yang sudah jalan TIDAK menjalankan kickstart ulang
+ * hanya karena aplikasi berganti nama.
+ */
+var BOOTSTRAP_PROP_LAMA_ = 'SIAGA_BOOTSTRAP';
+
+/** Penanda terakhir kali key Config default disisipkan ke sheet. */
+var CONFIG_SEED_PROP_ = 'MYCERTIF_CONFIG_SEED';
+var CONFIG_SEED_VERSION_ = 'v1.4.0';
+var BOOTSTRAP_VERSION_ = 'v1.4.0';
 
 /**
  * PENANDA BERKAS (jangan diubah manual).
@@ -80,11 +90,11 @@ var BOOTSTRAP_VERSION_ = 'v1.3.0';
  *   Importer.gs    impor data lama + pembuat Master User otomatis
  *   subprocess.gs  logika bisnis: user, sertifikasi, dashboard, reminder, ekspor
  */
-var MARKER_KODE_ = 'v1.3.0';
-var KODE_BUILD_ = 'Kode.gs v1.3.0';
+var MARKER_KODE_ = 'v1.4.0';
+var KODE_BUILD_ = 'Kode.gs v1.4.0';
 
 /** Penanda versi yang diharapkan untuk seluruh berkas backend. */
-var VERSI_BACKEND_ = 'v1.3.0';
+var VERSI_BACKEND_ = 'v1.4.0';
 
 // ---------- batas unggah ----------
 var MAX_UPLOAD_MB_ = 12;
@@ -181,11 +191,19 @@ var CONFIG_DEFAULTS = {
   'reminder_ke_hc': 'TRUE',
   'reminder_ke_atasan': 'TRUE',
   'reminder_extra_emails': '',
+  /*
+   * Alamat tujuan pengingat diambil dari Master_User, bukan dari alamat
+   * bawaan aplikasi. PRIBADI = kolom Email_Pribadi lebih diutamakan
+   * (default, sesuai permintaan: kirim ke email pribadi masing-masing).
+   * Bila kolom utama kosong, otomatis memakai kolom cadangan yang masih
+   * berasal dari Master_User juga - bukan alamat default aplikasi.
+   */
+  'reminder_email_utama': 'PRIBADI',   // PRIBADI | PERUSAHAAN
   'reminder_max_email_per_jalan': '90',
   'reminder_ulang_kadaluarsa_hari': '7',
   'email_pengirim': '',
-  'email_subject_prefix': '[SIAGA Sertifikasi]',
-  'email_footer': 'Email otomatis dari SIAGA Sertifikasi Unit Patuha. Mohon tidak membalas email ini.',
+  'email_subject_prefix': '[myCertif]',
+  'email_footer': 'Email otomatis dari myCertif Unit Patuha. Mohon tidak membalas email ini.',
 
   // ---------- tampilan ----------
   'dashboard_prioritas_limit': '8',
@@ -195,6 +213,9 @@ var CONFIG_DEFAULTS = {
   // ---------- infrastruktur ----------
   'drive_folder_id': '',
   'drive_folder_export_id': '',
+  // CATATAN: dua nilai di bawah HANYA dipakai sebagai alamat awal saat
+  // membuat akun Super Admin / HC pertama kali (seedAwal_) - bukan tujuan
+  // pengiriman pengingat. Pengingat selalu memakai email dari Master_User.
   'superadmin_email': 'superadmin@gde.co.id',
   'hc_email': 'hc@gde.co.id',
   'divisi_options': '',
@@ -209,7 +230,7 @@ var CONFIG_DEFAULTS = {
 // 3. DEFINISI STATUS
 // ============================================================================
 /**
- * Enam tingkat status. `key` disimpan di kolom Status (Master_File).
+ * Enam tingkat status. `key` disimpan di kolom Status (T_Sertifikasi).
  * `tone` dipakai frontend untuk memilih kelas badge GDE.
  * Urutan array = urutan kepentingan (paling mendesak lebih dulu).
  */
@@ -274,20 +295,27 @@ var SCHEMAS = {
   'Config': ['Key', 'Value'],
 
   // ------------------------------------------------------------------ USERS
+  /*
+   * Urutan kolom mengikuti permintaan: enam kolom inti lebih dulu, baru kolom
+   * pendukung. Kolom inti (sesuai spesifikasi):
+   *   Employee_code -> Nama_Lengkap -> Username -> Password -> Role -> Working_Location
+   * Kolom pendukung tetap dipertahankan karena dipakai fitur yang sudah berjalan
+   * (notifikasi email, keamanan akun, profil pekerja) — lihat README-DEPLOY.
+   */
   'Master_User': [
-    // ---- spesifikasi ----
+    // ---- inti (spesifikasi) ----
     'Employee_code',        // [SPEC] kunci utama, mis. 4122196-C
     'Nama_Lengkap',         // [SPEC]
-    'Username',             // [SPEC] default = nama depan
-    'Password',             // [SPEC] disimpan APA ADANYA (plaintext, tanpa hash)
+    'Username',             // [SPEC] nama depan, huruf kecil
+    'Password',             // [SPEC] = Employee_code (plaintext, tanpa hash)
     'Role',                 // [SPEC] HC | EMP | SA
-    'Email_Perusahaan',     // [SPEC] tujuan notifikasi
-    'Email_Pribadi',        // [SPEC] tujuan notifikasi cadangan
-    // ---- tambahan ----
+    'Working_Location',     // [SPEC] lokasi kerja
+    // ---- pendukung ----
+    'Email_Perusahaan',     // tujuan notifikasi
+    'Email_Pribadi',        // tujuan notifikasi cadangan
     'Nama_Depan',
     'Divisi',
     'Jabatan',
-    'Lokasi_Kerja',
     'No_HP',
     'Email_Atasan',
     'Status',               // ACTIVE | INACTIVE
@@ -300,30 +328,41 @@ var SCHEMAS = {
     'Created_By'
   ],
 
-  // ------------------------------------------------------------------ FILES
-  'Master_File': [
-    // ---- spesifikasi ----
-    'Doc_id',                       // [SPEC] DOC-YYYYMM-XXXX
-    'Employee_id',                  // [SPEC] relasi ke Master_User.Employee_code
+  // ------------------------------------------------------- DATA SERTIFIKASI
+  /*
+   * T_Sertifikasi = data sertifikasi per karyawan (1 karyawan : banyak sertifikasi).
+   * Menggantikan sheet Master_File. Jenjang "jenis sertifikasi" (Master_Sertifikasi
+   * lama) DIHAPUS — nama sertifikasi & masa berlaku diisi manual saat input.
+   *
+   * Kolom inti (spesifikasi):
+   *   Cert_Id -> Employee_Code -> No_Sertifikat -> Nama_Sertifikasi
+   *   -> Start_Pelaksanaan -> End_Pelaksanaan -> Tanggal_Sertifikasi
+   *   -> Penyelenggara -> Expired_at -> Recom_Update
+   */
+  'T_Sertifikasi': [
+    // ---- inti (spesifikasi) ----
+    'Cert_Id',                      // [SPEC] kunci utama, mis. DOC-202601-0001
+    'Employee_Code',                // [SPEC] relasi ke Master_User.Employee_code
+    'No_Sertifikat',                // [SPEC] nomor pada dokumen sertifikat
     'Nama_Sertifikasi',             // [SPEC]
-    'Start_pelaksanaan',            // [SPEC] tanggal mulai pelaksanaan
-    'End_pelaksanaan',              // [SPEC] tanggal selesai pelaksanaan
-    'Tanggal_sertifikasi',          // [SPEC] nullable
-    'Tanggal_waktu_perpanjangan',   // [SPEC] nullable, diisi saat sudah diperpanjang
+    'Start_Pelaksanaan',            // [SPEC] tanggal mulai pelaksanaan
+    'End_Pelaksanaan',              // [SPEC] tanggal selesai pelaksanaan
+    'Tanggal_Sertifikasi',          // [SPEC] nullable
+    'Penyelenggara',                // [SPEC] lembaga penerbit/penyelenggara
     'Expired_at',                   // [SPEC] WAJIB
-    'Sisa_masa_berlaku_day',        // [SPEC] dihitung
-    'Sisa_masa_berlaku_by_month',   // [SPEC] dihitung
-    'Status',                       // [SPEC] dihitung dari ambang Config
-    'Link_file',                    // [SPEC] URL Drive
-    // ---- tambahan ----
+    'Recom_Update',                 // [SPEC] rekomendasi perpanjangan = Expired_at - 3 bulan
+    // ---- kolom hitung (diisi otomatis oleh mesin status) ----
+    'Sisa_masa_berlaku_day',        // dihitung ulang dari Expired_at
+    'Sisa_masa_berlaku_by_month',   // dihitung ulang (hari / 30)
+    'Status',                       // dihitung dari ambang Config
+    // ---- pendukung ----
+    'Masa_berlaku_bulan',           // 36 / 60 / lainnya (dasar hitung Expired_at)
+    'Tanggal_waktu_perpanjangan',   // nullable, diisi saat sudah diperpanjang
+    'Link_file',                    // URL Drive
     'File_id',
     'File_name',
     'Mime_type',
     'Ukuran_file',
-    'Masa_berlaku_bulan',
-    'Kategori',
-    'Penerbit',
-    'No_sertifikat',
     'Status_Verifikasi',            // PENDING | VERIFIED | REJECTED
     'Catatan',
     'Verified_By',
@@ -331,12 +370,6 @@ var SCHEMAS = {
     'Created_At',
     'Updated_At',
     'Created_By'
-  ],
-
-  // ------------------------------------------------------------ MASTER JENIS
-  'Master_Sertifikasi': [
-    'Cert_id', 'Nama_Sertifikasi', 'Kategori', 'Masa_berlaku_bulan',
-    'Penerbit', 'Aktif', 'Jumlah_pemegang', 'Created_At', 'Updated_At'
   ],
 
   // ---------------------------------------------------------------- SESSION
@@ -347,12 +380,12 @@ var SCHEMAS = {
 
   // ------------------------------------------------------------ NOTIFIKASI
   'T_Notifikasi': [
-    'Notif_id', 'Employee_code', 'Doc_id', 'Level', 'Status_key',
+    'Notif_id', 'Employee_code', 'Cert_Id', 'Level', 'Status_key',
     'Judul', 'Pesan', 'Is_Read', 'Read_At', 'Created_At'
   ],
 
   'T_Email_Log': [
-    'Log_id', 'Periode_key', 'Doc_id', 'Employee_code', 'Level',
+    'Log_id', 'Periode_key', 'Cert_Id', 'Employee_code', 'Level',
     'Penerima', 'Cc', 'Subject', 'Status', 'Error', 'Sent_At'
   ],
 
@@ -363,85 +396,18 @@ var SCHEMAS = {
 };
 
 // ============================================================================
-// 5. SEED MASTER SERTIFIKASI
+// 5. (DIHAPUS) SEED JENIS SERTIFIKASI
 // ============================================================================
-/**
- * 69 jenis sertifikasi hasil normalisasi "Rekap Sertifikasi dan Masa Berlaku
- * Patuha.xlsx". Varian nama yang duplikat/typo sudah digabung.
- * `mbb` = masa berlaku bulan (36 = 3 tahun, 60 = 5 tahun).
- * HC bebas mengubah/menambah lewat sheet Master_Sertifikasi.
+/*
+ * Dulu di sini ada SEED_SERTIFIKASI_ + sheet "Master_Sertifikasi" berisi 69 jenis
+ * sertifikasi yang dipakai sebagai dropdown dan penentu masa berlaku otomatis.
+ *
+ * Sesuai permintaan, jenjang "jenis sertifikasi" dihapus: nama sertifikasi,
+ * penyelenggara, nomor, dan masa berlaku kini diisi manual per baris pada sheet
+ * T_Sertifikasi. Masa berlaku default tetap diambil dari Config
+ * (masa_berlaku_default_bulan) dan daftar kata kunci 5 tahun
+ * (masa_berlaku_5_tahun_kata_kunci) — lihat masaBerlakuDariNama_().
  */
-var SEED_SERTIFIKASI_ = [
-  ['Pengawas Operasional Pertama (POP)', 'K3 / Pengawas Operasional', 36],
-  ['Pengawas Operasional Madya (POM)', 'K3 / Pengawas Operasional', 36],
-  ['Pengawas Operasional Utama (POU)', 'K3 / Pengawas Operasional', 36],
-  ['SKKTK', 'Ketenagalistrikan', 36],
-  ['SKKTK Level 2', 'Ketenagalistrikan', 36],
-  ['SKKTK Level 3', 'Ketenagalistrikan', 36],
-  ['Teknik Listrik-Operator', 'Ketenagalistrikan', 36],
-  ['Teknisi K3 Listrik', 'Ketenagalistrikan', 36],
-  ['Ahli K3 Listrik', 'Ketenagalistrikan', 36],
-  ['Ahli K3 Umum', 'K3', 36],
-  ['Ahli K3 Lingkungan Kerja', 'K3', 36],
-  ['Ahli Muda K3 Konstruksi', 'K3', 36],
-  ['Ahli Muda K3 Lingkungan Kerja', 'K3', 36],
-  ['K3 Kimia', 'K3', 36],
-  ['K3 Teknisi Perancah', 'K3', 36],
-  ['Scaffolding', 'Teknik', 36],
-  ['Rigger (Juru Ikat)', 'Teknik', 36],
-  ['Operator Forklift', 'Operator Alat Berat', 36],
-  ['Operator Forklift Kelas II', 'Operator Alat Berat', 36],
-  ['Operator K3 Forklift Kelas II', 'Operator Alat Berat', 36],
-  ['Operator Crane Kelas II', 'Operator Alat Berat', 36],
-  ['Operator Pesawat Angkut (Forklift Kelas II)', 'Operator Alat Berat', 36],
-  ['Authorized Gas Tester', 'HSSE', 36],
-  ['Authorized Gas Tester & Petugas Penanganan Bahaya Gas H2S', 'HSSE', 36],
-  ['Petugas Penanganan Bahaya Gas H2S', 'HSSE', 36],
-  ['Petugas P3k', 'HSSE', 36],
-  ['Hiperkes Paramedis', 'HSSE', 36],
-  ['Kebakaran DCB', 'HSSE', 36],
-  ['Surat Keterangan Penunjukan (SKP) Koordinator Penanggulangan Kebakaran', 'HSSE', 36],
-  ['Accident Investigator', 'HSSE', 36],
-  ['PPPA', 'Lingkungan', 36],
-  ['PPPU', 'Lingkungan', 36],
-  ['POIPU', 'Lingkungan', 36],
-  ['Resertifikasi POIPU', 'Lingkungan', 36],
-  ['POPAL (Pengolahan Air Limbah)', 'Lingkungan', 36],
-  ['Re-sertifikasi Penanggungjawab Operasional Pengolahan Air Limbah (POPAL)', 'Lingkungan', 36],
-  ['Penanggung Jawab Pengelolaan Limbah B3', 'Lingkungan', 36],
-  ['3R Sampah/Limbah Padat Non B3', 'Lingkungan', 36],
-  ['Re-sertifikasi Pemantauan dan Pengelolaan Sampah/Limbah Padat Non B3', 'Lingkungan', 36],
-  ['Life Cycle Assessment', 'Lingkungan', 36],
-  ['Life Cycle Assessment (LCA)', 'Lingkungan', 36],
-  ['Auditor Energi', 'Energi', 36],
-  ['Manager Energy Industri', 'Energi', 36],
-  ['Certified Risk Management Officer (CRMO)', 'Manajemen Risiko', 36],
-  ['Certified Risk Management Professional (CRMP)', 'Manajemen Risiko', 60],
-  ['Certified Contract Management Specialist (CCMS)', 'Pengadaan', 36],
-  ['Procurement Specialist (CPSp)', 'Pengadaan', 36],
-  ['Pengadaan Barang/Jasa Pemerintah PBJ', 'Pengadaan', 36],
-  ['Certified Logistic Supervisor', 'Logistik', 36],
-  ['Certified Sustainability Reporting Specialist (CSRS)', 'Sustainability', 60],
-  ['CHRP', 'Human Capital', 36],
-  ['CHRPE', 'Human Capital', 36],
-  ['CHRPE For Manager', 'Human Capital', 36],
-  ['Human Capital Supervisor', 'Human Capital', 36],
-  ['Human Resource Staff', 'Human Capital', 36],
-  ['Skema Operator Steam Field Facilities Panas Bumi', 'Panas Bumi', 36],
-  ['IADC Well Control', 'Panas Bumi', 36],
-  ['Instrumentasi & Kalibrasi Tk1', 'Instrumentasi', 36],
-  ['Infrared Thermography Course and International Certification Level I', 'Instrumentasi', 60],
-  ['Certification Vibration Analyst ISO 18436-2 Category II', 'Instrumentasi', 36],
-  ['Ultrasonic Test Level II', 'NDT / Inspeksi', 36],
-  ['UT level 2', 'NDT / Inspeksi', 36],
-  ['Asesor Uji Alir', 'Panas Bumi', 36],
-  ['Geoteknik Pada Bangunan Infrastruktur dan Fasilitas Permukaan', 'Teknik Sipil', 36],
-  ['Skema Kromatografi', 'Laboratorium', 36],
-  ['Volumetri & Spektrofotometri', 'Laboratorium', 36],
-  ['Skema petugas pengambil Contoh Air', 'Laboratorium', 36],
-  ['MTCUME', 'Information Technology', 36],
-  ['MTCTCE', 'Information Technology', 36]
-];
 
 /** Daftar divisi/unit awal (dari data lama, sudah dinormalisasi). */
 var DIVISI_SEED_ = [
@@ -538,8 +504,49 @@ function getExecUrl_() {
 
 function isBootstrapDone_() {
   try {
-    return PropertiesService.getScriptProperties().getProperty(BOOTSTRAP_PROP_) === BOOTSTRAP_VERSION_;
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty(BOOTSTRAP_PROP_) === BOOTSTRAP_VERSION_) return true;
+
+    /*
+     * JEMBATAN PENGGANTIAN NAMA.
+     * Instalasi yang sudah jalan punya penanda dengan NAMA LAMA (SIAGA_BOOTSTRAP)
+     * dan nilai versi lama. Karena aplikasi baru saja berganti nama sekaligus
+     * menaikkan versi, membandingkan nilainya akan selalu gagal dan memicu
+     * kickstart ulang — padahal penggantian nama tidak mengubah data apa pun.
+     * Jadi: keberadaan penanda lama sudah cukup. Setelah disalin ke nama baru,
+     * properti lama dihapus supaya kenaikan versi BERIKUTNYA berperilaku normal.
+     */
+    if (props.getProperty(BOOTSTRAP_PROP_LAMA_)) {
+      try {
+        props.setProperty(BOOTSTRAP_PROP_, BOOTSTRAP_VERSION_);
+        props.deleteProperty(BOOTSTRAP_PROP_LAMA_);
+      } catch (e) { }
+      return true;
+    }
+    return false;
   } catch (e) { return false; }
+}
+
+/**
+ * Pastikan seluruh key Config default ada di sheet.
+ *
+ * Dipisah dari kickstart supaya kunci Config BARU (mis. reminder_email_utama)
+ * tetap ikut ter-seed pada instalasi yang sudah jalan, tanpa harus menjalankan
+ * kickstart ulang. Penandanya disimpan di Script Properties (bukan spreadsheet),
+ * jadi pemeriksaannya hampir tanpa biaya.
+ */
+function pastikanConfigTerisi_() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    if (props.getProperty(CONFIG_SEED_PROP_) === CONFIG_SEED_VERSION_) return false;
+    seedConfigSheet_();
+    configMuatUlang_();
+    props.setProperty(CONFIG_SEED_PROP_, CONFIG_SEED_VERSION_);
+    return true;
+  } catch (e) {
+    Logger.log('pastikanConfigTerisi_: ' + errMsg_(e));
+    return false;
+  }
 }
 
 /**
@@ -559,6 +566,10 @@ function kickstart_(force) {
     report.sudah_sebelumnya = true;
     try { report.spreadsheet_id = resolveSpreadsheetId_(); } catch (e) { }
     report.steps.push('bootstrap sudah pernah selesai — dilewati');
+    // key Config yang baru ditambahkan pada rilis ini tetap disisipkan
+    try {
+      if (pastikanConfigTerisi_()) report.steps.push('key Config baru disisipkan');
+    } catch (e2) { }
     return report;
   }
 
@@ -585,16 +596,6 @@ function kickstart_(force) {
   } catch (eDrive) {
     report.errors.push('Folder Drive: ' + errMsg_(eDrive));
     report.steps.push('folder Drive BELUM siap (unggah lampiran bisa gagal)');
-  }
-
-  // ---------- LANGKAH 5: seed jenis sertifikasi ----------
-  try {
-    var seedCert = seedMasterSertifikasi_();
-    report.steps.push(seedCert.created > 0
-      ? ('master jenis sertifikasi diisi ' + seedCert.created + ' baris')
-      : 'master jenis sertifikasi sudah terisi');
-  } catch (eCert) {
-    report.errors.push('Seed sertifikasi: ' + errMsg_(eCert));
   }
 
   // ---------- LANGKAH 6: akun awal ----------
@@ -678,22 +679,22 @@ function initSheets_() {
   Object.keys(SCHEMAS).forEach(function (name) {
     try {
       var sh = db.getSheetByName(name);
-      var header = SCHEMAS[name];
 
       if (!sh) {
         sh = db.insertSheet(name);
-        styleHeader_(sh, header);
+        styleHeader_(sh, SCHEMAS[name]);
         created.push(name);
       } else {
-        var lastCol = Math.max(sh.getLastColumn(), header.length);
-        var cur = sh.getRange(1, 1, 1, lastCol).getValues()[0].map(function (s) { return String(s).trim(); });
-        cur = cur.slice(0, header.length);
-        var need = cur.length < header.length;
-        for (var i = 0; i < header.length && !need; i++) { if (cur[i] !== header[i]) need = true; }
-        if (need) {
-          styleHeader_(sh, header);
-          repaired.push(name);
-        }
+        /*
+         * Sheet sudah ada: HANYA tambahkan kolom yang belum ada di sebelah kanan.
+         * Sengaja TIDAK menulis ulang baris header, karena urutan kolom fisik di
+         * spreadsheet bisa berbeda dari urutan SCHEMAS (mis. setelah HC menambah
+         * kolom sendiri). Menulis ulang header tanpa memindahkan datanya akan
+         * menukar arti kolom dan merusak isi spreadsheet. Perubahan urutan/nama
+         * kolom dilakukan lewat migrasiSchemaV2_() yang memindahkan data.
+         */
+        var tambah = ensureColumns_(name, SCHEMAS[name]);
+        if (tambah.length) repaired.push(name + ' (+' + tambah.length + ' kolom)');
       }
       sh.setFrozenRows(1);
     } catch (e) {
@@ -706,15 +707,13 @@ function initSheets_() {
   // Kolom tanggal & kode dipaksa teks agar Sheets tidak mengubah format
   // (mis. "4122196-C" aman, tetapi tanggal tetap ditulis sebagai Date).
   try { forceTextColumns_('Master_User', ['Employee_code', 'No_HP']); } catch (e) { }
-  try { forceTextColumns_('Master_File', ['Doc_id', 'Employee_id', 'No_sertifikat']); } catch (e) { }
+  try { forceTextColumns_('T_Sertifikasi', ['Cert_Id', 'Employee_Code', 'No_Sertifikat']); } catch (e) { }
   try { forceTextColumns_(null, null); } catch (e) { }
   // Password disimpan plaintext: paksa format TEKS supaya nilai seperti
   // "00123" tidak berubah menjadi angka dan tetap cocok saat login.
   try { forceTextColumns_('Master_User', ['Password']); } catch (e) { }
   try { forceTextColumns_('Master_User', ['Username']); } catch (e) { }
   try { forceTextColumns_('Session_Token', ['Token']); } catch (e) { }
-  try { forceTextColumns_('Master_Sertifikasi', ['Cert_id']); } catch (e) { }
-
   try { ensureDriveFolder_(); } catch (e) { Logger.log('drive folder: ' + errMsg_(e)); }
   try { ensureExportFolder_(); } catch (e) { Logger.log('export folder: ' + errMsg_(e)); }
 
@@ -749,6 +748,7 @@ function styleHeader_(sh, header) {
   try { sh.setColumnWidths(1, header.length, 140); } catch (e) { }
   try { sh.setRowHeight(1, 30); } catch (e) { }
   try { if (!sh.getFilter()) r.createFilter(); } catch (e) { }
+  try { invalidateSheet_(sh.getName()); } catch (e) { }
 }
 
 function seedConfigSheet_() {
@@ -765,26 +765,10 @@ function seedConfigSheet_() {
     if (!exist[k]) toAdd.push([k, CONFIG_DEFAULTS[k]]);
   });
   if (toAdd.length) sh.getRange(vals.length + 1, 1, toAdd.length, 2).setValues(toAdd);
+  // Config berubah -> cache eksekusi & CacheService harus dibuang.
+  configMuatUlang_();
 }
 
-/** Isi Master_Sertifikasi dari SEED_SERTIFIKASI_ (hanya kalau masih kosong). */
-function seedMasterSertifikasi_() {
-  var sh = getSheet_('Master_Sertifikasi');
-  if (!sh) return { created: 0 };
-  var count = Math.max(sh.getLastRow() - 1, 0);
-  if (count > 0) return { created: 0, skipped: true };
-
-  var now = nowStr_();
-  var rows = SEED_SERTIFIKASI_.map(function (item, i) {
-    return [
-      'CERT-' + pad_(i + 1, 4), item[0], item[1], item[2], '', 'TRUE', 0, now, now
-    ];
-  });
-  if (rows.length) sh.getRange(2, 1, rows.length, SCHEMAS['Master_Sertifikasi'].length).setValues(rows);
-  return { created: rows.length };
-}
-
-/** Buat akun awal: Super Admin + HC. */
 function seedAwal_() {
   var sh = getSheet_('Master_User');
   if (!sh) throw new Error('Sheet Master_User tidak ditemukan');
@@ -819,7 +803,7 @@ function seedAwal_() {
       Nama_Depan: u.username,
       Divisi: u.divisi,
       Jabatan: u.jabatan,
-      Lokasi_Kerja: getConfig_('unit_default') || 'Patuha',
+      Working_Location: getConfig_('unit_default') || 'Patuha',
       No_HP: '',
       Email_Atasan: '',
       Status: 'ACTIVE',
@@ -866,13 +850,16 @@ function seedDivisiConfig_() {
 function onOpen() {
   try {
     SpreadsheetApp.getUi()
-      .createMenu('SIAGA Sertifikasi')
+      .createMenu('myCertif')
       .addItem('0. Kickstart / Setup Awal', 'kickstartFromMenu_')
       .addItem('1. Init / Repair Sheet', 'initSheets_')
       .addItem('2. Set Spreadsheet ID ke Properties', 'setupSpreadsheetId_')
       .addSeparator()
       .addItem('3. Hitung Ulang Semua Status', 'menuHitungUlangStatus_')
       .addItem('4. Sinkronkan User dari Data Sertifikasi', 'menuSinkronUser_')
+      .addSeparator()
+      .addItem('M1. Info Struktur Sheet (isi & relasi tiap tabel)', 'menuInfoStrukturSheet_')
+      .addItem('M2. Migrasi Skema v1 -> v2 (T_Sertifikasi)', 'menuMigrasiSkema_')
       .addSeparator()
       .addItem('5. Buat Trigger Reminder Harian', 'createDailyReminderTrigger')
       .addItem('6. Hapus Trigger Reminder', 'deleteDailyReminderTrigger')
@@ -936,241 +923,19 @@ function alertOrLog_(msg) {
 }
 
 // ============================================================================
-// 10. HELPER DATABASE
+// 10. LAPISAN DATA (dipindah ke Data.gs)
 // ============================================================================
-
-function resolveSpreadsheetId_() {
-  var constId = sanitizeDriveId_(SPREADSHEET_ID);
-  if (constId) return constId;
-
-  var propId = '';
-  try { propId = sanitizeDriveId_(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')); } catch (e) { }
-  if (propId) return propId;
-
-  try {
-    var active = SpreadsheetApp.getActiveSpreadsheet();
-    if (active) return active.getId();
-  } catch (e) { }
-  return '';
-}
-
-function setupSpreadsheetId_() {
-  var id = resolveSpreadsheetId_();
-  if (!id) {
-    try { id = sanitizeDriveId_(SpreadsheetApp.getActiveSpreadsheet().getId()); } catch (e) { id = ''; }
-  }
-  if (!id) throw new Error('SPREADSHEET_ID belum diisi dan tidak ada spreadsheet aktif.');
-  PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', id);
-  try { PropertiesService.getScriptProperties().deleteProperty(BOOTSTRAP_PROP_); } catch (e) { }
-  alertOrLog_('SPREADSHEET_ID tersimpan: ' + id);
-  return id;
-}
-
-function getDb_() {
-  var id = resolveSpreadsheetId_();
-  if (!id) {
-    throw new Error('SPREADSHEET_ID belum di-set. Isi konstanta SPREADSHEET_ID di Kode.gs '
-      + 'atau jalankan setupSpreadsheetId_().');
-  }
-  try {
-    var propId = sanitizeDriveId_(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'));
-    if (propId !== id) PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', id);
-  } catch (e) { }
-
-  try {
-    return SpreadsheetApp.openById(id);
-  } catch (e) {
-    throw new Error('Tidak bisa membuka spreadsheet "' + id + '". Pastikan ID benar '
-      + '(tanpa URL / tanda "/"), spreadsheet masih ada, dan akun deploy punya akses. Detail: ' + errMsg_(e));
-  }
-}
-
-function getSheet_(name) {
-  var db = getDb_();
-  return db.getSheetByName(name);
-}
-
-// ---------- config CRUD ----------
-
-function getAllConfig_() {
-  var out = {};
-  Object.keys(CONFIG_DEFAULTS).forEach(function (k) { out[k] = CONFIG_DEFAULTS[k]; });
-  try {
-    var sh = getSheet_('Config');
-    if (!sh) return out;
-    var vals = sh.getDataRange().getValues();
-    for (var i = 1; i < vals.length; i++) {
-      var k = String(vals[i][0]).trim();
-      if (!k) continue;
-      var v = vals[i][1];
-      out[k] = (v === null || v === undefined) ? '' : String(v).trim();
-      if (out[k] === '' && CONFIG_DEFAULTS[k] !== undefined && CONFIG_DEFAULTS[k] !== '') {
-        out[k] = CONFIG_DEFAULTS[k];
-      }
-    }
-  } catch (e) { Logger.log('getAllConfig_: ' + errMsg_(e)); }
-  return out;
-}
-
-function getConfig_(key) {
-  var sh;
-  try { sh = getSheet_('Config'); } catch (e) { return CONFIG_DEFAULTS[key] || ''; }
-  if (!sh) return CONFIG_DEFAULTS[key] || '';
-  var vals = sh.getDataRange().getValues();
-  for (var i = 1; i < vals.length; i++) {
-    if (String(vals[i][0]).trim() === key) {
-      var v = vals[i][1];
-      v = (v === null || v === undefined) ? '' : String(v).trim();
-      if (v !== '') return v;
-      return CONFIG_DEFAULTS[key] || '';
-    }
-  }
-  return CONFIG_DEFAULTS[key] || '';
-}
-
-function getConfigNum_(key, def) {
-  var v = parseFloat(String(getConfig_(key)).replace(',', '.'));
-  return isNaN(v) ? (def === undefined ? 0 : def) : v;
-}
-
-function getConfigBool_(key, def) {
-  var v = String(getConfig_(key)).trim().toUpperCase();
-  if (v === '') return !!def;
-  return v === 'TRUE' || v === '1' || v === 'YA' || v === 'YES';
-}
-
-function setConfig_(key, value) {
-  var sh = getSheet_('Config');
-  if (!sh) return false;
-  var vals = sh.getDataRange().getValues();
-  for (var i = 1; i < vals.length; i++) {
-    if (String(vals[i][0]).trim() === key) {
-      sh.getRange(i + 1, 2).setValue(value);
-      return true;
-    }
-  }
-  sh.appendRow([key, value]);
-  return true;
-}
-
-// ---------- helper baris generik ----------
-
-/** Susun array nilai sesuai urutan kolom SCHEMAS. */
-function rowArrBySchema_(sheetName, obj) {
-  var header = SCHEMAS[sheetName];
-  if (!header) throw new Error('Skema tidak dikenal: ' + sheetName);
-  return header.map(function (col) {
-    var v = obj[col];
-    return (v === undefined || v === null) ? '' : v;
-  });
-}
-
-/** Ambil semua baris sheet sebagai array objek (header -> nilai). */
-function sheetToObjects_(sheetName) {
-  var sh = getSheet_(sheetName);
-  if (!sh || sh.getLastRow() < 2) return [];
-  var values = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
-  var header = values[0].map(function (h) { return String(h).trim(); });
-  var out = [];
-  for (var r = 1; r < values.length; r++) {
-    var row = values[r];
-    var kosong = true;
-    for (var c = 0; c < header.length; c++) {
-      if (row[c] !== '' && row[c] !== null && row[c] !== undefined) { kosong = false; break; }
-    }
-    if (kosong) continue;
-    var obj = { __row: r + 1 };
-    for (var i = 0; i < header.length; i++) {
-      if (!header[i]) continue;
-      obj[header[i]] = row[i] === null || row[i] === undefined ? '' : row[i];
-    }
-    out.push(obj);
-  }
-  return out;
-}
-
-/** Nilai satu baris sebagai objek. */
-function rowToObject_(sheetName, rowIndex) {
-  var sh = getSheet_(sheetName);
-  if (!sh) return null;
-  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
-    .map(function (h) { return String(h).trim(); });
-  var row = sh.getRange(rowIndex, 1, 1, header.length).getValues()[0];
-  var obj = { __row: rowIndex };
-  for (var i = 0; i < header.length; i++) {
-    if (!header[i]) continue;
-    obj[header[i]] = row[i] === null || row[i] === undefined ? '' : row[i];
-  }
-  return obj;
-}
-
-/** Cari nomor baris pertama yang kolom `col` nilainya sama dengan `val`. */
-function findRowByCol_(sheetName, col, val) {
-  var sh = getSheet_(sheetName);
-  if (!sh || sh.getLastRow() < 2) return -1;
-  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
-    .map(function (h) { return String(h).trim(); });
-  var idx = header.indexOf(col);
-  if (idx === -1) throw new Error('Kolom "' + col + '" tidak ada di sheet ' + sheetName);
-  var values = sh.getRange(2, idx + 1, sh.getLastRow() - 1, 1).getValues();
-  var target = String(val).trim().toLowerCase();
-  for (var i = 0; i < values.length; i++) {
-    if (String(values[i][0]).trim().toLowerCase() === target) return i + 2;
-  }
-  return -1;
-}
-
-/** Tulis objek ke baris yang sudah ada (hanya kolom yang ada di objek). */
-function updateRowByCol_(sheetName, rowIndex, obj) {
-  var sh = getSheet_(sheetName);
-  if (!sh) return false;
-  var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0]
-    .map(function (h) { return String(h).trim(); });
-  var changed = false;
-  Object.keys(obj).forEach(function (k) {
-    var idx = header.indexOf(k);
-    if (idx === -1) return;
-    sh.getRange(rowIndex, idx + 1).setValue(obj[k]);
-    changed = true;
-  });
-  return changed;
-}
-
-function deleteRowByCol_(sheetName, col, val) {
-  var row = findRowByCol_(sheetName, col, val);
-  if (row === -1) return false;
-  getSheet_(sheetName).deleteRow(row);
-  return true;
-}
-
-function appendObject_(sheetName, obj) {
-  var sh = getSheet_(sheetName);
-  if (!sh) throw new Error('Sheet tidak ditemukan: ' + sheetName);
-  sh.appendRow(rowArrBySchema_(sheetName, obj));
-  return sh.getLastRow();
-}
-
-/** Pastikan kolom ada; kalau belum, tambahkan di kanan. */
-function ensureColumns_(sheetName, cols) {
-  var sh = getSheet_(sheetName);
-  if (!sh) return [];
-  var lastCol = Math.max(sh.getLastColumn(), 1);
-  var header = sh.getRange(1, 1, 1, lastCol).getValues()[0]
-    .map(function (h) { return String(h).trim(); });
-  var added = [];
-  cols.forEach(function (c) {
-    if (header.indexOf(c) !== -1) return;
-    lastCol = sh.getLastColumn() + 1;
-    sh.getRange(1, lastCol).setValue(c).setFontWeight('bold')
-      .setBackground('#093D7D').setFontColor('#FFFFFF');
-    header.push(c);
-    added.push(c);
-  });
-  if (added.length && SCHEMAS[sheetName]) {
-    added.forEach(function (c) { if (SCHEMAS[sheetName].indexOf(c) === -1) SCHEMAS[sheetName].push(c); });
-  }
-  return added;
-}
+/*
+ * Seluruh helper database kini tinggal di Backend/Data.gs:
+ *   resolveSpreadsheetId_, setupSpreadsheetId_, getDb_, getSheet_,
+ *   getAllConfig_, getConfig_, getConfigNum_, getConfigBool_, setConfig_,
+ *   rowArrBySchema_, sheetValues_, sheetHeader_, sheetToObjects_, rowToObject_,
+ *   petaBaris_, findRowByCol_, findRowsByCol_, updateRowByCol_, appendObject_,
+ *   deleteRowByCol_, ensureColumns_, tulisBanyak_, invalidateSheet_, memoBersih_.
+ *
+ * Berkas itu yang menangani cache & batch write. Jangan membaca sheet langsung
+ * dari berkas ini supaya pemakaian cache tidak bocor.
+ */
 
 // ============================================================================
 // 11. HELPER DRIVE
@@ -1189,7 +954,7 @@ function ensureDriveFolder_() {
   if (cfg) {
     try { DriveApp.getFolderById(cfg); return cfg; } catch (e) { /* dibuat ulang */ }
   }
-  var name = 'SIAGA_Sertifikasi_Lampiran';
+  var name = 'myCertif_Lampiran';
   var it = DriveApp.getFoldersByName(name);
   var folder = it.hasNext() ? it.next() : DriveApp.createFolder(name);
   setConfig_('drive_folder_id', folder.getId());
@@ -1217,8 +982,8 @@ function ensureExportFolder_() {
     var it = parent.getFoldersByName(name);
     folder = it.hasNext() ? it.next() : parent.createFolder(name);
   } else {
-    var it2 = DriveApp.getFoldersByName('SIAGA_Sertifikasi_Export');
-    folder = it2.hasNext() ? it2.next() : DriveApp.createFolder('SIAGA_Sertifikasi_Export');
+    var it2 = DriveApp.getFoldersByName('myCertif_Export');
+    folder = it2.hasNext() ? it2.next() : DriveApp.createFolder('myCertif_Export');
   }
   setConfig_('drive_folder_export_id', folder.getId());
   return folder.getId();
@@ -1354,8 +1119,15 @@ var BULAN_SINGKAT_ID_ = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
   'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
 var HARI_ID_ = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
 
+/**
+ * Zona waktu script. Diambil sekali per eksekusi — Session.getScriptTimeZone()
+ * juga panggilan lintas-proses, dan helper ini dipanggil ribuan kali per
+ * permintaan lewat nowStr_()/fmtDate_().
+ */
 function tz_() {
-  try { return Session.getScriptTimeZone() || DEFAULT_TZ; } catch (e) { return DEFAULT_TZ; }
+  if (MEMO_.tz) return MEMO_.tz;
+  try { MEMO_.tz = Session.getScriptTimeZone() || DEFAULT_TZ; } catch (e) { MEMO_.tz = DEFAULT_TZ; }
+  return MEMO_.tz;
 }
 
 function nowDate_() { return new Date(); }
@@ -1477,9 +1249,33 @@ function toDate_(v) {
 }
 
 function fmtDate_(v, pola) {
-  var d = toDate_(v);
+  var p = pola || 'yyyy-MM-dd';
+  /*
+   * PENTING: pola yang memuat jam/menit/detik harus mempertahankan komponen
+   * waktu. toDate_() sengaja menormalkan ke tengah malam (memang benar untuk
+   * kolom tanggal seperti Start_pelaksanaan), sehingga memakainya untuk
+   * Valid_Until membuat sesi selalu tertulis "... 00:00:00" — yaitu jam 00:00
+   * hari ini, yang sudah lewat begitu jam dinding melewati tengah malam.
+   * Akibatnya sesi langsung dianggap kedaluwarsa tepat setelah dibuat.
+   */
+  var d = /[Hhms]/.test(p) ? toDateTime_(v) : toDate_(v);
   if (!d) return '';
-  return Utilities.formatDate(d, tz_(), pola || 'yyyy-MM-dd');
+  return Utilities.formatDate(d, tz_(), p);
+}
+
+/**
+ * Kolom waktu (Created_At, Updated_At, Verified_At, Login_Terakhir, ...) dalam
+ * format 'yyyy-MM-dd HH:mm:ss' untuk dikirim ke frontend.
+ *
+ * WAJIB dipakai alih-alih String(nilai). Sel spreadsheet berisi objek Date,
+ * dan String(Date) menghasilkan "Thu Oct 08 2026 15:20:32 GMT+0700 (Waktu
+ * Indonesia Barat)" — panjang, tidak konsisten, dan TIDAK bisa diurutkan
+ * sebagai teks (urutan jadi berdasarkan nama hari, bukan tanggal).
+ */
+function fmtWaktu_(v) {
+  var d = toDateTime_(v);
+  if (!d) return '';
+  return Utilities.formatDate(d, tz_(), 'yyyy-MM-dd HH:mm:ss');
 }
 
 /**
@@ -1659,6 +1455,19 @@ function renderSetupPage_(title, message, report) {
  */
 function berkasBackendHilang_() {
   var kurang = [];
+
+  // --- Data.gs (lapisan cache & akses sheet) ---
+  if (typeof MARKER_DATA_ === 'undefined') kurang.push('Data.gs');
+  else if (typeof sheetToObjects_ !== 'function' || typeof getAllConfig_ !== 'function'
+    || typeof updateRowByCol_ !== 'function' || typeof petaBaris_ !== 'function') {
+    kurang.push('Data.gs (versi lama — cache belum tersedia)');
+  }
+
+  // --- Migrasi.gs (migrasi skema v1 -> v2) ---
+  if (typeof MARKER_MIGRASI_ === 'undefined') kurang.push('Migrasi.gs');
+  else if (typeof migrateSchemaV2_ !== 'function' || typeof menuMigrasiSkema_ !== 'function') {
+    kurang.push('Migrasi.gs (versi lama)');
+  }
 
   // --- Session.gs ---
   if (typeof MARKER_SESSION_ === 'undefined') kurang.push('Session.gs');
@@ -1841,10 +1650,13 @@ function renderBerkasKurangPage_(kurang) {
     + '<b>' + escHtml_(VERSI_BACKEND_) + '</b>:</p>'
     + '<ul>' + daftar + '</ul>'
     + '<p><b>Yang perlu dilakukan</b></p><ol>'
-    + '<li>Buka folder <code>Backend/</code> pada project, ada 3 berkas: '
-    + '<code>Kode.gs.txt</code>, <code>Session.gs.txt</code>, <code>subprocess.gs.txt</code>.</li>'
-    + '<li>Di editor Apps Script, buat/ buka berkas dengan nama <b>tanpa</b> <code>.txt</code>: '
-    + '<code>Kode.gs</code>, <code>Session.gs</code>, <code>subprocess.gs</code>.</li>'
+    + '<li>Buka folder <code>Backend/</code> pada project — ada <b>10 berkas</b>: '
+    + '<code>Kode.gs</code>, <code>Data.gs</code>, <code>Sertifikasi.gs</code>, '
+    + '<code>User.gs</code>, <code>Notifikasi.gs</code>, <code>Ekspor.gs</code>, '
+    + '<code>Migrasi.gs</code>, <code>Session.gs</code>, <code>Importer.gs</code>, '
+    + '<code>subprocess.gs</code>.</li>'
+    + '<li>Di editor Apps Script, pastikan SETIAP nama di atas ada sebagai berkas '
+    + '<b>tanpa</b> akhiran <code>.txt</code>, lalu tempel seluruh isinya.</li>'
     + '<li>Tempel ULANG seluruh isi masing-masing berkas (timpa semua, jangan sebagian).</li>'
     + '<li>Hapus berkas sisa seperti <code>Code.gs</code> bawaan atau salinan lama.</li>'
     + '<li>Simpan, lalu <b>Deploy &gt; Manage deployments &gt; Edit &gt; Version: New version &gt; Deploy</b>.</li>'

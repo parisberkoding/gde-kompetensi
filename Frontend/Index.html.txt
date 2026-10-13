@@ -4,26 +4,26 @@
   <base target="_top">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="SIAGA Sertifikasi — sistem informasi dan pengingat masa berlaku sertifikasi, Unit Patuha.">
-  <title>SIAGA Sertifikasi — Unit Patuha</title>
+  <meta name="description" content="myCertif — sistem informasi dan pengingat masa berlaku sertifikasi, Unit Patuha.">
+  <title>myCertif — Unit Patuha</title>
   <?!= include('Stylesheet'); ?>
 </head>
 <body class="gde-body">
 
-  <!-- Wadah utama: diisi halaman login atau kerangka aplikasi oleh SIAGA.mulai() -->
-  <div id="siagaApp">
-    <div class="siaga-loader" style="min-height:100vh">
-      <div class="siaga-loader__ring"></div>
-      <p>Menyiapkan SIAGA Sertifikasi...</p>
+  <!-- Wadah utama: diisi halaman login atau kerangka aplikasi oleh MyCertif.mulai() -->
+  <div id="mycertifApp">
+    <div class="mycertif-loader" style="min-height:100vh">
+      <div class="mycertif-loader__ring"></div>
+      <p>Menyiapkan myCertif...</p>
     </div>
   </div>
 
   <!-- Wadah toast global -->
-  <div id="siagaToasts" class="siaga-toasts" role="status" aria-live="polite"></div>
+  <div id="mycertifToasts" class="mycertif-toasts" role="status" aria-live="polite"></div>
 
   <script>
-    /* Nilai dari server (doGet) — dibaca SIAGA.mulai() */
-    var SIAGA_BOOTSTRAP = <?!= bootstrap ?>;
+    /* Nilai dari server (doGet) — dibaca MyCertif.mulai() */
+    var MYCERTIF_BOOTSTRAP = <?!= bootstrap ?>;
   </script>
 
   <?!= include('Javascript'); ?>
@@ -36,7 +36,7 @@
      * Daftar fungsi dari Javascript.html yang WAJIB ada.
      * Kalau ada yang kurang, berarti berkas Frontend/Javascript.html di editor
      * belum ikut diperbarui. Pesannya ditampilkan jelas, bukan error
-     * membingungkan seperti "SIAGA.isiHtml is not a function".
+     * membingungkan seperti "MyCertif.isiHtml is not a function".
      */
     var WAJIB = [
       'api', 'gsr', 'el', 'esc', 'isiHtml', 'isiTeks', 'combobox',
@@ -45,17 +45,17 @@
     ];
 
     function cekKesiapan() {
-      if (typeof SIAGA === 'undefined') {
+      if (typeof MyCertif === 'undefined') {
         return ['Seluruh berkas Frontend/Javascript.html belum terpasang'];
       }
-      return WAJIB.filter(function (n) { return typeof SIAGA[n] !== 'function'; });
+      return WAJIB.filter(function (n) { return typeof MyCertif[n] !== 'function'; });
     }
 
     function tampilkanInstruksi(kurang) {
-      var versi = (typeof SIAGA !== 'undefined' && SIAGA.APP && SIAGA.APP.build)
-        ? SIAGA.APP.build : '(tidak terbaca)';
-      var daftar = kurang.map(function (n) { return '<li><code>SIAGA.' + n + '()</code></li>'; }).join('');
-      var wadah = document.getElementById('siagaApp');
+      var versi = (typeof MyCertif !== 'undefined' && MyCertif.APP && MyCertif.APP.build)
+        ? MyCertif.APP.build : '(tidak terbaca)';
+      var daftar = kurang.map(function (n) { return '<li><code>MyCertif.' + n + '()</code></li>'; }).join('');
+      var wadah = document.getElementById('mycertifApp');
       wadah.innerHTML = ''
         + '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;'
         + 'background:#F4F7FB;padding:24px;font-family:Poppins,system-ui,Segoe UI,Roboto,sans-serif;color:#16202E">'
@@ -85,15 +85,15 @@
     function mulai() {
       var kurang = cekKesiapan();
       if (kurang.length) {
-        try { console.error('[SIAGA] Frontend/Javascript.html belum diperbarui. Hilang: ' + kurang.join(', ')); } catch (e) { }
+        try { console.error('[myCertif] Frontend/Javascript.html belum diperbarui. Hilang: ' + kurang.join(', ')); } catch (e) { }
         tampilkanInstruksi(kurang);
         return;
       }
       try {
-        SIAGA.mulai(SIAGA_BOOTSTRAP || {});
+        MyCertif.mulai(MYCERTIF_BOOTSTRAP || {});
       } catch (e) {
-        document.getElementById('siagaApp').innerHTML =
-          '<div class="siaga-loader" style="min-height:100vh"><p style="color:#C4142A">'
+        document.getElementById('mycertifApp').innerHTML =
+          '<div class="mycertif-loader" style="min-height:100vh"><p style="color:#C4142A">'
           + 'Gagal memuat aplikasi: ' + (e && e.message ? e.message : e) + '</p></div>';
       }
     }

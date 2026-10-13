@@ -1,0 +1,434 @@
+/**
+ * ============================================================================
+ * myCertif — User.gs.txt
+ * PT Geo Dipa Energi (Persero) — Unit Patuha
+ * ============================================================================
+ *
+ * Berkas ini adalah hasil PEMECAHAN subprocess.gs supaya setiap berkas fokus
+ * pada satu tanggung jawab. Di Google Apps Script seluruh berkas .gs berbagi
+ * satu lingkup global, jadi pemecahan ini murni soal keterbacaan & kemudahan
+ * penelusuran — bukan pemisahan proses.
+ *
+ * ISI BERKAS INI
+ * ---------------------------------------------------------------------------
+ *   2. PROFIL SENDIRI (karyawan mengubah data dirinya)
+ *   3. MASTER USER
+ *
+ * Akses spreadsheet TIDAK boleh langsung dari sini: pakai helper di Data.gs
+ * (sheetToObjects_, sheetValues_, findRowByCol_, updateRowByCol_, appendObject_,
+ *  tulisBanyak_, invalidateSheet_) supaya cache dan batch write tetap dipakai.
+ */
+
+var MARKER_USER_ = 'v1.4.0';
+var USER_BUILD_ = 'User.gs v1.4.0 — master user, profil sendiri, sinkron dari data sertifikasi';
+
+// ============================================================================
+// 2. PROFIL SENDIRI (karyawan mengubah data dirinya)
+//    Catatan: autentikasi & sesi ada di Session.gs
+// ============================================================================
+
+function apiUpdateMyProfile(token, data) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var d = data || {};
+    var patch = { Updated_At: nowStr_() };
+
+    if (d.no_hp !== undefined) patch.No_HP = String(d.no_hp || '').trim();
+    if (d.email_pribadi !== undefined) {
+      var ep = String(d.email_pribadi || '').trim();
+      if (ep && !isEmail_(ep)) throw new Error('Format email pribadi tidak valid.');
+      patch.Email_Pribadi = ep;
+    }
+    if (d.email_atasan !== undefined) {
+      var ea = String(d.email_atasan || '').trim();
+      if (ea && !isEmail_(ea)) throw new Error('Format email atasan tidak valid.');
+      patch.Email_Atasan = ea;
+    }
+    // jabatan/divisi/lokasi hanya HC & SA
+    if (auth.role === 'HC' || auth.role === 'SA') {
+      if (d.jabatan !== undefined) patch.Jabatan = String(d.jabatan || '').trim();
+      if (d.divisi !== undefined) patch.Divisi = String(d.divisi || '').trim();
+      if (d.lokasi_kerja !== undefined) patch.Lokasi_Kerja = String(d.lokasi_kerja || '').trim();
+      if (d.nama_lengkap !== undefined) patch.Nama_Lengkap = String(d.nama_lengkap || '').trim();
+      if (d.email_perusahaan !== undefined) {
+        var epr = String(d.email_perusahaan || '').trim();
+        if (epr && !isEmail_(epr)) throw new Error('Format email perusahaan tidak valid.');
+        patch.Email_Perusahaan = epr;
+      }
+    }
+
+    updateRowByCol_('Master_User', auth.user.__row, patch);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'UPDATE_PROFIL_SENDIRI', 'USER', auth.employee_code, patch);
+    return { user: userPublic_(cariUser_(auth.employee_code)) };
+  });
+}
+
+/** Karyawan melengkapi profil (dipakai halaman Profil User). */
+function apiUpdateProfilSaya(token, data) { return apiUpdateMyProfile(token, data); }
+
+// ============================================================================
+// 3. MASTER USER
+// ============================================================================
+
+function apiListUsers(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireRole_(token, ['HC', 'SA']);
+    var f = filter || {};
+    var q = String(f.q || '').trim().toLowerCase();
+    var users = sheetToObjects_('Master_User');
+
+    var hasil = users.filter(function (u) {
+      if (f.role && String(u.Role) !== String(f.role)) return false;
+      if (f.divisi && String(u.Divisi) !== String(f.divisi)) return false;
+      if (f.status && String(u.Status).toUpperCase() !== String(f.status).toUpperCase()) return false;
+      if (q) {
+        var gab = [u.Employee_code, u.Nama_Lengkap, u.Username, u.Email_Perusahaan, u.Email_Pribadi,
+          u.Jabatan, u.Divisi].join(' ').toLowerCase();
+        if (gab.indexOf(q) === -1) return false;
+      }
+      return true;
+    }).map(function (u) {
+      var p = userPublic_(u);
+      return p;
+    });
+
+    hasil.sort(function (a, b) { return a.nama_lengkap.localeCompare(b.nama_lengkap); });
+
+    // lampirkan jumlah sertifikasi
+    var jumlah = {};
+    sheetToObjects_('T_Sertifikasi').forEach(function (f2) {
+      var k = String(f2.Employee_Code || '');
+      jumlah[k] = (jumlah[k] || 0) + 1;
+    });
+    hasil.forEach(function (h) { h.jumlah_sertifikasi = jumlah[h.employee_code] || 0; });
+
+    return { rows: hasil, total: hasil.length };
+  });
+}
+
+function apiGetUser(token, employeeCode) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var code = String(employeeCode || auth.employee_code);
+    if (code !== auth.employee_code && auth.role === 'EMP') {
+      throw new Error('Anda hanya dapat melihat profil sendiri.');
+    }
+    var u = cariUser_(code);
+    if (!u) throw new Error('User dengan Employee Code ' + code + ' tidak ditemukan.');
+    return { user: userPublic_(u) };
+  });
+}
+
+/**
+ * Simpan user (buat baru atau perbarui).
+ * @param {Object} data field sesuai skema Master_User (camelCase diizinkan)
+ */
+function apiSaveUser(token, data) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var d = data || {};
+    var code = String(d.employee_code || d.Employee_code || '').trim();
+    if (!code) throw new Error('Employee Code wajib diisi.');
+    if (String(d.role || d.Role || '').toUpperCase() === 'SA' && auth.role !== 'SA') {
+      throw new Error('Hanya Super Admin yang boleh membuat/mengubah akun Super Admin.');
+    }
+
+    var nama = String(d.nama_lengkap || d.Nama_Lengkap || '').trim();
+    if (!nama) throw new Error('Nama lengkap wajib diisi.');
+
+    var role = String(d.role || d.Role || 'EMP').toUpperCase();
+    if (['SA', 'HC', 'EMP'].indexOf(role) === -1) role = 'EMP';
+
+    var emailPerusahaan = String(d.email_perusahaan || d.Email_Perusahaan || '').trim();
+    if (emailPerusahaan && !isEmail_(emailPerusahaan)) throw new Error('Format email perusahaan tidak valid.');
+    var emailPribadi = String(d.email_pribadi || d.Email_Pribadi || '').trim();
+    if (emailPribadi && !isEmail_(emailPribadi)) throw new Error('Format email pribadi tidak valid.');
+    var emailAtasan = String(d.email_atasan || d.Email_Atasan || '').trim();
+    if (emailAtasan && !isEmail_(emailAtasan)) throw new Error('Format email atasan tidak valid.');
+
+    var row = findRowByCol_('Master_User', 'Employee_code', code);
+    var isBaru = row === -1;
+
+    // ---- username ----
+    var username = slugUsername_(String(d.username || ''));
+    if (!username) username = namaDepan_(nama) || slugUsername_(code);
+    if (username.length < 3) username = slugUsername_(code) || ('user' + code.toLowerCase());
+    var bentrok = cariUserByUsername_(username);
+    if (bentrok && String(bentrok.Employee_code) !== code) {
+      if (getConfigBool_('username_prefix_duplikat', true)) {
+        username = username + String(code).toLowerCase().replace(/[^a-z0-9]/g, '');
+        var bentrok2 = cariUserByUsername_(username);
+        if (bentrok2 && String(bentrok2.Employee_code) !== code) {
+          throw new Error('Username "' + d.username + '" sudah dipakai. Tentukan username lain.');
+        }
+      } else {
+        throw new Error('Username "' + username + '" sudah dipakai. Tentukan username lain.');
+      }
+    }
+
+    var obj = {
+      Employee_code: code,
+      Nama_Lengkap: nama,
+      Username: username,
+      Nama_Depan: namaDepan_(nama),
+      Role: role,
+      Email_Perusahaan: emailPerusahaan,
+      Email_Pribadi: emailPribadi,
+      Divisi: String(d.divisi || d.Divisi || '').trim(),
+      Jabatan: String(d.jabatan || d.Jabatan || '').trim(),
+      Lokasi_Kerja: String(d.lokasi_kerja || d.Lokasi_Kerja || getConfig_('unit_default') || 'Patuha').trim(),
+      No_HP: String(d.no_hp || d.No_HP || '').trim(),
+      Email_Atasan: emailAtasan,
+      Status: String(d.status || d.Status || 'ACTIVE').toUpperCase(),
+      Updated_At: nowStr_()
+    };
+    if (['ACTIVE', 'INACTIVE'].indexOf(obj.Status) === -1) obj.Status = 'ACTIVE';
+
+    if (isBaru) {
+      // Password = Employee Code PENUH (disalin apa adanya, tanpa hash)
+      obj.Password = passwordAwal_(code);
+      obj.Must_Change_Password = String(getConfigBool_('password_wajib_ganti_default', false)).toUpperCase();
+      obj.Login_Terakhir = '';
+      obj.Gagal_Login = 0;
+      obj.Terkunci_Sampai = '';
+      obj.Created_At = nowStr_();
+      obj.Created_By = auth.employee_code;
+      appendObject_('Master_User', obj);
+      logAudit_(auth.employee_code, auth.username, auth.role, 'TAMBAH_USER', 'USER', code, tanpaPassword_(obj));
+      return { mode: 'insert', employee_code: code, username: username,
+        password_awal: passwordAwal_(code) };
+    }
+
+    // password opsional saat update
+    var passBaru = String(d.password || '');
+    if (passBaru) obj.Password = passBaru;   // disimpan apa adanya (plaintext)
+    updateRowByCol_('Master_User', row, obj);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'UBAH_USER', 'USER', code, tanpaPassword_(obj));
+    return { mode: 'update', employee_code: code, username: username };
+  });
+}
+
+function apiDeleteUser(token, employeeCode) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var code = String(employeeCode || '').trim();
+    if (!code) throw new Error('Employee Code wajib diisi.');
+    if (code === auth.employee_code) throw new Error('Anda tidak bisa menghapus akun sendiri.');
+
+    var punya = sheetToObjects_('T_Sertifikasi').filter(function (f) {
+      return String(f.Employee_Code) === code;
+    });
+    if (punya.length) {
+      throw new Error('User ini masih punya ' + punya.length + ' data sertifikasi. '
+        + 'Hapus/pindahkan data tersebut lebih dulu, atau ubah statusnya menjadi INACTIVE.');
+    }
+    var target = cariUser_(code);
+    if (!target) throw new Error('User tidak ditemukan.');
+    if (String(target.Role) === 'SA' && auth.role !== 'SA') throw new Error('Hanya Super Admin yang boleh menghapus Super Admin.');
+
+    var n = cabutSemuaSesi_(code, null);
+    var ok = deleteRowByCol_('Master_User', 'Employee_code', code);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'HAPUS_USER', 'USER', code, 'sesi dicabut: ' + n);
+    return { ok: ok, employee_code: code };
+  });
+}
+
+/** Reset password user menjadi Employee Code-nya. */
+function apiResetPassword(token, employeeCode) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var code = String(employeeCode || '').trim();
+    var u = cariUser_(code);
+    if (!u) throw new Error('User tidak ditemukan.');
+    if (String(u.Role) === 'SA' && auth.role !== 'SA') throw new Error('Hanya Super Admin yang boleh reset password Super Admin.');
+
+    updateRowByCol_('Master_User', u.__row, {
+      Password: passwordAwal_(code),    // dikembalikan ke Employee Code penuh
+      Must_Change_Password: 'FALSE',
+      Gagal_Login: 0,
+      Terkunci_Sampai: '',
+      Updated_At: nowStr_()
+    });
+    cabutSemuaSesi_(code, null);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'RESET_PASSWORD', 'USER', code, 'di-reset ke Employee Code');
+    return { employee_code: code, password_awal: passwordAwal_(code), password_direset: true };
+  });
+}
+
+/**
+ * Buat akun otomatis untuk setiap Employee_Code di T_Sertifikasi yang belum punya
+ * akun di Master_User. Dipakai saat migrasi data lama.
+ */
+function syncUsersFromFiles_(actorCode) {
+  var files = sheetToObjects_('T_Sertifikasi');
+  var hasil = { dibuat: 0, dilewati: 0, daftar: [], errors: [] };
+  var sudah = {};
+
+  sheetToObjects_('Master_User').forEach(function (u) { sudah[String(u.Employee_code)] = true; });
+
+  var kodeUnik = uniq_(files.map(function (f) { return String(f.Employee_Code || '').trim(); })
+    .filter(function (x) { return x; }));
+
+  kodeUnik.forEach(function (kode) {
+    if (sudah[kode]) { hasil.dilewati++; return; }
+    try {
+      // T_Sertifikasi tidak menyimpan nama pemegang, jadi akun dibuat dengan
+      // nama sementara = Employee Code. HC melengkapi namanya di Master User.
+      var nama = kode;
+      var username = namaDepan_(nama) || slugUsername_(kode);
+      if (cariUserByUsername_(username)) username = username + String(kode).toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (cariUserByUsername_(username)) username = 'user' + String(kode).toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      appendObject_('Master_User', {
+        Employee_code: kode,
+        Nama_Lengkap: nama,
+        Username: username,
+        Password: passwordAwal_(kode),   // password = Employee Code penuh
+        Role: 'EMP',
+        Email_Perusahaan: '',
+        Email_Pribadi: '',
+        Nama_Depan: namaDepan_(nama),
+        Divisi: '',
+        Jabatan: '',
+        Lokasi_Kerja: getConfig_('unit_default') || 'Patuha',
+        No_HP: '',
+        Email_Atasan: '',
+        Status: 'ACTIVE',
+        Must_Change_Password: 'TRUE',
+        Login_Terakhir: '',
+        Gagal_Login: 0,
+        Terkunci_Sampai: '',
+        Created_At: nowStr_(),
+        Updated_At: nowStr_(),
+        Created_By: actorCode || 'SYSTEM'
+      });
+      sudah[kode] = true;
+      hasil.dibuat++;
+      hasil.daftar.push(kode + ' -> ' + username);
+    } catch (e) {
+      hasil.errors.push(kode + ': ' + errMsg_(e));
+    }
+  });
+
+  logAudit_(actorCode || 'SYSTEM', 'system', 'SYSTEM', 'SINKRON_USER', 'USER', '-',
+    'dibuat ' + hasil.dibuat + ', dilewati ' + hasil.dilewati);
+  return hasil;
+}
+
+function apiSyncUsersFromFiles(token) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    return syncUsersFromFiles_(auth.employee_code);
+  });
+}
+
+/**
+ * Impor user massal dari tempelan teks.
+ * Format tiap baris: Employee_code ; Nama Lengkap ; Email Perusahaan ; Divisi ; Jabatan ; Role
+ * (hanya kolom pertama yang wajib)
+ */
+function apiImportUsers(token, teks, opsi) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var o = opsi || {};
+    var baris = String(teks || '').split(/\r?\n/);
+    var hasil = { dibuat: 0, diperbarui: 0, gagal: 0, pesan: [] };
+
+    baris.forEach(function (line, idx) {
+      var s = String(line).trim();
+      if (!s) return;
+      if (idx === 0 && /employee[_ ]?code/i.test(s)) return; // header
+      var kol = s.split(/\s*[;|\t]\s*/);
+      var kode = String(kol[0] || '').trim();
+      if (!kode) return;
+      if (!/^[A-Za-z0-9\-_/.]+$/.test(kode)) { hasil.gagal++; hasil.pesan.push('Baris ' + (idx + 1) + ': kode tidak valid'); return; }
+
+      var row = findRowByCol_('Master_User', 'Employee_code', kode);
+      var adaSebelumnya = row !== -1;
+      try {
+        var nama = String(kol[1] || kode).trim();
+        if (!nama) nama = kode;
+        var data = {
+          employee_code: kode,
+          nama_lengkap: nama,
+          email_perusahaan: String(kol[2] || '').trim(),
+          divisi: String(kol[3] || '').trim(),
+          jabatan: String(kol[4] || '').trim(),
+          role: String(kol[5] || 'EMP').trim().toUpperCase() || 'EMP',
+          status: 'ACTIVE'
+        };
+        if (!o.ganti_nama && adaSebelumnya) {
+          // mode aman: hanya lengkapi kolom yang kosong
+          var lama = cariUser_(kode);
+          data.nama_lengkap = String(lama.Nama_Lengkap || '') || nama;
+          data.email_perusahaan = String(lama.Email_Perusahaan || '') || data.email_perusahaan;
+          data.divisi = String(lama.Divisi || '') || data.divisi;
+          data.jabatan = String(lama.Jabatan || '') || data.jabatan;
+          data.role = String(lama.Role || 'EMP');
+        }
+        // panggil logika simpan tanpa guard token lagi
+        simpanUserInternal_(auth, data);
+        if (adaSebelumnya) hasil.diperbarui++; else hasil.dibuat++;
+      } catch (e) {
+        hasil.gagal++;
+        hasil.pesan.push('Baris ' + (idx + 1) + ' (' + kode + '): ' + errMsg_(e));
+      }
+    });
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'IMPOR_USER', 'USER', '-',
+      'dibuat ' + hasil.dibuat + ', diperbarui ' + hasil.diperbarui + ', gagal ' + hasil.gagal);
+    return hasil;
+  });
+}
+
+/** Inti penyimpanan user dipakai apiSaveUser & apiImportUsers. */
+function simpanUserInternal_(auth, data) {
+  var d = data || {};
+  var code = String(d.employee_code || '').trim();
+  if (!code) throw new Error('Employee Code wajib diisi.');
+  var nama = String(d.nama_lengkap || code).trim();
+  var role = String(d.role || 'EMP').toUpperCase();
+  if (['SA', 'HC', 'EMP'].indexOf(role) === -1) role = 'EMP';
+
+  var row = findRowByCol_('Master_User', 'Employee_code', code);
+  var username = slugUsername_(String(d.username || '')) || namaDepan_(nama) || slugUsername_(code);
+  if (username.length < 3) username = slugUsername_(code) || ('user' + code.toLowerCase());
+  var bentrok = cariUserByUsername_(username);
+  if (bentrok && String(bentrok.Employee_code) !== code) {
+    username = username + String(code).toLowerCase().replace(/[^a-z0-9]/g, '');
+    var b2 = cariUserByUsername_(username);
+    if (b2 && String(b2.Employee_code) !== code) username = username + Math.floor(Math.random() * 90 + 10);
+  }
+
+  var obj = {
+    Employee_code: code,
+    Nama_Lengkap: nama,
+    Username: username,
+    Nama_Depan: namaDepan_(nama),
+    Role: role,
+    Email_Perusahaan: String(d.email_perusahaan || '').trim(),
+    Email_Pribadi: String(d.email_pribadi || '').trim(),
+    Divisi: String(d.divisi || '').trim(),
+    Jabatan: String(d.jabatan || '').trim(),
+    Lokasi_Kerja: String(d.lokasi_kerja || getConfig_('unit_default') || 'Patuha').trim(),
+    No_HP: String(d.no_hp || '').trim(),
+    Email_Atasan: String(d.email_atasan || '').trim(),
+    Status: String(d.status || 'ACTIVE').toUpperCase(),
+    Updated_At: nowStr_()
+  };
+  if (['ACTIVE', 'INACTIVE'].indexOf(obj.Status) === -1) obj.Status = 'ACTIVE';
+
+  if (row === -1) {
+    obj.Password = passwordAwal_(code);  // password = Employee Code penuh
+    obj.Must_Change_Password = 'FALSE';
+    obj.Login_Terakhir = '';
+    obj.Gagal_Login = 0;
+    obj.Terkunci_Sampai = '';
+    obj.Created_At = nowStr_();
+    obj.Created_By = auth ? auth.employee_code : 'SYSTEM';
+    appendObject_('Master_User', obj);
+    return { mode: 'insert', employee_code: code, username: username };
+  }
+  updateRowByCol_('Master_User', row, obj);
+  return { mode: 'update', employee_code: code, username: username };
+}

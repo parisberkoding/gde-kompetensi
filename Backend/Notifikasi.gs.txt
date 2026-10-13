@@ -1,0 +1,826 @@
+/**
+ * ============================================================================
+ * myCertif — Notifikasi.gs.txt
+ * PT Geo Dipa Energi (Persero) — Unit Patuha
+ * ============================================================================
+ *
+ * Berkas ini adalah hasil PEMECAHAN subprocess.gs supaya setiap berkas fokus
+ * pada satu tanggung jawab. Di Google Apps Script seluruh berkas .gs berbagi
+ * satu lingkup global, jadi pemecahan ini murni soal keterbacaan & kemudahan
+ * penelusuran — bukan pemisahan proses.
+ *
+ * ISI BERKAS INI
+ * ---------------------------------------------------------------------------
+ *   8. NOTIFIKASI & REMINDER
+ *
+ * Akses spreadsheet TIDAK boleh langsung dari sini: pakai helper di Data.gs
+ * (sheetToObjects_, sheetValues_, findRowByCol_, updateRowByCol_, appendObject_,
+ *  tulisBanyak_, invalidateSheet_) supaya cache dan batch write tetap dipakai.
+ */
+
+var MARKER_NOTIFIKASI_ = 'v1.4.0';
+var NOTIFIKASI_BUILD_ = 'Notifikasi.gs v1.4.0 — notifikasi in-app, reminder email, anti-spam';
+
+// ============================================================================
+// 8. NOTIFIKASI & REMINDER
+// ============================================================================
+
+/** Tahapan pengingat: label, jumlah hari sisa, dan warna. */
+var LEVEL_REMINDER_ = [
+  { level: 'H270', hari: 270, label: '9 bulan lagi', tone: 'yellow' },
+  { level: 'H180', hari: 180, label: '6 bulan lagi', tone: 'orange' },
+  { level: 'H90', hari: 90, label: '3 bulan lagi', tone: 'red' },
+  { level: 'H60', hari: 60, label: '2 bulan lagi', tone: 'black' },
+  { level: 'H30', hari: 30, label: '1 bulan lagi', tone: 'black' },
+  { level: 'EXPIRED', hari: -1, label: 'sudah kedaluwarsa', tone: 'black' },
+  // Dipakai tombol "Kirim notifikasi" di tabel Data Sertifikasi: dikirim manual
+  // oleh HC, di luar jadwal dan ambang level otomatis.
+  { level: 'MANUAL', hari: 0, label: 'pengingat manual dari HC', tone: 'blue' }
+];
+
+/** Tahapan yang cocok untuk sebuah sisa hari (yang paling mendesak). */
+function levelUntukSisaHari_(sisaHari) {
+  var aktif = String(getConfig_('reminder_level_bulan') || '9,6,3,2,1,0')
+    .split(',').map(function (x) { return String(x).trim(); });
+  var bulan = sisaHari / 30;
+  // urut dari paling mendesak
+  var kandidat = [
+    { level: 'EXPIRED', bulan: 0 },
+    { level: 'H30', bulan: 1 },
+    { level: 'H60', bulan: 2 },
+    { level: 'H90', bulan: 3 },
+    { level: 'H180', bulan: 6 },
+    { level: 'H270', bulan: 9 }
+  ];
+  for (var i = 0; i < kandidat.length; i++) {
+    if (aktif.indexOf(String(kandidat[i].bulan)) === -1) continue;
+    if (kandidat[i].level === 'EXPIRED') {
+      if (sisaHari < 0) return kandidat[i].level;
+      continue;
+    }
+    if (bulan <= kandidat[i].bulan) return kandidat[i].level;
+  }
+  return '';
+}
+
+function levelDef_(level) {
+  for (var i = 0; i < LEVEL_REMINDER_.length; i++) {
+    if (LEVEL_REMINDER_[i].level === level) return LEVEL_REMINDER_[i];
+  }
+  return { level: level, hari: 0, label: level, tone: 'gray' };
+}
+
+/** Daftar email Human Capital & Super Admin. */
+/**
+ * Alamat email yang dipakai untuk mengirim pengingat ke seorang user.
+ *
+ * Diambil SELALU dari Master_User - tidak pernah dari alamat bawaan aplikasi,
+ * supaya pengingat tidak nyasar ke alamat placeholder seperti hc@gde.co.id.
+ * Urutannya mengikuti Config `reminder_email_utama`:
+ *   PRIBADI (default) -> Email_Pribadi dulu, lalu Email_Perusahaan
+ *   PERUSAHAAN        -> Email_Perusahaan dulu, lalu Email_Pribadi
+ * Kolom cadangan hanya dipakai bila kolom utama kosong; keduanya tetap data
+ * asli dari Master_User.
+ *
+ * @param {Object} u baris Master_User
+ * @return {string} alamat valid, atau '' bila tidak ada
+ */
+function emailUtamaUser_(u) {
+  if (!u) return '';
+  var pribadi = String(u.Email_Pribadi || '').trim();
+  var kantor = String(u.Email_Perusahaan || '').trim();
+  var mode = String(getConfig_('reminder_email_utama') || 'PRIBADI').trim().toUpperCase();
+  var urutan = (mode === 'PERUSAHAAN') ? [kantor, pribadi] : [pribadi, kantor];
+  for (var i = 0; i < urutan.length; i++) {
+    if (isEmail_(urutan[i])) return urutan[i];
+  }
+  return '';
+}
+
+/** Alamat cadangan (kolom satunya) - dipakai bila ingin dikirim ke keduanya. */
+function emailCadanganUser_(u, utama) {
+  if (!u) return '';
+  var kandidat = [String(u.Email_Pribadi || '').trim(), String(u.Email_Perusahaan || '').trim()];
+  for (var i = 0; i < kandidat.length; i++) {
+    if (kandidat[i] && kandidat[i] !== utama && isEmail_(kandidat[i])) return kandidat[i];
+  }
+  return '';
+}
+
+/** Email seluruh HC & Super Admin (aktif) dari Master_User. */
+function emailHc_() {
+  var out = [];
+  try {
+    sheetToObjects_('Master_User').forEach(function (u) {
+      var r = String(u.Role || '').toUpperCase();
+      if (r !== 'HC' && r !== 'SA') return;
+      if (String(u.Status || 'ACTIVE').toUpperCase() !== 'ACTIVE') return;
+      var e = emailUtamaUser_(u);
+      if (e) out.push(e);
+    });
+  } catch (e) { }
+  return uniq_(out);
+}
+
+/** Alamat tambahan yang sengaja diisi HC di Pengaturan (opsional). */
+function emailExtra_() {
+  var out = [];
+  String(getConfig_('reminder_extra_emails') || '').split(/[,;\n]/).forEach(function (x) {
+    var e = String(x || '').trim();
+    if (isEmail_(e)) out.push(e);
+  });
+  return uniq_(out);
+}
+
+/**
+ * Tentukan penerima pengingat untuk satu baris sertifikasi.
+ *
+ *   Kepada (TO) : pemilik data -> email dari Master_User
+ *   Cc          : seluruh HC/SA (email masing-masing dari Master_User),
+ *                 Email_Atasan bila diisi, plus alamat tambahan dari Pengaturan
+ *
+ * @return {{ke: string[], cc: string[], pemilik: Object|null}}
+ */
+function penerimaReminder_(f, peta) {
+  var u = (peta || {})[String(f.Employee_Code)] || null;
+  var ke = [];
+  var cc = [];
+
+  if (getConfigBool_('reminder_ke_karyawan', true) && u) {
+    var utama = emailUtamaUser_(u);
+    if (utama) ke.push(utama);
+  }
+  if (getConfigBool_('reminder_ke_hc', true)) {
+    emailHc_().forEach(function (e) { cc.push(e); });
+  }
+  if (getConfigBool_('reminder_ke_atasan', true) && u && isEmail_(u.Email_Atasan)) {
+    cc.push(String(u.Email_Atasan).trim());
+  }
+  emailExtra_().forEach(function (e) { cc.push(e); });
+
+  cc = uniq_(cc).filter(function (e) { return ke.indexOf(e) === -1; });
+  return { ke: ke, cc: cc, pemilik: u };
+}
+
+/** Sudah pernah dikirim untuk (doc, level) tertentu? */
+function sudahDikirim_(docId, periodeKey) {
+  try {
+    var logs = sheetToObjects_('T_Email_Log');
+    for (var i = 0; i < logs.length; i++) {
+      if (String(logs[i].Periode_key) === periodeKey && String(logs[i].Status).toUpperCase() === 'SENT') return true;
+    }
+  } catch (e) { }
+  return false;
+}
+
+/**
+ * Jalankan reminder.
+ * @param {boolean} paksa abaikan jadwal hari & abaikan penanda sudah-terkirim.
+ */
+function jalankanReminder_(paksa) {
+  var mulai = new Date();
+  var hasil = { ok: true, target: 0, terkirim: 0, gagal: 0, dilewati: 0, detail: [], pada: nowStr_() };
+
+  if (!getConfigBool_('reminder_enabled', true) && !paksa) {
+    hasil.ok = false;
+    hasil.detail.push('Reminder dinonaktifkan di Config (reminder_enabled = FALSE).');
+    return hasil;
+  }
+
+  // ---------- jadwal hari ----------
+  var hariKirim = getConfigNum_('reminder_hari_kirim', 1);
+  var hariIni = new Date().getDay(); // 0=Minggu ... 6=Sabtu
+  if (!paksa && hariKirim > 0) {
+    var targetHari = hariKirim === 7 ? 0 : hariKirim; // 7 = Minggu
+    if (hariIni !== targetHari) {
+      hasil.dilewati = 1;
+      hasil.detail.push('Bukan jadwal kirim (hari ini ' + HARI_ID_[hariIni] + ').');
+      return hasil;
+    }
+  }
+
+  var peta = petaUser_();
+  var semua = sheetToObjects_('T_Sertifikasi');
+  var maxEmail = getConfigNum_('reminder_max_email_per_jalan', 90);
+  var ulangHari = getConfigNum_('reminder_ulang_kadaluarsa_hari', 7);
+
+  for (var i = 0; i < semua.length; i++) {
+    if (hasil.terkirim >= maxEmail) {
+      hasil.detail.push('Batas ' + maxEmail + ' email per jalan tercapai, sisanya dikirim besok.');
+      break;
+    }
+    var f = semua[i];
+    var exp = toDate_(f.Expired_at);
+    if (!exp) continue;
+
+    var sisaHari = Math.round((exp.getTime() - todayDate_().getTime()) / 86400000);
+    var level = levelUntukSisaHari_(sisaHari);
+    if (!level) continue;
+
+    // hanya untuk data yang sudah diverifikasi
+    var verif = String(f.Status_Verifikasi || 'PENDING').toUpperCase();
+    if (verif === 'REJECTED') continue;
+
+    var docId = String(f.Cert_Id || '');
+    var periodeKey = docId + '|' + level;
+    if (level === 'EXPIRED') {
+      var minggu = Utilities.formatDate(todayDate_(), tz_(), 'yyyy-ww');
+      periodeKey = docId + '|EXPIRED|' + minggu;
+      // kadaluarsa diulang tiap `ulangHari` hari
+      if (!paksa && ulangHari > 0) {
+        var lastSent = '';
+        try {
+          sheetToObjects_('T_Email_Log').forEach(function (l) {
+            if (String(l.Cert_Id) === docId && String(l.Level) === 'EXPIRED'
+              && String(l.Status).toUpperCase() === 'SENT') {
+              if (String(l.Sent_At) > lastSent) lastSent = String(l.Sent_At);
+            }
+          });
+        } catch (e) { }
+        if (lastSent) {
+          var selisih = diffDays_(todayDate_(), toDate_(lastSent));
+          if (selisih !== null && selisih < ulangHari) continue;
+        }
+      }
+    } else if (!paksa && sudahDikirim_(docId, periodeKey)) {
+      hasil.dilewati++;
+      continue;
+    }
+
+    hasil.target++;
+
+    // ---------- penerima ----------
+    // Alamat selalu diambil dari Master_User (lihat penerimaReminder_).
+    var alamat = penerimaReminder_(f, peta);
+    var u = alamat.pemilik;
+    var ke = alamat.ke;
+    var cc = alamat.cc;
+
+    // Pemilik harus punya email. Mengirim hanya ke Cc lalu menghitungnya
+    // sebagai "terkirim" akan menyesatkan HC (lihat kirimReminderFile_).
+    if (!ke.length) {
+      hasil.gagal++;
+      var alasan = u
+        ? ('email pemilik (' + String(f.Employee_Code) + ') belum diisi di Master User')
+        : ('pemilik ' + String(f.Employee_Code) + ' belum terdaftar di Master User');
+      hasil.detail.push(docId + ': ' + alasan + '.');
+      catatEmailLog_(docId, String(f.Employee_Code), level, periodeKey, '',
+        cc.join(', '), '', 'SKIPPED', alasan);
+      continue;
+    }
+
+    // ---------- kirim ----------
+    var def = levelDef_(level);
+    var subjek = String(getConfig_('email_subject_prefix') || '[myCertif]') + ' '
+      + def.label.toUpperCase() + ' — ' + String(f.Nama_Sertifikasi) + ' (' + String(f.Employee_Code) + ')';
+    var html = htmlEmailReminder_(u, f, def);
+    var penerimaEfektif = ke.length ? ke : cc;
+    var ccEfektif = ke.length ? cc : [];
+
+    try {
+      kirimEmail_(penerimaEfektif, ccEfektif, subjek, html);
+      hasil.terkirim++;
+      catatEmailLog_(docId, String(f.Employee_Code), level, periodeKey,
+        penerimaEfektif.join(', '), ccEfektif.join(', '), subjek, 'SENT', '');
+      buatNotifikasi_(String(f.Employee_Code), docId, level, String(f.Status || ''), u, f, def);
+      hasil.detail.push(docId + ' [' + level + '] -> ' + penerimaEfektif.concat(ccEfektif).join(', '));
+    } catch (e) {
+      hasil.gagal++;
+      catatEmailLog_(docId, String(f.Employee_Code), level, periodeKey,
+        penerimaEfektif.join(', '), ccEfektif.join(', '), subjek, 'FAILED', errMsg_(e));
+      hasil.detail.push(docId + ': GAGAL — ' + errMsg_(e));
+    }
+  }
+
+  // ---------- log ringkasan ----------
+  try {
+    appendObject_('T_Email_Log', {
+      Log_id: generateId_('EML'),
+      Periode_key: 'RUN|' + Utilities.formatDate(new Date(), tz_(), 'yyyy-MM-dd HH:mm'),
+      Cert_Id: '-',
+      Employee_code: '-',
+      Level: 'RUN',
+      Penerima: '-',
+      Cc: '-',
+      Subject: 'Ringkasan jalan reminder',
+      Status: 'SUMMARY',
+      Error: '',
+      Sent_At: 'target=' + hasil.target + '; terkirim=' + hasil.terkirim + '; gagal=' + hasil.gagal
+    });
+  } catch (e) { }
+
+  hasil.durasi_ms = (new Date()).getTime() - mulai.getTime();
+  return hasil;
+}
+
+function catatEmailLog_(docId, employeeCode, level, periodeKey, penerima, cc, subject, status, error) {
+  try {
+    appendObject_('T_Email_Log', {
+      Log_id: generateId_('EML'),
+      Periode_key: periodeKey,
+      Cert_Id: docId,
+      Employee_code: employeeCode,
+      Level: level,
+      Penerima: penerima || '',
+      Cc: cc || '',
+      Subject: subject || '',
+      Status: status || '',
+      Error: error || '',
+      Sent_At: nowStr_()
+    });
+  } catch (e) { Logger.log('catatEmailLog_: ' + errMsg_(e)); }
+}
+
+/**
+ * Kirim email. `from` hanya dipakai bila alamatnya memang boleh dipakai;
+ * kalau ditolak (alias belum diverifikasi / beda domain), otomatis diulang
+ * tanpa `from` + memakai replyTo supaya reminder tidak gagal terkirim.
+ */
+function kirimEmail_(ke, cc, subjek, html) {
+  var teks = stripHtml_(html);
+  var pengirim = String(getConfig_('email_pengirim') || EMAIL_PENGIRIM || '').trim();
+  var dasar = { htmlBody: html, name: APP_NAME };
+  if (cc && cc.length) dasar.cc = cc.join(',');
+
+  if (pengirim && isEmail_(pengirim)) {
+    var coba = { htmlBody: html, name: APP_NAME, from: pengirim };
+    if (cc && cc.length) coba.cc = cc.join(',');
+    try {
+      MailApp.sendEmail(ke.join(','), subjek, teks, coba);
+      return 'from';
+    } catch (e) {
+      Logger.log('kirimEmail_ dengan from gagal (' + errMsg_(e) + '), dicoba tanpa from.');
+    }
+    dasar.replyTo = pengirim;
+  }
+
+  MailApp.sendEmail(ke.join(','), subjek, teks, dasar);
+  return 'biasa';
+}
+
+function stripHtml_(html) {
+  return String(html || '').replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|tr|h\d)>/gi, '\n')
+    .replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** Template email reminde — tabel sederhana agar tampil baik di semua klien. */
+/**
+ * Template email pengingat (tabel HTML sederhana, aman di semua klien email).
+ *
+ * @param {Object|null} u pemilik sertifikasi (Master_User)
+ * @param {Object} f baris T_Sertifikasi
+ * @param {Object} def definisi level (levelDef_)
+ * @param {string=} pesanTambahan catatan bebas dari HC yang ikut ditampilkan
+ */
+function htmlEmailReminder_(u, f, def, pesanTambahan) {
+  var warna = {
+    green: '#71A62F', yellow: '#D8CE3A', orange: '#E07B14',
+    red: '#ED1B2F', black: '#111111', gray: '#8494A8'
+  }[def.tone] || '#0B50A1';
+
+  var hit = hitungMasaBerlaku_(f.Expired_at);
+  var sisaTeks = hit.ada_tanggal
+    ? (hit.sisa_hari < 0
+      ? ('Sudah lewat ' + Math.abs(hit.sisa_hari) + ' hari')
+      : (hit.sisa_hari + ' hari lagi (± ' + hit.sisa_bulan + ' bulan)'))
+    : '-';
+
+  var rows = [
+    ['Nama', u ? String(u.Nama_Lengkap || '') : '-'],
+    ['Employee Code', String(f.Employee_Code || '-')],
+    ['Divisi / Jabatan', (u ? (String(u.Divisi || '-') + ' / ' + String(u.Jabatan || '-')) : '-')],
+    ['Sertifikasi', String(f.Nama_Sertifikasi || '-')],
+    ['No. Sertifikat', String(f.No_Sertifikat || '-')],
+    ['Pelaksanaan', fmtTanggalIndo_(f.Start_Pelaksanaan) + ' s.d. ' + fmtTanggalIndo_(f.End_Pelaksanaan)],
+    ['Berlaku sampai', fmtTanggalIndo_(f.Expired_at)],
+    ['Sisa masa berlaku', sisaTeks],
+    ['Status', hit.status_label || '-']
+  ];
+
+  var body = rows.map(function (r) {
+    return '<tr>'
+      + '<td style="padding:8px 12px;border-bottom:1px solid #E4E9F0;color:#5B6B80;font-size:13px;width:38%">' + r[0] + '</td>'
+      + '<td style="padding:8px 12px;border-bottom:1px solid #E4E9F0;color:#16202E;font-size:13px;font-weight:600">' + escHtml_(r[1]) + '</td>'
+      + '</tr>';
+  }).join('');
+
+  return ''
+    + '<div style="font-family:Poppins,Segoe UI,Roboto,Arial,sans-serif;background:#F4F7FB;padding:24px">'
+    + '<div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #E4E9F0;border-radius:16px;overflow:hidden">'
+    + '<div style="background:#093D7D;padding:18px 22px">'
+    + '<div style="color:#8DC63F;font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase">' + APP_NAME + '</div>'
+    + '<div style="color:#fff;font-size:18px;font-weight:700;margin-top:4px">Pengingat Masa Berlaku Sertifikasi</div>'
+    + '</div>'
+    + '<div style="padding:18px 22px">'
+    + '<div style="display:inline-block;background:' + warna + ';color:#fff;font-size:12px;font-weight:700;'
+    + 'padding:6px 14px;border-radius:100px;margin-bottom:14px">' + escHtml_(def.label.toUpperCase()) + '</div>'
+    + '<p style="font-size:14px;color:#33465C;line-height:1.65;margin:0 0 14px">'
+    + 'Sertifikasi berikut akan/sudah berakhir masa berlakunya. Mohon segera lakukan proses perpanjangan '
+    + 'agar tidak menghambat operasional dan kepatuhan.</p>'
+    + (String(pesanTambahan || '').trim()
+      ? ('<div style="border-left:3px solid #0B50A1;background:#F4F7FB;border-radius:8px;'
+        + 'padding:10px 14px;margin:0 0 14px;font-size:13px;color:#16202E;line-height:1.6">'
+        + '<b>Catatan dari Human Capital:</b><br>' + escHtml_(String(pesanTambahan).trim()) + '</div>')
+      : '')
+    + '<table style="width:100%;border-collapse:collapse;border:1px solid #E4E9F0;border-radius:12px;overflow:hidden">'
+    + body + '</table>'
+    + (f.Link_file ? ('<p style="margin:16px 0 0"><a href="' + String(f.Link_file) + '" '
+      + 'style="background:#0B50A1;color:#fff;text-decoration:none;padding:10px 18px;border-radius:100px;'
+      + 'font-size:13px;font-weight:600;display:inline-block">Lihat lampiran sertifikat</a></p>') : '')
+    + '</div>'
+    + '<div style="background:#F8FAFC;border-top:1px solid #E4E9F0;padding:12px 22px">'
+    + '<p style="margin:0;font-size:11px;color:#8494A8;line-height:1.6">'
+    + escHtml_(String(getConfig_('email_footer') || '')) + '</p></div>'
+    + '</div></div>';
+}
+
+function escHtml_(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/**
+ * Beri tahu PEMILIK data bahwa datanya sudah diperiksa HC: terverifikasi atau
+ * perlu direvisi. Notifikasi masuk ke sheet T_Notifikasi (in-app), jadi tidak
+ * memakai kuota email dan pemiliknya langsung melihat alasannya.
+ *
+ * @param {string} docId Cert_Id
+ * @param {string} employeeCode pemilik data
+ * @param {string} keputusan 'VERIFIED' | 'REVISI'
+ * @param {string} catatan alasan dari HC (ditampilkan apa adanya)
+ * @param {Object} verifikator { employee_code, username, nama, role }
+ * @param {Object} f baris T_Sertifikasi
+ */
+function notifikasiVerifikasi_(docId, employeeCode, keputusan, catatan, verifikator, f) {
+  try {
+    var def = verifikasiDef_(keputusan);
+    var namaSert = String((f && f.Nama_Sertifikasi) || '');
+    var oleh = String((verifikator && (verifikator.nama || verifikator.username)) || 'Human Capital');
+
+    var judul = keputusan === 'REVISI'
+      ? ('Perlu revisi: ' + (namaSert || 'sertifikasi Anda'))
+      : ('Terverifikasi: ' + (namaSert || 'sertifikasi Anda'));
+
+    var pesan = keputusan === 'REVISI'
+      ? ('Human Capital meminta Anda memperbaiki data ini.'
+        + (catatan ? ('\nCatatan: ' + catatan) : '')
+        + '\nBuka halaman Input Data untuk memperbaiki, lalu simpan ulang.')
+      : ('Data ini sudah diperiksa dan dinyatakan benar oleh ' + oleh + '.'
+        + (catatan ? ('\nCatatan: ' + catatan) : ''));
+
+    appendObject_('T_Notifikasi', {
+      Notif_id: generateId_('NTF'),
+      Employee_code: String(employeeCode || ''),
+      Cert_Id: String(docId || ''),
+      Level: 'VERIFIKASI',
+      Status_key: def.key,
+      Judul: judul,
+      Pesan: pesan,
+      Is_Read: 'FALSE',
+      Read_At: '',
+      Created_At: nowStr_()
+    });
+    return true;
+  } catch (e) {
+    Logger.log('notifikasiVerifikasi_: ' + errMsg_(e));
+    return false;
+  }
+}
+
+function buatNotifikasi_(employeeCode, docId, level, statusKey, u, f, def) {
+  try {
+    // hindari duplikat notifikasi untuk doc+level yang sama
+    var ada = sheetToObjects_('T_Notifikasi').some(function (n) {
+      return String(n.Cert_Id) === String(docId) && String(n.Level) === String(level)
+        && String(n.Employee_code) === String(employeeCode);
+    });
+    if (ada) return false;
+
+    appendObject_('T_Notifikasi', {
+      Notif_id: generateId_('NTF'),
+      Employee_code: String(employeeCode || ''),
+      Cert_Id: String(docId || ''),
+      Level: String(level || ''),
+      Status_key: String(statusKey || ''),
+      Judul: 'Sertifikasi ' + String(f.Nama_Sertifikasi || '') + ' — ' + def.label,
+      Pesan: 'Masa berlaku sampai ' + fmtTanggalIndo_(f.Expired_at)
+        + '. Segera lakukan perpanjangan.',
+      Is_Read: 'FALSE',
+      Read_At: '',
+      Created_At: nowStr_()
+    });
+    return true;
+  } catch (e) { Logger.log('buatNotifikasi_: ' + errMsg_(e)); return false; }
+}
+
+/** Simpan notifikasi in-app saat data disimpan dengan status mendesak. */
+function notifikasiStatusMendesak_(docId) {
+  var f = cariFile_(docId);
+  if (!f) return;
+  var hit = hitungMasaBerlaku_(f.Expired_at);
+  if (!hit.status) return;
+  var def = STATUS_MAP_[hit.status];
+  if (!def || def.prioritas > 3) return;
+  var sisa = hit.sisa_hari;
+  var level = sisa < 0 ? 'EXPIRED' : ('H' + (sisa <= 60 ? 60 : 90));
+  var u = cariUser_(String(f.Employee_Code));
+  buatNotifikasi_(String(f.Employee_Code), docId, level, hit.status, u, f, levelDef_(level));
+}
+
+// ---------- endpoint notifikasi ----------
+
+function apiListNotifications(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var peta = petaUser_();
+    var rows = sheetToObjects_('T_Notifikasi').filter(function (n) {
+      if (auth.role === 'EMP') return String(n.Employee_code) === auth.employee_code;
+      if (f.employee_code) return String(n.Employee_code) === String(f.employee_code);
+      return true;
+    }).map(function (n) {
+      var u = peta[String(n.Employee_code)];
+      return {
+        notif_id: String(n.Notif_id || ''),
+        employee_code: String(n.Employee_code || ''),
+        nama: u ? String(u.Nama_Lengkap || '') : '',
+        doc_id: String(n.Cert_Id || ''),
+        level: String(n.Level || ''),
+        status_key: String(n.Status_key || ''),
+        judul: String(n.Judul || ''),
+        pesan: String(n.Pesan || ''),
+        is_read: String(n.Is_Read || 'FALSE').toUpperCase() === 'TRUE',
+        created_at: fmtWaktu_(n.Created_At)
+      };
+    });
+    rows.sort(function (a, b) { return String(b.created_at).localeCompare(String(a.created_at)); });
+    var belum = rows.filter(function (r) { return !r.is_read; }).length;
+    var limit = Number(f.limit) || 50;
+    return { rows: rows.slice(0, limit), total: rows.length, belum_dibaca: belum };
+  });
+}
+
+function apiMarkNotificationRead(token, notifId) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var row = findRowByCol_('T_Notifikasi', 'Notif_id', notifId);
+    if (row === -1) throw new Error('Notifikasi tidak ditemukan.');
+    var n = rowToObject_('T_Notifikasi', row);
+    if (auth.role === 'EMP' && String(n.Employee_code) !== auth.employee_code) {
+      throw new Error('Anda tidak berhak mengubah notifikasi ini.');
+    }
+    updateRowByCol_('T_Notifikasi', row, { Is_Read: 'TRUE', Read_At: nowStr_() });
+    return { ok: true };
+  });
+}
+
+function apiMarkAllNotificationRead(token) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var rows = sheetToObjects_('T_Notifikasi');
+    var n = 0;
+    rows.forEach(function (x) {
+      if (String(x.Is_Read).toUpperCase() === 'TRUE') return;
+      if (auth.role === 'EMP' && String(x.Employee_code) !== auth.employee_code) return;
+      try { updateRowByCol_('T_Notifikasi', x.__row, { Is_Read: 'TRUE', Read_At: nowStr_() }); n++; } catch (e) { }
+    });
+    return { diubah: n };
+  });
+}
+
+function apiRunReminderNow(token) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var r = jalankanReminder_(true);
+    logAudit_(auth.employee_code, auth.username, auth.role, 'JALANKAN_REMINDER', 'SYSTEM', '-',
+      'target ' + r.target + ', terkirim ' + r.terkirim + ', gagal ' + r.gagal);
+    return r;
+  });
+}
+
+/**
+ * Susun subjek & isi email pengingat untuk satu baris sertifikasi.
+ * Dipakai bersama oleh reminder harian dan tombol "Kirim notifikasi" manual,
+ * supaya isi pesannya selalu sama.
+ *
+ * @param {Object} f baris T_Sertifikasi
+ * @param {Object|null} u baris Master_User pemilik
+ * @param {string} level H270/H180/H90/H60/H30/EXPIRED/MANUAL
+ * @param {string=} pesanTambahan catatan bebas dari HC
+ */
+function susunEmailReminder_(f, u, level, pesanTambahan) {
+  var def = levelDef_(level);
+  var subjek = String(getConfig_('email_subject_prefix') || '[myCertif]') + ' '
+    + def.label.toUpperCase() + ' — ' + String(f.Nama_Sertifikasi)
+    + ' (' + String(f.Employee_Code) + ')';
+  var html = htmlEmailReminder_(u, f, def, pesanTambahan);
+  return { def: def, subjek: subjek, html: html };
+}
+
+/**
+ * Kirim pengingat untuk SATU baris sertifikasi.
+ *
+ * Tidak menulis apa pun bila tidak ada alamat tujuan; hasilnya dikembalikan
+ * sebagai objek supaya pemanggil bisa melaporkan alasannya ke pengguna.
+ *
+ * @param {Object} f baris T_Sertifikasi
+ * @param {Object=} opsi { pesan, peta, level, aktor }
+ * @return {Object} { terkirim, alasan, level, ke, cc, subjek, pemilik }
+ */
+function kirimReminderFile_(f, opsi) {
+  var o = opsi || {};
+  var peta = o.peta || petaUser_();
+  var alamat = penerimaReminder_(f, peta);
+  var u = alamat.pemilik;
+
+  var exp = toDate_(f.Expired_at);
+  var sisaHari = exp ? Math.round((exp.getTime() - todayDate_().getTime()) / 86400000) : null;
+  var level = String(o.level || '').trim().toUpperCase();
+  if (!level) {
+    // tombol manual: pakai level otomatis bila ada, kalau tidak -> MANUAL
+    level = (sisaHari === null) ? 'MANUAL' : (levelUntukSisaHari_(sisaHari) || 'MANUAL');
+  }
+
+  var certId = String(f.Cert_Id || '');
+  var periodeKey = certId + '|' + level;
+  var hasil = {
+    terkirim: false, alasan: '', level: level,
+    ke: alamat.ke, cc: alamat.cc, subjek: '',
+    pemilik: u ? {
+      employee_code: String(u.Employee_code || ''),
+      nama_lengkap: String(u.Nama_Lengkap || ''),
+      email: alamat.ke.length ? alamat.ke[0] : ''
+    } : null
+  };
+
+  /*
+   * Pemilik data WAJIB punya alamat email. Bila tidak, jangan mengirim hanya ke
+   * Cc lalu melaporkan sukses — HC akan mengira karyawannya sudah diingatkan
+   * padahal belum. Lebih baik dilaporkan gagal dengan alasan yang jelas supaya
+   * datanya dilengkapi di Master User.
+   */
+  if (!alamat.ke.length) {
+    hasil.alasan = u
+      ? ('Email pemilik ' + String(f.Employee_Code) + ' (' + String(u.Nama_Lengkap || '') + ') '
+        + 'belum diisi di Master User — lengkapi kolom Email Pribadi.')
+      : ('Pemilik ' + String(f.Employee_Code) + ' belum terdaftar di Master User.');
+    catatEmailLog_(certId, String(f.Employee_Code), level, periodeKey, '',
+      alamat.cc.join(', '), '', 'SKIPPED', hasil.alasan);
+    return hasil;
+  }
+
+  var surel = susunEmailReminder_(f, u, level, o.pesan);
+  hasil.subjek = surel.subjek;
+
+  var penerimaEfektif = alamat.ke.length ? alamat.ke : alamat.cc;
+  var ccEfektif = alamat.ke.length ? alamat.cc : [];
+
+  try {
+    kirimEmail_(penerimaEfektif, ccEfektif, surel.subjek, surel.html);
+    hasil.terkirim = true;
+    catatEmailLog_(certId, String(f.Employee_Code), level, periodeKey,
+      penerimaEfektif.join(', '), ccEfektif.join(', '), surel.subjek, 'SENT', '');
+    // notifikasi in-app supaya pemilik juga melihatnya di aplikasi
+    try {
+      buatNotifikasi_(String(f.Employee_Code), certId, level, String(f.Status || ''), u, f, surel.def);
+    } catch (eNotif) { Logger.log('buatNotifikasi_ manual: ' + errMsg_(eNotif)); }
+  } catch (e) {
+    hasil.alasan = errMsg_(e);
+    catatEmailLog_(certId, String(f.Employee_Code), level, periodeKey,
+      penerimaEfektif.join(', '), ccEfektif.join(', '), surel.subjek, 'FAILED', hasil.alasan);
+  }
+  return hasil;
+}
+
+/**
+ * Tombol "Kirim notifikasi" pada tabel Data Sertifikasi.
+ *
+ * HC memilih sendiri kapan mengirim, jadi jadwal harian dan penanda
+ * sudah-terkirim sengaja dilewati — tetapi tetap dicatat di T_Email_Log
+ * (memakai Periode_key level yang sama) sehingga pengingat otomatis untuk
+ * level itu tidak dikirim dua kali.
+ *
+ * @param {string} certId Cert_Id
+ * @param {string=} pesanTambahan catatan bebas yang ikut dikirim
+ */
+function apiKirimNotifikasiFile(token, certId, pesanTambahan) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var id = String(certId || '').trim();
+    if (!id) throw new Error('Cert_Id wajib diisi.');
+    var f = cariFile_(id);
+    if (!f) throw new Error('Data sertifikasi tidak ditemukan.');
+
+    var hasil = kirimReminderFile_(f, {
+      pesan: String(pesanTambahan || '').trim(),
+      aktor: auth
+    });
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'KIRIM_NOTIFIKASI', 'FILE', id,
+      { terkirim: hasil.terkirim, level: hasil.level, ke: hasil.ke, cc: hasil.cc, alasan: hasil.alasan });
+
+    return {
+      terkirim: hasil.terkirim,
+      alasan: hasil.alasan,
+      level: hasil.level,
+      level_label: hasil.def ? hasil.def.label : levelDef_(hasil.level).label,
+      ke: hasil.ke,
+      cc: hasil.cc,
+      subjek: hasil.subjek,
+      pemilik: hasil.pemilik
+    };
+  });
+}
+
+/** Pratinjau penerima sebelum HC menekan kirim (tanpa mengirim apa pun). */
+function apiPratinjauNotifikasi(token, certId) {
+  return apiGuard_(function () {
+    requireHc_(token);
+    var f = cariFile_(String(certId || '').trim());
+    if (!f) throw new Error('Data sertifikasi tidak ditemukan.');
+    var peta = petaUser_();
+    var alamat = penerimaReminder_(f, peta);
+    var u = alamat.pemilik;
+    var exp = toDate_(f.Expired_at);
+    var sisaHari = exp ? Math.round((exp.getTime() - todayDate_().getTime()) / 86400000) : null;
+    var level = (sisaHari === null) ? 'MANUAL' : (levelUntukSisaHari_(sisaHari) || 'MANUAL');
+    return {
+      cert_id: String(f.Cert_Id || ''),
+      nama_sertifikasi: String(f.Nama_Sertifikasi || ''),
+      nama_pemegang: u ? String(u.Nama_Lengkap || '') : '',
+      employee_code: String(f.Employee_Code || ''),
+      expired_at: fmtDate_(f.Expired_at, 'yyyy-MM-dd'),
+      sisa_hari: sisaHari,
+      sisa_teks: exp ? durasiTeks_(exp) : '',
+      level: level,
+      level_label: levelDef_(level).label,
+      ke: alamat.ke,
+      cc: alamat.cc,
+      email_pribadi: u ? String(u.Email_Pribadi || '') : '',
+      email_perusahaan: u ? String(u.Email_Perusahaan || '') : '',
+      ada_tujuan: !!(alamat.ke.length || alamat.cc.length),
+      pakai_cadangan: !!(alamat.ke.length && u
+        && String(u.Email_Pribadi || '').trim().toLowerCase() !== String(alamat.ke[0]).toLowerCase())
+    };
+  });
+}
+
+function apiRingkasanReminder(token) {
+  return apiGuard_(function () {
+    requireHc_(token);
+    var logs = sheetToObjects_('T_Email_Log');
+    var terkirim = logs.filter(function (l) { return String(l.Status).toUpperCase() === 'SENT'; }).length;
+    var gagal = logs.filter(function (l) { return String(l.Status).toUpperCase() === 'FAILED'; }).length;
+    var terakhir = '';
+    logs.forEach(function (l) {
+      if (String(l.Status).toUpperCase() !== 'SENT') return;
+      if (String(l.Sent_At) > terakhir) terakhir = String(l.Sent_At);
+    });
+    return {
+      total_terkirim: terkirim,
+      total_gagal: gagal,
+      terakhir_kirim: terakhir,
+      email_hc: emailHc_(),
+      jadwal_hari: getConfigNum_('reminder_hari_kirim', 1),
+      level_aktif: String(getConfig_('reminder_level_bulan') || ''),
+      enabled: getConfigBool_('reminder_enabled', true)
+    };
+  });
+}
+
+// ---------- trigger harian ----------
+
+/** Dibuat otomatis saat bootstrap; juga tersedia dari menu spreadsheet. */
+function createDailyReminderTrigger() {
+  deleteDailyReminderTrigger();
+  ScriptApp.newTrigger('reminderHarian_')
+    .timeBased()
+    .atHour(7)
+    .everyDays(1)
+    .inTimezone(tz_())
+    .create();
+  alertOrLog_('Trigger reminder harian dibuat (07:00 ' + tz_() + ').');
+  return { ok: true };
+}
+
+function deleteDailyReminderTrigger() {
+  var n = 0;
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'reminderHarian_') { ScriptApp.deleteTrigger(t); n++; }
+  });
+  return { ok: true, dihapus: n };
+}
+
+/** Entry point trigger harian. */
+function reminderHarian_() {
+  try {
+    var r = jalankanReminder_(false);
+    Logger.log('reminderHarian_: ' + JSON.stringify({ target: r.target, terkirim: r.terkirim, gagal: r.gagal }));
+    return r;
+  } catch (e) {
+    Logger.log('reminderHarian_ gagal: ' + errMsg_(e));
+    return { ok: false, error: errMsg_(e) };
+  }
+}

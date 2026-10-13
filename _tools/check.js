@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
  * ============================================================================
- * check.js — Pemeriksa konsistensi project SIAGA Sertifikasi
+ * check.js — Pemeriksa konsistensi project myCertif
  * Jalankan dari akar project:  node _tools/check.js
  * ============================================================================
  *
  * Yang diperiksa:
  *   1.  Kelengkapan berkas wajib.
  *   2.  Duplikasi nama fungsi di Backend/*.gs.txt.
- *   3.  Setiap panggilan SIAGA.api('apiXxx', ...) di Frontend punya
+ *   3.  Setiap panggilan MyCertif.api('apiXxx', ...) di Frontend punya
  *       implementasi function apiXxx() di Backend.
  *   4.  Setiap fungsi apiXxx di Backend dipakai frontend (peringatan saja).
  *   5.  Setiap view di Frontend/Javascript.html.txt punya berkas .html.txt,
@@ -50,7 +50,7 @@ const gsFiles = baca(DIR_BE, '.gs.txt');
 const htmlFiles = baca(DIR_FE, '.html.txt');
 
 log('================================================================');
-log(' SIAGA Sertifikasi — consistency check');
+log(' myCertif — consistency check');
 log('================================================================');
 log(`Backend  (.gs.txt)   : ${gsFiles.length} berkas`);
 log(`Frontend (.html.txt) : ${htmlFiles.length} berkas`);
@@ -61,7 +61,7 @@ const wajibFE = [
   'Index.html.txt', 'Login.html.txt', 'Stylesheet.html.txt', 'Javascript.html.txt',
   'Dashboard.html.txt', 'DataSertifikasi.html.txt', 'Register.html.txt',
   'ProfilPekerja.html.txt', 'ProfilUser.html.txt', 'KeamananAkun.html.txt',
-  'Notifikasi.html.txt', 'MasterUser.html.txt', 'MasterSertifikasi.html.txt',
+  'Notifikasi.html.txt', 'MasterUser.html.txt',
   'Import.html.txt',
   'Pengaturan.html.txt'
 ];
@@ -119,7 +119,7 @@ if (yatim.length) {
 }
 
 /* ------------------------------------------------------ 3. panggilan apiXxx */
-head('[3] Panggilan SIAGA.api() di Frontend vs implementasi Backend');
+head('[3] Panggilan MyCertif.api() di Frontend vs implementasi Backend');
 const backendTeks = gsFiles.map((f) => f.teks).join('\n');
 const reApiBackend = /^function\s+(api[A-Za-z0-9_]+)\s*\(/gm;
 const apiBackend = new Set();
@@ -132,8 +132,8 @@ while ((mB = reApiBackend.exec(backendTeks)) !== null) {
 
 const apiDipakai = new Map(); // nama -> [berkas]
 htmlFiles.forEach((f) => {
-  // cocok untuk SIAGA.api('apiX') maupun api('apiX') di dalam modul SIAGA
-  const re = /(?:SIAGA\.)?\bapi\(\s*'([A-Za-z0-9_]+)'/g;
+  // cocok untuk MyCertif.api('apiX') maupun api('apiX') di dalam modul MyCertif
+  const re = /(?:myCertif\.)?\bapi\(\s*'([A-Za-z0-9_]+)'/g;
   let m;
   while ((m = re.exec(f.teks)) !== null) {
     if (!apiDipakai.has(m[1])) apiDipakai.set(m[1], new Set());
@@ -152,7 +152,7 @@ head('[4] Endpoint Backend yang tidak dipanggil frontend (peringatan)');
 const diabaikan = new Set([
   // helper pembungkus, bukan endpoint
   'apiSuccess', 'apiError', 'apiGuard_',
-  // hanya dipakai halaman tanpa login / dibungkus SIAGA.login & SIAGA.logout
+  // hanya dipakai halaman tanpa login / dibungkus MyCertif.login & MyCertif.logout
   'apiGetBootstrapStatus', 'apiGetExecUrl', 'apiLogin', 'apiLogout',
   // alias internal
   'apiUpdateMyProfile'
@@ -357,7 +357,7 @@ head('[10] Tumbukan nama fungsi global antar berkas Frontend');
  */
 const fnFrontend = {};
 htmlFiles.forEach((f) => {
-  if (f.nama === 'Javascript.html.txt') return; // modul SIAGA, memakai IIFE
+  if (f.nama === 'Javascript.html.txt') return; // modul MyCertif, memakai IIFE
   const re = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
   let ms;
   while ((ms = re.exec(f.teks)) !== null) {
@@ -387,11 +387,11 @@ if (jsFe) {
 }
 
 /* ------------------------------------------------- 11. kontrak frontend */
-head('[11] Kontrak frontend: SIAGA.*, kelas CSS, dan ikon');
+head('[11] Kontrak frontend: MyCertif.*, kelas CSS, dan ikon');
 
 const jsMod = htmlFiles.find((f) => f.nama === 'Javascript.html.txt');
 if (jsMod) {
-  // --- nama yang diekspor modul SIAGA ---
+  // --- nama yang diekspor modul MyCertif ---
   const potong = jsMod.teks.lastIndexOf('return {');
   const blokEkspor = potong === -1 ? '' : jsMod.teks.slice(potong);
   const namaEkspor = new Set();
@@ -402,26 +402,90 @@ if (jsMod) {
   const manual = new Set(['APP', 'state', 'VIEWS', 'ATURAN_BERKAS', 'BULAN', 'BULAN_SINGKAT', 'HARI']);
 
   // --- nama yang dipakai view ---
-  const dipakaiSIAGA = new Map();
+  const dipakaiMyCertif = new Map();
   htmlFiles.forEach((f) => {
     if (f.nama === 'Javascript.html.txt') return;
-    const re = /\bSIAGA\.([A-Za-z_][A-Za-z0-9_]*)/g;
+    const re = /\bMyCertif\.([A-Za-z_][A-Za-z0-9_]*)/g;
     let m;
     while ((m = re.exec(f.teks)) !== null) {
-      if (!dipakaiSIAGA.has(m[1])) dipakaiSIAGA.set(m[1], new Set());
-      dipakaiSIAGA.get(m[1]).add(f.nama);
+      if (!dipakaiMyCertif.has(m[1])) dipakaiMyCertif.set(m[1], new Set());
+      dipakaiMyCertif.get(m[1]).add(f.nama);
     }
   });
 
   let hilang = 0;
-  [...dipakaiSIAGA.keys()].sort().forEach((n) => {
+  [...dipakaiMyCertif.keys()].sort().forEach((n) => {
     if (namaEkspor.has(n) || manual.has(n)) return;
     hilang++;
-    fail(`SIAGA.${n} dipakai di ${[...dipakaiSIAGA.get(n)].join(', ')} tetapi tidak diekspor Javascript.html.txt`);
+    fail(`MyCertif.${n} dipakai di ${[...dipakaiMyCertif.get(n)].join(', ')} tetapi tidak diekspor Javascript.html.txt`);
   });
-  if (!hilang) ok(`semua ${dipakaiSIAGA.size} anggota SIAGA.* yang dipakai view tersedia`);
+  if (!hilang) ok(`semua ${dipakaiMyCertif.size} anggota MyCertif.* yang dipakai view tersedia`);
 
-  // --- kelas CSS statis gde-*/siaga-* ---
+  /* --- pemanggilan fungsi myCertif TANPA prefix "MyCertif." ---
+   * Fungsi di dalam modul MyCertif hidup di lingkup IIFE, jadi view TIDAK bisa
+   * memanggilnya sebagai fungsi global. Kesalahan seperti `perbaruiBadgeMendesak()`
+   * (seharusnya `MyCertif.perbaruiBadgeMendesak()`) baru ketahuan sebagai
+   * ReferenceError saat halaman dipakai. Pemeriksaan ini menangkapnya lebih awal.
+   */
+  // Fungsi yang dideklarasikan di dalam view boleh punya indentasi, jadi
+  // pemeriksaan "tanpa prefix" memakai pola yang tidak terikat awal baris.
+  const namaLokalView = new Set(Object.keys(fnFrontend));
+  htmlFiles.forEach((f) => {
+    if (f.nama === 'Javascript.html.txt' || f.nama === 'Stylesheet.html.txt') return;
+    const reS = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
+    let mss;
+    while ((mss = reS.exec(f.teks)) !== null) {
+      const isi = mss[1].replace(/<\?[\s\S]*?\?>/g, 'null');
+      const reFn = /function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/g;
+      let mf;
+      while ((mf = reFn.exec(isi)) !== null) namaLokalView.add(mf[1]);
+      // var nama = function (...) { ... }  /  nama: function (...) { ... }
+      const reVar = /(?:^|[\s,{])([A-Za-z_$][A-Za-z0-9_$]*)\s*[:=]\s*function\s*\(/g;
+      let mv;
+      while ((mv = reVar.exec(isi)) !== null) namaLokalView.add(mv[1]);
+    }
+  });
+  const bawaan = new Set([
+    'if', 'for', 'while', 'switch', 'catch', 'return', 'function', 'typeof', 'new',
+    'String', 'Number', 'Boolean', 'Array', 'Object', 'Date', 'Math', 'JSON', 'RegExp',
+    'Error', 'Promise', 'parseInt', 'parseFloat', 'isNaN', 'setTimeout', 'clearTimeout',
+    'setInterval', 'clearInterval', 'encodeURIComponent', 'decodeURIComponent', 'require'
+  ]);
+  const tanpaPrefix = new Map();
+  htmlFiles.forEach((f) => {
+    if (f.nama === 'Javascript.html.txt' || f.nama === 'Stylesheet.html.txt') return;
+    const re = /<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/gi;
+    let ms;
+    while ((ms = re.exec(f.teks)) !== null) {
+      const isi = ms[1].replace(/<\?[\s\S]*?\?>/g, 'null');
+      // buang komentar agar contoh di dokumentasi tidak ikut terbaca
+      const bersih = isi.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+      // Identifier yang TIDAK didahului "." / "$" / ":" — supaya MyCertif.qsa(...)
+      // atau { kunci: nilai(...) } tidak ikut dianggap pemanggilan tanpa prefix.
+      const reCall = /(?<![\w.$:])([A-Za-z_][A-Za-z0-9_]*)\s*\(/g;
+      let mc;
+      while ((mc = reCall.exec(bersih)) !== null) {
+        const n = mc[1];
+        if (bawaan.has(n) || namaLokalView.has(n)) continue;
+        if (!namaEkspor.has(n) && !manual.has(n)) continue;
+        // lewati deklarasi "function nama(" dan metode objek "nama: function ("
+        const sebelum = bersih.slice(Math.max(0, mc.index - 12), mc.index);
+        if (/\bfunction\s+$/.test(sebelum)) continue;
+        if (!tanpaPrefix.has(n)) tanpaPrefix.set(n, new Set());
+        tanpaPrefix.get(n).add(f.nama);
+      }
+    }
+  });
+  if (tanpaPrefix.size) {
+    [...tanpaPrefix.keys()].sort().forEach((n) => {
+      fail(`${n}() dipanggil di ${[...tanpaPrefix.get(n)].join(', ')} tanpa prefix — `
+        + `tulis MyCertif.${n}() karena fungsi itu ada di dalam modul MyCertif (lingkup IIFE)`);
+    });
+  } else {
+    ok('tidak ada pemanggilan fungsi myCertif tanpa prefix "MyCertif."');
+  }
+
+  // --- kelas CSS statis gde-*/mycertif-* ---
   if (styleFe) {
     const kelasCss = new Set();
     const reKelas = /\.([a-zA-Z][a-zA-Z0-9_-]*)/g;
@@ -435,7 +499,7 @@ if (jsMod) {
       let mc;
       while ((mc = re.exec(f.teks)) !== null) {
         mc[1].split(/\s+/).forEach((c) => {
-          if (!/^(gde|siaga)-[a-z0-9-]+$/.test(c)) return;
+          if (!/^(gde|myCertif)-[a-z0-9-]+$/.test(c)) return;
           if (kelasCss.has(c)) return;
           if (!kelasHilang.has(c)) kelasHilang.set(c, new Set());
           kelasHilang.get(c).add(f.nama);
@@ -447,7 +511,7 @@ if (jsMod) {
         warn(`kelas .${c} dipakai di ${[...kelasHilang.get(c)].join(', ')} tetapi tidak ada di Stylesheet`);
       });
     } else {
-      ok('semua kelas gde-*/siaga-* yang dipakai view tersedia di Stylesheet');
+      ok('semua kelas gde-*/mycertif-* yang dipakai view tersedia di Stylesheet');
     }
 
     // --- ikon Bootstrap Icons ---
@@ -477,6 +541,74 @@ if (jsMod) {
         ok('semua ikon bi-* yang dipakai tersedia di pustaka Bootstrap Icons');
       }
     }
+  }
+}
+
+/* ------------------------------------------------- 12. konsistensi merek */
+head('[12] Konsistensi nama aplikasi (myCertif)');
+
+{
+  const semuaTeks = gsFiles.concat(htmlFiles).map((f) => ({ nama: f.nama, teks: f.teks }));
+  const kodeGs = gsFiles.find((f) => f.nama === 'Kode.gs.txt');
+
+  if (kodeGs) {
+    const mNama = kodeGs.teks.match(/var APP_NAME = '([^']+)'/);
+    ok("APP_NAME = 'myCertif'", !!mNama && mNama[1] === 'myCertif',
+      mNama ? mNama[1] : 'tidak ditemukan');
+
+    const mApp = kodeGs.teks.match(/'app_name':\s*([^,\n]+)/);
+    ok("Config default app_name memakai APP_NAME", !!mApp && mApp[1].indexOf('APP_NAME') !== -1,
+      mApp ? mApp[1] : 'tidak ditemukan');
+
+    ok('subjek email default memakai myCertif',
+      /'email_subject_prefix': '[^']*myCertif[^']*'/.test(kodeGs.teks));
+    ok('catatan kaki email memakai myCertif',
+      /'email_footer': '[^']*myCertif[^']*'/.test(kodeGs.teks));
+    ok('folder Drive default memakai myCertif',
+      kodeGs.teks.indexOf("'myCertif_Lampiran'") !== -1);
+    ok('menu spreadsheet memakai myCertif',
+      kodeGs.teks.indexOf("createMenu('myCertif')") !== -1);
+  }
+
+  /*
+   * Nama lama hanya boleh muncul pada baris yang jelas-jelas menangani
+   * kompatibilitas data lama. Kalau muncul di tempat lain, berarti ada sisa
+   * penggantian nama yang terlewat.
+   */
+  const penandaLama = /(LAMA|kompatibilitas|masih bernama)/;
+  const sisa = [];
+  semuaTeks.forEach((f) => {
+    f.teks.split('\n').forEach((baris, i) => {
+      if (!/SIAGA/i.test(baris)) return;
+      if (penandaLama.test(baris)) return;
+      sisa.push(f.nama + ':' + (i + 1) + ' — ' + baris.trim().slice(0, 70));
+    });
+  });
+  if (sisa.length) {
+    sisa.slice(0, 8).forEach((s) => fail('nama lama masih tersisa -> ' + s));
+    if (sisa.length > 8) fail('...dan ' + (sisa.length - 8) + ' baris lain');
+  } else {
+    ok('tidak ada sisa nama lama di luar baris kompatibilitas');
+  }
+
+  /* namespace & awalan kelas sudah berganti nama */
+  const jsFe2 = htmlFiles.find((f) => f.nama === 'Javascript.html.txt');
+  if (jsFe2) {
+    ok('namespace JavaScript MyCertif terdefinisi',
+      /var MyCertif = \(function/.test(jsFe2.teks));
+    ok('tidak ada lagi var SIAGA = ', jsFe2.teks.indexOf('var SIAGA =') === -1);
+  }
+  if (styleFe) {
+    ok('kelas CSS memakai awalan mycertif-', styleFe.teks.indexOf('.mycertif-') !== -1);
+    ok('tidak ada lagi kelas .siaga-', styleFe.teks.indexOf('.siaga-') === -1);
+  }
+
+  /* kompatibilitas instalasi lama */
+  if (kodeGs && jsFe2) {
+    ok('penanda bootstrap lama masih dibaca',
+      kodeGs.teks.indexOf("BOOTSTRAP_PROP_LAMA_ = 'SIAGA_BOOTSTRAP'") !== -1);
+    ok('kunci token lama masih dibaca',
+      jsFe2.teks.indexOf("TOKEN_KEY_LAMA = 'siaga.token'") !== -1);
   }
 }
 

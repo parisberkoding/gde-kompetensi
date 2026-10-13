@@ -1,0 +1,557 @@
+/**
+ * ============================================================================
+ * Data.gs — LAPISAN AKSES DATA BER-CACHE (myCertif — Unit Patuha)
+ * ============================================================================
+ *
+ * MENGAPA BERKAS INI ADA
+ * ----------------------
+ * Seluruh kelambatan aplikasi ini berasal dari satu hal: bolak-balik ke Google
+ * Spreadsheet. Setiap `getValues()` adalah panggilan jaringan, dan Apps Script
+ * tidak menyimpan hasilnya.
+ *
+ * Penyebab terburuk yang terukur: `getConfig_(key)` membaca SELURUH sheet Config
+ * setiap kali dipanggil, sedangkan mesin status memanggilnya 5x untuk SETIAP
+ * baris data. Untuk 260 baris data berarti ~1.300 pembacaan sheet hanya untuk
+ * membaca 41 baris konfigurasi yang isinya tidak berubah-ubah.
+ *
+ * Berkas ini memusatkan SEMUA akses sheet pada satu pintu yang:
+ *   1. Mencatat hasil baca di memori selama satu eksekusi (`MEMO_`).
+ *      Satu eksekusi Apps Script = satu permintaan pengguna. Jadi sheet Config
+ *      dibaca sekali, bukan 1.300 kali.
+ *   2. Menyimpan Config di `CacheService` (bertahan antar-permintaan, TTL 5
+ *      menit) dan membuangnya otomatis setiap kali Config diubah.
+ *   3. Membangun indeks pencarian baris (`petaBaris_`) sekali per eksekusi,
+ *      sehingga `findRowByCol_()` tidak lagi menarik seluruh kolom tiap kali.
+ *   4. Menulis perubahan secara BATCH: satu `setValues()` untuk kolom-kolom
+ *      yang bersebelahan, bukan satu `setValue()` per kolom.
+ *
+ * Semua helper publik (nama berakhiran `_`) mempertahankan perilaku persis
+ * seperti sebelumnya, sehingga berkas lain tidak perlu diubah selain memanggil
+ * `invalidateSheet_()` setelah menulis langsung ke sheet.
+ *
+ * ATURAN PENTING SAAT MENAMBAH KODE
+ * ---------------------------------
+ * - Jangan pernah membaca sheet lewat `SpreadsheetApp` langsung di berkas lain.
+ *   Selalu lewat `sheetValues_()` / `sheetToObjects_()` / `rowToObject_()`.
+ * - Setelah menulis ke sheet di luar fungsi di berkas ini, panggil
+ *   `invalidateSheet_('NamaSheet')`.
+ * - Array objek yang dikembalikan `sheetToObjects_()` dipakai bersama (shared)
+ *   selama satu eksekusi. JANGAN mengubah urutannya di tempat (`sort()`),
+ *   menambah, atau menghapus isinya — pakai `.filter()`/`.map()` dulu.
+ * ============================================================================
+ */
+
+var MARKER_DATA_ = 'v1.4.0';
+var DATA_BUILD_ = 'Data.gs v1.4.0 — cache config + memo baris + batch write';
+
+/** Kunci & masa berlaku cache Config (detik). Config jarang berubah. */
+var CACHE_CONFIG_KEY_ = 'myCertif:config:v1';
+var CACHE_CONFIG_TTL_ = 300;
+
+/**
+ * Penyimpanan sementara SELAMA SATU EKSEKUSI.
+ * Apps Script membuat konteks baru setiap permintaan, jadi isinya otomatis
+ * hilang setelah permintaan selesai — tidak ada risiko data basi antar-pengguna.
+ */
+var MEMO_ = {
+  ss: null,          // objek Spreadsheet yang sedang dibuka
+  ssId: '',          // id spreadsheet yang sudah diresolusi
+  config: null,      // objek konfigurasi lengkap
+  values: {},        // nama sheet -> array 2D mentah
+  objects: {},       // nama sheet -> array objek (header -> nilai)
+  header: {},        // nama sheet -> array nama kolom
+  index: {},         // "sheet|kolom" -> peta nilai -> nomor baris
+  tz: ''             // zona waktu (Session.getScriptTimeZone() cukup 1x)
+};
+
+/** Kosongkan seluruh memo satu eksekusi (dipakai pengujian / setelah bootstrap). */
+function memoBersih_() {
+  MEMO_.ss = null;
+  MEMO_.ssId = '';
+  MEMO_.config = null;
+  MEMO_.values = {};
+  MEMO_.objects = {};
+  MEMO_.header = {};
+  MEMO_.index = {};
+}
+
+/**
+ * Buang memo satu sheet. WAJIB dipanggil setelah menulis ke sheet tersebut
+ * lewat jalur lain supaya pembacaan berikutnya tidak memakai data lama.
+ */
+function invalidateSheet_(sheetName) {
+  delete MEMO_.values[sheetName];
+  delete MEMO_.objects[sheetName];
+  delete MEMO_.header[sheetName];
+  Object.keys(MEMO_.index).forEach(function (k) {
+    if (k.indexOf(sheetName + '|') === 0) delete MEMO_.index[k];
+  });
+}
+
+// ============================================================================
+// 1. SPREADSHEET & SHEET
+// ============================================================================
+
+function resolveSpreadsheetId_() {
+  if (MEMO_.ssId) return MEMO_.ssId;
+
+  var constId = sanitizeDriveId_(SPREADSHEET_ID);
+  if (constId) { MEMO_.ssId = constId; return constId; }
+
+  var propId = '';
+  try { propId = sanitizeDriveId_(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID')); } catch (e) { }
+  if (propId) { MEMO_.ssId = propId; return propId; }
+
+  try {
+    var active = SpreadsheetApp.getActiveSpreadsheet();
+    if (active) { MEMO_.ssId = active.getId(); return MEMO_.ssId; }
+  } catch (e) { }
+  return '';
+}
+
+function setupSpreadsheetId_() {
+  var id = resolveSpreadsheetId_();
+  if (!id) {
+    try { id = sanitizeDriveId_(SpreadsheetApp.getActiveSpreadsheet().getId()); } catch (e) { id = ''; }
+  }
+  if (!id) throw new Error('SPREADSHEET_ID belum diisi dan tidak ada spreadsheet aktif.');
+  PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', id);
+  try { PropertiesService.getScriptProperties().deleteProperty(BOOTSTRAP_PROP_); } catch (e) { }
+  memoBersih_();
+  alertOrLog_('SPREADSHEET_ID tersimpan: ' + id);
+  return id;
+}
+
+/** Buka spreadsheet database — hanya sekali per eksekusi. */
+function getDb_() {
+  if (MEMO_.ss) return MEMO_.ss;
+
+  var id = resolveSpreadsheetId_();
+  if (!id) {
+    throw new Error('SPREADSHEET_ID belum di-set. Isi konstanta SPREADSHEET_ID di Kode.gs '
+      + 'atau jalankan setupSpreadsheetId_().');
+  }
+  try {
+    var propId = sanitizeDriveId_(PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID'));
+    if (propId !== id) PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', id);
+  } catch (e) { }
+
+  try {
+    MEMO_.ss = SpreadsheetApp.openById(id);
+  } catch (e) {
+    throw new Error('Tidak bisa membuka spreadsheet "' + id + '". Pastikan ID benar '
+      + '(tanpa URL / tanda "/"), spreadsheet masih ada, dan akun deploy punya akses. Detail: ' + errMsg_(e));
+  }
+  return MEMO_.ss;
+}
+
+function getSheet_(name) {
+  return getDb_().getSheetByName(name);
+}
+
+// ============================================================================
+// 2. KONFIGURASI (Config) — dibaca sekali, lalu dari memori
+// ============================================================================
+
+/**
+ * Seluruh konfigurasi sebagai satu objek: default Kode.gs ditimpa nilai sheet.
+ * Urutan pengambilan: memo eksekusi -> CacheService -> sheet Config.
+ */
+function getAllConfig_() {
+  if (MEMO_.config) return MEMO_.config;
+
+  var out = {};
+  var k;
+  for (k in CONFIG_DEFAULTS) {
+    if (Object.prototype.hasOwnProperty.call(CONFIG_DEFAULTS, k)) out[k] = CONFIG_DEFAULTS[k];
+  }
+
+  // ---------- lapis 1: CacheService (bertahan antar-permintaan) ----------
+  var cache = null;
+  try { cache = CacheService.getScriptCache(); } catch (e) { cache = null; }
+  if (cache) {
+    var teks = null;
+    try { teks = cache.get(CACHE_CONFIG_KEY_); } catch (e) { teks = null; }
+    if (teks) {
+      try {
+        var dariCache = JSON.parse(teks);
+        Object.keys(dariCache).forEach(function (kk) { out[kk] = dariCache[kk]; });
+        MEMO_.config = out;
+        return out;
+      } catch (e) { /* isi rusak -> baca ulang dari sheet */ }
+    }
+  }
+
+  // ---------- lapis 2: baca sheet SEKALI ----------
+  try {
+    var sh = getSheet_('Config');
+    if (sh) {
+      var vals = sh.getDataRange().getValues();
+      for (var i = 1; i < vals.length; i++) {
+        var key = String(vals[i][0]).trim();
+        if (!key) continue;
+        var v = vals[i][1];
+        v = (v === null || v === undefined) ? '' : String(v).trim();
+        if (v === '' && CONFIG_DEFAULTS[key] !== undefined && CONFIG_DEFAULTS[key] !== '') {
+          v = CONFIG_DEFAULTS[key];
+        }
+        out[key] = v;
+      }
+    }
+  } catch (e) { Logger.log('getAllConfig_: ' + errMsg_(e)); }
+
+  MEMO_.config = out;
+  if (cache) {
+    try { cache.put(CACHE_CONFIG_KEY_, JSON.stringify(out), CACHE_CONFIG_TTL_); } catch (e) { }
+  }
+  return out;
+}
+
+function getConfig_(key) {
+  var all = getAllConfig_();
+  var v = all[key];
+  return (v === undefined || v === null) ? '' : v;
+}
+
+function getConfigNum_(key, def) {
+  var v = parseFloat(String(getConfig_(key)).replace(',', '.'));
+  return isNaN(v) ? (def === undefined ? 0 : def) : v;
+}
+
+function getConfigBool_(key, def) {
+  var v = String(getConfig_(key)).trim().toUpperCase();
+  if (v === '') return !!def;
+  return v === 'TRUE' || v === '1' || v === 'YA' || v === 'YES';
+}
+
+function setConfig_(key, value) {
+  var sh = getSheet_('Config');
+  if (!sh) return false;
+  var row = findRowByCol_('Config', 'Key', key);
+  if (row !== -1) sh.getRange(row, 2).setValue(value);
+  else sh.appendRow([key, value]);
+  // Nilai berubah -> memo eksekusi + cache antar-permintaan harus dibuang.
+  MEMO_.config = null;
+  try { CacheService.getScriptCache().remove(CACHE_CONFIG_KEY_); } catch (e) { }
+  invalidateSheet_('Config');
+  return true;
+}
+
+/** Paksa muat ulang konfigurasi dari sheet (dipakai setelah bootstrap/impor). */
+function configMuatUlang_() {
+  MEMO_.config = null;
+  try { CacheService.getScriptCache().remove(CACHE_CONFIG_KEY_); } catch (e) { }
+  invalidateSheet_('Config');
+  return getAllConfig_();
+}
+
+// ============================================================================
+// 3. PEMBACAAN BARIS
+// ============================================================================
+
+/** Seluruh isi sheet sebagai array 2D (termasuk baris header). Dibaca sekali. */
+function sheetValues_(sheetName) {
+  if (MEMO_.values[sheetName]) return MEMO_.values[sheetName];
+
+  var sh = getSheet_(sheetName);
+  if (!sh || sh.getLastRow() < 1) {
+    MEMO_.values[sheetName] = [];
+    return MEMO_.values[sheetName];
+  }
+  var kolom = Math.max(sh.getLastColumn(), 1);
+  MEMO_.values[sheetName] = sh.getRange(1, 1, sh.getLastRow(), kolom).getValues();
+  return MEMO_.values[sheetName];
+}
+
+/** Nama kolom sheet (baris 1). Jatuh ke SCHEMAS bila sheet masih kosong. */
+function sheetHeader_(sheetName) {
+  if (MEMO_.header[sheetName]) return MEMO_.header[sheetName];
+
+  var vals = sheetValues_(sheetName);
+  var h;
+  if (vals.length) {
+    h = vals[0].map(function (x) { return String(x).trim(); });
+  } else {
+    h = (SCHEMAS[sheetName] || []).slice();
+  }
+  // buang kolom tanpa nama di ujung kanan
+  while (h.length && !h[h.length - 1]) h.pop();
+
+  MEMO_.header[sheetName] = h;
+  return h;
+}
+
+/** Peta nama kolom -> indeks (0-based) untuk satu sheet. */
+function sheetKolom_(sheetName) {
+  var header = sheetHeader_(sheetName);
+  var peta = {};
+  for (var i = 0; i < header.length; i++) {
+    if (header[i] && peta[header[i]] === undefined) peta[header[i]] = i;
+  }
+  return peta;
+}
+
+/**
+ * Semua baris sheet sebagai array objek (header -> nilai), plus `__row`.
+ * Hasilnya dipakai bersama selama satu eksekusi — jangan diubah di tempat.
+ */
+function sheetToObjects_(sheetName) {
+  if (MEMO_.objects[sheetName]) return MEMO_.objects[sheetName];
+
+  var vals = sheetValues_(sheetName);
+  if (vals.length < 2) {
+    MEMO_.objects[sheetName] = [];
+    return MEMO_.objects[sheetName];
+  }
+  var header = sheetHeader_(sheetName);
+  var out = [];
+  for (var r = 1; r < vals.length; r++) {
+    var row = vals[r];
+    var kosong = true;
+    for (var c = 0; c < header.length; c++) {
+      var v = row[c];
+      if (v !== '' && v !== null && v !== undefined) { kosong = false; break; }
+    }
+    if (kosong) continue;
+    var obj = { __row: r + 1 };
+    for (var i = 0; i < header.length; i++) {
+      if (!header[i]) continue;
+      var nilai = row[i];
+      obj[header[i]] = (nilai === null || nilai === undefined) ? '' : nilai;
+    }
+    out.push(obj);
+  }
+  MEMO_.objects[sheetName] = out;
+  return out;
+}
+
+/** Satu baris sheet sebagai objek. */
+function rowToObject_(sheetName, rowIndex) {
+  var vals = sheetValues_(sheetName);
+  var header = sheetHeader_(sheetName);
+  var row = (rowIndex >= 1 && rowIndex <= vals.length) ? vals[rowIndex - 1] : [];
+  var obj = { __row: rowIndex };
+  for (var i = 0; i < header.length; i++) {
+    if (!header[i]) continue;
+    var v = row[i];
+    obj[header[i]] = (v === null || v === undefined) ? '' : v;
+  }
+  return obj;
+}
+
+/**
+ * Peta nilai kolom -> nomor baris, dibangun sekali per eksekusi.
+ * Menggantikan pembacaan seluruh kolom setiap kali mencari satu baris.
+ */
+function petaBaris_(sheetName, col) {
+  var kunci = sheetName + '|' + col;
+  if (MEMO_.index[kunci]) return MEMO_.index[kunci];
+
+  var header = sheetHeader_(sheetName);
+  var idx = header.indexOf(col);
+  if (idx === -1) throw new Error('Kolom "' + col + '" tidak ada di sheet ' + sheetName);
+
+  var vals = sheetValues_(sheetName);
+  var map = {};
+  for (var r = 1; r < vals.length; r++) {
+    var v = vals[r][idx];
+    if (v === null || v === undefined || v === '') continue;
+    var k = String(v).trim().toLowerCase();
+    // baris pertama yang cocok menang — sama seperti perilaku pencarian lama
+    if (!Object.prototype.hasOwnProperty.call(map, k)) map[k] = r + 1;
+  }
+  MEMO_.index[kunci] = { map: map };
+  return MEMO_.index[kunci];
+}
+
+/** Nomor baris pertama yang kolom `col` nilainya sama dengan `val` (-1 bila tak ada). */
+function findRowByCol_(sheetName, col, val) {
+  var sh;
+  try { sh = getSheet_(sheetName); } catch (e) { return -1; }
+  if (!sh) return -1;
+  if (sh.getLastRow() < 2) return -1;
+
+  var p = petaBaris_(sheetName, col);
+  var k = String(val).trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(p.map, k) ? p.map[k] : -1;
+}
+
+/** Semua nomor baris yang kolom `col` nilainya sama dengan `val`. */
+function findRowsByCol_(sheetName, col, val) {
+  var sh;
+  try { sh = getSheet_(sheetName); } catch (e) { return []; }
+  if (!sh || sh.getLastRow() < 2) return [];
+
+  var header = sheetHeader_(sheetName);
+  var idx = header.indexOf(col);
+  if (idx === -1) return [];
+  var vals = sheetValues_(sheetName);
+  var target = String(val).trim().toLowerCase();
+  var out = [];
+  for (var r = 1; r < vals.length; r++) {
+    if (String(vals[r][idx]).trim().toLowerCase() === target) out.push(r + 1);
+  }
+  return out;
+}
+
+/** Susun array nilai sesuai urutan kolom SCHEMAS. */
+function rowArrBySchema_(sheetName, obj) {
+  var header = SCHEMAS[sheetName];
+  if (!header) throw new Error('Skema tidak dikenal: ' + sheetName);
+  return header.map(function (col) {
+    var v = obj[col];
+    return (v === undefined || v === null) ? '' : v;
+  });
+}
+
+// ============================================================================
+// 4. PENULISAN BARIS (BATCH)
+// ============================================================================
+
+/** Sinkronkan memo setelah baris `rowIndex` berubah. Tidak membaca ulang sheet. */
+function sinkronBaris_(sheetName, rowIndex, rowBaru) {
+  var vals = MEMO_.values[sheetName];
+  if (vals && rowIndex >= 1 && rowIndex <= vals.length) vals[rowIndex - 1] = rowBaru;
+  delete MEMO_.objects[sheetName];
+  Object.keys(MEMO_.index).forEach(function (k) {
+    if (k.indexOf(sheetName + '|') === 0) delete MEMO_.index[k];
+  });
+}
+
+/**
+ * Tulis objek ke baris yang sudah ada (hanya kolom yang disebut di `obj`).
+ * Kolom yang bersebelahan digabung menjadi SATU `setValues()`, sehingga
+ * menyimpan 5 kolom berurutan = 1 panggilan tulis, bukan 5.
+ */
+function updateRowByCol_(sheetName, rowIndex, obj) {
+  var sh = getSheet_(sheetName);
+  if (!sh) return false;
+
+  var header = sheetHeader_(sheetName);
+  var vals = MEMO_.values[sheetName];
+  var baris = (vals && vals[rowIndex - 1]) ? vals[rowIndex - 1].slice() : [];
+
+  var kolomBerubah = [];
+  Object.keys(obj).forEach(function (k) {
+    var i = header.indexOf(k);
+    if (i === -1) return;
+    baris[i] = obj[k];
+    kolomBerubah.push(i);
+  });
+  if (!kolomBerubah.length) return false;
+
+  kolomBerubah.sort(function (a, b) { return a - b; });
+
+  // gabungkan indeks yang bersebelahan menjadi rentang
+  var rentang = [];
+  var mulai = kolomBerubah[0];
+  var akhir = kolomBerubah[0];
+  for (var i = 1; i < kolomBerubah.length; i++) {
+    if (kolomBerubah[i] === akhir + 1) { akhir = kolomBerubah[i]; continue; }
+    rentang.push([mulai, akhir]);
+    mulai = kolomBerubah[i];
+    akhir = kolomBerubah[i];
+  }
+  rentang.push([mulai, akhir]);
+
+  for (var j = 0; j < rentang.length; j++) {
+    var a = rentang[j][0], b = rentang[j][1];
+    sh.getRange(rowIndex, a + 1, 1, b - a + 1).setValues([baris.slice(a, b + 1)]);
+  }
+
+  // panjang baris disamakan dengan header agar memo konsisten
+  while (baris.length < header.length) baris.push('');
+  sinkronBaris_(sheetName, rowIndex, baris);
+  return true;
+}
+
+/**
+ * Tambah satu baris di akhir sheet.
+ *
+ * Nilai disusun mengikuti urutan kolom FISIK sheet (`sheetHeader_`), bukan urutan
+ * SCHEMAS. Ini penting supaya penambahan baris tetap benar walau urutan kolom di
+ * spreadsheet berbeda dari urutan skema — misalnya sheet lama yang belum
+ * dimigrasikan, atau HC menambah kolom sendiri di sebelah kanan.
+ */
+function appendObject_(sheetName, obj) {
+  var sh = getSheet_(sheetName);
+  if (!sh) throw new Error('Sheet tidak ditemukan: ' + sheetName);
+
+  /*
+   * Pastikan kolom skema tersedia — tetapi hanya kalau memang ada yang kurang.
+   * Pemeriksaannya memakai header yang sudah dimemo, jadi gratis; memanggil
+   * ensureColumns_() tanpa syarat akan membaca baris header setiap kali dan
+   * membuat penambahan baris massal (mis. 180 baris log reminder) kembali mahal.
+   */
+  if (SCHEMAS[sheetName]) {
+    var headerMemo = sheetHeader_(sheetName);
+    var kurang = SCHEMAS[sheetName].some(function (c) { return headerMemo.indexOf(c) === -1; });
+    if (kurang) ensureColumns_(sheetName, SCHEMAS[sheetName]);
+  }
+
+  var header = sheetHeader_(sheetName);
+  var arr = header.map(function (col) {
+    var v = obj[col];
+    return (v === undefined || v === null) ? '' : v;
+  });
+
+  sh.appendRow(arr);
+  var rowIndex = sh.getLastRow();
+
+  // Perbarui memo tanpa membaca ulang sheet.
+  var vals = MEMO_.values[sheetName];
+  if (vals && vals.length === rowIndex - 1) {
+    vals.push(arr.slice());
+    delete MEMO_.objects[sheetName];
+    Object.keys(MEMO_.index).forEach(function (k) {
+      if (k.indexOf(sheetName + '|') === 0) delete MEMO_.index[k];
+    });
+  } else {
+    invalidateSheet_(sheetName);
+  }
+  return rowIndex;
+}
+
+function deleteRowByCol_(sheetName, col, val) {
+  var row = findRowByCol_(sheetName, col, val);
+  if (row === -1) return false;
+  getSheet_(sheetName).deleteRow(row);
+  // Nomor baris setelah titik hapus bergeser -> memo sheet ini tidak valid lagi.
+  invalidateSheet_(sheetName);
+  return true;
+}
+
+/** Pastikan kolom ada; kalau belum, tambahkan di kanan. */
+function ensureColumns_(sheetName, cols) {
+  var sh = getSheet_(sheetName);
+  if (!sh) return [];
+  var lastCol = Math.max(sh.getLastColumn(), 1);
+  var header = sh.getRange(1, 1, 1, lastCol).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  var added = [];
+  cols.forEach(function (c) {
+    if (header.indexOf(c) !== -1) return;
+    lastCol = sh.getLastColumn() + 1;
+    sh.getRange(1, lastCol).setValue(c).setFontWeight('bold')
+      .setBackground('#093D7D').setFontColor('#FFFFFF');
+    header.push(c);
+    added.push(c);
+  });
+  if (added.length) {
+    if (SCHEMAS[sheetName]) {
+      added.forEach(function (c) { if (SCHEMAS[sheetName].indexOf(c) === -1) SCHEMAS[sheetName].push(c); });
+    }
+    invalidateSheet_(sheetName);
+  }
+  return added;
+}
+
+/** Tulis banyak baris sekaligus (1 panggilan) — untuk impor & hitung ulang massal. */
+function tulisBanyak_(sheetName, mulaiBaris, barisArr) {
+  if (!barisArr || !barisArr.length) return 0;
+  var sh = getSheet_(sheetName);
+  if (!sh) throw new Error('Sheet tidak ditemukan: ' + sheetName);
+  sh.getRange(mulaiBaris, 1, barisArr.length, barisArr[0].length).setValues(barisArr);
+  invalidateSheet_(sheetName);
+  return barisArr.length;
+}

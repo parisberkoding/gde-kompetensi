@@ -1,0 +1,535 @@
+/**
+ * ============================================================================
+ * Migrasi.gs — MIGRASI SKEMA LAMA -> SKEMA BARU (myCertif)
+ * ============================================================================
+ *
+ * Kenapa berkas ini terpisah?
+ * --------------------------
+ * Memindahkan/merapikan kolom spreadsheet adalah pekerjaan sekali jalan yang
+ * menyentuh DATA, bukan sekadar membaca. Menaruhnya di berkas sendiri membuat
+ * subprocess.gs tetap fokus pada logika bisnis dan membuat jalur berisiko ini
+ * mudah ditinjau ulang.
+ *
+ * APA YANG DIUBAH (skema v1 -> v2)
+ * -------------------------------
+ * 1. `Master_User`
+ *      - Enam kolom inti diletakkan di depan:
+ *        Employee_code, Nama_Lengkap, Username, Password, Role, Working_Location
+ *      - Kolom `Lokasi_Kerja` diganti nama menjadi `Working_Location`.
+ * 2. `Master_File` -> `T_Sertifikasi`
+ *      - Nama sheet diganti karena isinya data transaksi sertifikasi per karyawan
+ *        (satu karyawan boleh punya banyak baris), bukan master.
+ *      - Doc_id     -> Cert_Id
+ *      - Employee_id-> Employee_Code
+ *      - Start_pelaksanaan / End_pelaksanaan -> Start_Pelaksanaan / End_Pelaksanaan
+ *      - Penerbit   -> Penyelenggara
+ *      - No_sertifikat -> No_Sertifikat
+ *      - Kolom baru `Recom_Update` = Expired_at - 3 bulan.
+ *      - Kolom `Kategori` dihapus dari skema; isinya TIDAK hilang — dipindahkan
+ *        ke `Catatan` (dan tetap utuh pada sheet backup).
+ * 3. `T_Notifikasi` & `T_Email_Log`
+ *      - Kolom `Doc_id` -> `Cert_Id`.
+ * 4. `Master_Sertifikasi` (daftar 69 jenis sertifikasi) diarsipkan menjadi
+ *    `Master_Sertifikasi_ARSIP` — tidak dihapus, supaya HC masih bisa melihat
+ *    data lama. Sheet ini tidak lagi dipakai aplikasi.
+ *
+ * KEAMANAN DATA
+ * -------------
+ * Setiap sheet yang diubah lebih dulu dibaca seluruhnya ke memori, lalu
+ * disalin ke sheet cadangan bernama `<NAMA>_BACKUP_<yyyyMMdd-HHmmss>`. Baru
+ * setelah itu sheet aslinya ditulis ulang dengan urutan kolom baru. Jadi:
+ *   - tidak ada baris yang hilang (data dipetakan lewat NAMA kolom),
+ *   - bila hasilnya tidak sesuai, cukup salin balik dari sheet BACKUP,
+ *   - migrasi bisa dijalankan berulang; jalannya kedua tidak mengubah apa pun.
+ *
+ * CARA MENJALANKAN
+ * ----------------
+ *   A. Dari editor Apps Script: pilih fungsi `migrasiSkemaDariEditor` lalu Run.
+ *   B. Dari menu spreadsheet: "myCertif > Migrasi skema v2".
+ *   C. Dari aplikasi: halaman Pengaturan > tombol "Jalankan migrasi skema".
+ * ============================================================================
+ */
+
+var MARKER_MIGRASI_ = 'v1.4.0';
+var MIGRASI_BUILD_ = 'Migrasi.gs v1.4.0 — migrasi skema v1 ke v2 (T_Sertifikasi)';
+
+/** Pemetaan nama kolom lama -> nama kolom baru. */
+var ALIAS_KOLOM_MIGRASI_ = {
+  'Doc_id': 'Cert_Id',
+  'Employee_id': 'Employee_Code',
+  'Start_pelaksanaan': 'Start_Pelaksanaan',
+  'End_pelaksanaan': 'End_Pelaksanaan',
+  'Penerbit': 'Penyelenggara',
+  'No_sertifikat': 'No_Sertifikat',
+  'Lokasi_Kerja': 'Working_Location',
+  'Doc_id_notif': 'Cert_Id'
+};
+
+// ============================================================================
+// 1. HELPER INTERNAL
+// ============================================================================
+
+/**
+ * Baca seluruh isi sheet apa adanya (tanpa lewat cache) supaya migrasi selalu
+ * bekerja dari kondisi terbaru dan tidak terpengaruh memo eksekusi.
+ * @return {{header: string[], rows: Array<Array>}}
+ */
+function bacaMentah_(sh) {
+  if (!sh) return { header: [], rows: [] };
+  var lastRow = sh.getLastRow();
+  var lastCol = Math.max(sh.getLastColumn(), 1);
+  if (lastRow < 1) return { header: [], rows: [] };
+
+  var vals = sh.getRange(1, 1, lastRow, lastCol).getValues();
+  var header = vals[0].map(function (h) { return String(h).trim(); });
+  var rows = vals.slice(1).filter(function (r) {
+    for (var i = 0; i < r.length; i++) {
+      if (r[i] !== '' && r[i] !== null && r[i] !== undefined) return true;
+    }
+    return false;
+  });
+  return { header: header, rows: rows };
+}
+
+/** True bila header sheet sudah persis sama dengan urutan yang diharapkan. */
+function headerSesuai_(sh, headerBaru) {
+  if (!sh) return false;
+  var lastCol = Math.max(sh.getLastColumn(), 1);
+  var cur = sh.getRange(1, 1, 1, lastCol).getValues()[0]
+    .map(function (h) { return String(h).trim(); });
+  while (cur.length && !cur[cur.length - 1]) cur.pop();
+  if (cur.length !== headerBaru.length) return false;
+  for (var i = 0; i < headerBaru.length; i++) {
+    if (cur[i] !== headerBaru[i]) return false;
+  }
+  return true;
+}
+
+/**
+ * Petakan baris lama ke urutan kolom baru BERDASARKAN NAMA KOLOM.
+ * Nilai kolom yang tidak ada di sheet lama menjadi kosong; nilai kolom lama yang
+ * tidak ada di skema baru diabaikan (namun tetap tersimpan di sheet backup).
+ */
+function petakanBaris_(data, headerBaru, alias) {
+  var peta = alias || {};
+  var out = [];
+  for (var r = 0; r < data.rows.length; r++) {
+    var asal = {};
+    for (var c = 0; c < data.header.length; c++) {
+      if (!data.header[c]) continue;
+      asal[data.header[c]] = data.rows[r][c];
+    }
+    var baris = headerBaru.map(function (kolom) {
+      var v = asal[kolom];
+      if (v !== undefined && v !== null && v !== '') return v;
+      // cari nilai dari nama kolom LAMA yang dipetakan ke kolom baru ini
+      for (var lama in peta) {
+        if (!Object.prototype.hasOwnProperty.call(peta, lama)) continue;
+        if (peta[lama] === kolom && asal[lama] !== undefined && asal[lama] !== null && asal[lama] !== '') {
+          return asal[lama];
+        }
+      }
+      return '';
+    });
+    out.push(baris);
+  }
+  return out;
+}
+
+/**
+ * Ganti nama sheet menjadi cadangan. Mengembalikan nama barunya.
+ *
+ * @param {Object} db spreadsheet
+ * @param {string} nama nama sheet sekarang
+ * @param {string=} akhiran awalan nama cadangan. Default '_BACKUP_<yyyyMMdd-HHmmss>'
+ *        (titik pulih sementara). Untuk sheet yang diarsipkan permanen — seperti
+ *        daftar jenis sertifikasi yang tidak dipakai lagi — pakai '_ARSIP' supaya
+ *        namanya mudah dikenali HC dan tidak terlihat seperti sampah sementara.
+ */
+function arsipkanSheet_(db, nama, akhiran) {
+  var sh = db.getSheetByName(nama);
+  if (!sh) return '';
+  var dasar = nama + (akhiran || ('_BACKUP_' + Utilities.formatDate(new Date(), tz_(), 'yyyyMMdd-HHmmss')));
+  var namaBaru = dasar;
+  var n = 2;
+  while (db.getSheetByName(namaBaru)) { namaBaru = dasar + '_' + n; n++; }
+  sh.setName(namaBaru);
+  return namaBaru;
+}
+
+/** Buat (atau ganti) sheet dengan header baru, lalu tulis barisnya sekali jalan. */
+function tulisUlangSheet_(db, nama, header, barisArr) {
+  var lama = db.getSheetByName(nama);
+  if (lama) db.deleteSheet(lama);
+
+  var sh = db.insertSheet(nama);
+  sh.getRange(1, 1, 1, header.length).setValues([header]);
+  styleHeader_(sh, header);
+
+  if (barisArr && barisArr.length) {
+    // normalkan lebar baris supaya setValues tidak gagal
+    var lebar = header.length;
+    var rapi = barisArr.map(function (r) {
+      var x = r.slice(0, lebar);
+      while (x.length < lebar) x.push('');
+      return x;
+    });
+    sh.getRange(2, 1, rapi.length, lebar).setValues(rapi);
+  }
+  return sh;
+}
+
+// ============================================================================
+// 2. MIGRASI UTAMA
+// ============================================================================
+
+/**
+ * Jalankan migrasi skema v1 -> v2.
+ * @param {Object=} opsi { backup: false } untuk melewati pembuatan sheet cadangan
+ *                        (TIDAK disarankan — data lama akan hilang).
+ * @return {Object} laporan langkah, jumlah baris, dan daftar sheet cadangan.
+ */
+function migrateSchemaV2_(opsi) {
+  var o = opsi || {};
+  var buatBackup = o.backup !== false;
+  var db = getDb_();
+
+  var laporan = {
+    ok: true, pada: nowStr_(), backup: [], langkah: [], errors: [], jumlah: {}, dilewati: []
+  };
+
+  // ---------------------------------------------------------------- 1. USER
+  try {
+    var shUser = db.getSheetByName('Master_User');
+    if (!shUser) {
+      laporan.dilewati.push('Master_User (sheet tidak ada)');
+    } else if (headerSesuai_(shUser, SCHEMAS['Master_User'])) {
+      laporan.dilewati.push('Master_User (sudah sesuai)');
+    } else {
+      var dataUser = bacaMentah_(shUser);
+      var barisUser = petakanBaris_(dataUser, SCHEMAS['Master_User'], ALIAS_KOLOM_MIGRASI_);
+      if (buatBackup) laporan.backup.push(arsipkanSheet_(db, 'Master_User'));
+      tulisUlangSheet_(db, 'Master_User', SCHEMAS['Master_User'], barisUser);
+      laporan.jumlah.Master_User = barisUser.length;
+      laporan.langkah.push('Master_User: ' + barisUser.length + ' baris dirapikan '
+        + '(6 kolom inti di depan, Lokasi_Kerja -> Working_Location)');
+    }
+  } catch (eUser) {
+    laporan.ok = false;
+    laporan.errors.push('Master_User: ' + errMsg_(eUser));
+  }
+
+  // --------------------------------------------------------- 2. SERTIFIKASI
+  try {
+    var shFile = db.getSheetByName('T_Sertifikasi');
+    if (shFile && headerSesuai_(shFile, SCHEMAS['T_Sertifikasi'])) {
+      laporan.dilewati.push('T_Sertifikasi (sudah sesuai)');
+    } else {
+      var sumber = db.getSheetByName('T_Sertifikasi') || db.getSheetByName('Master_File');
+      if (!sumber) {
+        laporan.dilewati.push('T_Sertifikasi/Master_File (sheet tidak ada)');
+      } else {
+        var dataFile = bacaMentah_(sumber);
+        var barisFile = petakanBaris_(dataFile, SCHEMAS['T_Sertifikasi'], ALIAS_KOLOM_MIGRASI_);
+
+        var headerBaru = SCHEMAS['T_Sertifikasi'];
+        var iExp = headerBaru.indexOf('Expired_at');
+        var iRec = headerBaru.indexOf('Recom_Update');
+        var iCat = headerBaru.indexOf('Catatan');
+        var iKatLama = dataFile.header.indexOf('Kategori');
+
+        for (var r = 0; r < barisFile.length; r++) {
+          // Recom_Update selalu Expired_at - 3 bulan
+          barisFile[r][iRec] = recomUpdate_(barisFile[r][iExp]);
+
+          // Kategori lama dipindahkan ke Catatan supaya tidak hilang diam-diam
+          if (iKatLama !== -1) {
+            var katLama = String(dataFile.rows[r][iKatLama] || '').trim();
+            if (katLama) {
+              var catatan = String(barisFile[r][iCat] || '').trim();
+              barisFile[r][iCat] = (catatan ? catatan + ' | ' : '') + 'Kategori lama: ' + katLama;
+            }
+          }
+        }
+
+        if (buatBackup) {
+          laporan.backup.push(arsipkanSheet_(db, 'T_Sertifikasi'));
+          laporan.backup.push(arsipkanSheet_(db, 'Master_File'));
+        } else {
+          if (db.getSheetByName('T_Sertifikasi')) db.deleteSheet(db.getSheetByName('T_Sertifikasi'));
+          if (db.getSheetByName('Master_File')) db.deleteSheet(db.getSheetByName('Master_File'));
+        }
+        tulisUlangSheet_(db, 'T_Sertifikasi', headerBaru, barisFile);
+        laporan.jumlah.T_Sertifikasi = barisFile.length;
+        laporan.langkah.push('T_Sertifikasi: ' + barisFile.length + ' baris dipindahkan dari '
+          + sumber.getName() + ' (Doc_id -> Cert_Id, Penerbit -> Penyelenggara, Recom_Update diisi)');
+      }
+    }
+  } catch (eFile) {
+    laporan.ok = false;
+    laporan.errors.push('T_Sertifikasi: ' + errMsg_(eFile));
+  }
+
+  // ------------------------------------- 3. KOLOM Cert_Id PADA TABEL LOG
+  [['T_Notifikasi', 'T_Notifikasi'], ['T_Email_Log', 'T_Email_Log']].forEach(function (pasangan) {
+    var nama = pasangan[0];
+    try {
+      var sh = db.getSheetByName(nama);
+      if (!sh) { laporan.dilewati.push(nama + ' (sheet tidak ada)'); return; }
+      if (headerSesuai_(sh, SCHEMAS[nama])) { laporan.dilewati.push(nama + ' (sudah sesuai)'); return; }
+
+      var data = bacaMentah_(sh);
+      if (data.header.indexOf('Cert_Id') !== -1 && data.header.indexOf('Doc_id') === -1) {
+        laporan.dilewati.push(nama + ' (sudah memakai Cert_Id)');
+        return;
+      }
+      var baris = petakanBaris_(data, SCHEMAS[nama], { 'Doc_id': 'Cert_Id' });
+      if (buatBackup) laporan.backup.push(arsipkanSheet_(db, nama));
+      tulisUlangSheet_(db, nama, SCHEMAS[nama], baris);
+      laporan.jumlah[nama] = baris.length;
+      laporan.langkah.push(nama + ': kolom Doc_id -> Cert_Id (' + baris.length + ' baris)');
+    } catch (eLog) {
+      laporan.ok = false;
+      laporan.errors.push(nama + ': ' + errMsg_(eLog));
+    }
+  });
+
+  // ------------------------------------- 3b. ISTILAH VERIFIKASI ('REJECTED' -> 'REVISI')
+  try {
+    var shVerif = db.getSheetByName('T_Sertifikasi');
+    if (shVerif) {
+      var dataVerif = bacaMentah_(shVerif);
+      var iVerif = dataVerif.header.indexOf('Status_Verifikasi');
+      if (iVerif !== -1) {
+        var diubahVerif = 0;
+        var barisVerif = dataVerif.rows.map(function (r) {
+          var x = r.slice();
+          var lama = String(x[iVerif] || '').trim().toUpperCase();
+          var baru = normalkanVerifikasi_(lama);
+          if (lama !== baru) { x[iVerif] = baru; diubahVerif++; }
+          return x;
+        });
+        if (diubahVerif) {
+          if (buatBackup) laporan.backup.push(arsipkanSheet_(db, 'T_Sertifikasi'));
+          tulisUlangSheet_(db, 'T_Sertifikasi', SCHEMAS['T_Sertifikasi'], barisVerif);
+          laporan.jumlah.verifikasi_dinormalkan = diubahVerif;
+          laporan.langkah.push('Status verifikasi dirapikan: ' + diubahVerif
+            + " baris 'REJECTED' (istilah lama) menjadi 'REVISI'");
+        } else {
+          laporan.dilewati.push('Status_Verifikasi (sudah memakai istilah baru)');
+        }
+      }
+    }
+  } catch (eVerif) {
+    laporan.ok = false;
+    laporan.errors.push('Normalkan verifikasi: ' + errMsg_(eVerif));
+  }
+
+  // ------------------------------------------------- 4. ARSIPKAN MASTER JENIS
+  try {
+    var shJenis = db.getSheetByName('Master_Sertifikasi');
+    if (shJenis) {
+      var namaArsip = arsipkanSheet_(db, 'Master_Sertifikasi', '_ARSIP');
+      laporan.backup.push(namaArsip);
+      laporan.langkah.push('Master_Sertifikasi (daftar jenis) diarsipkan menjadi ' + namaArsip
+        + ' — aplikasi tidak lagi memakainya');
+    }
+  } catch (eJenis) {
+    laporan.ok = false;
+    laporan.errors.push('Master_Sertifikasi: ' + errMsg_(eJenis));
+  }
+
+  // --------------------------------------------------------- 5. RAPIKAN SISANYA
+  try {
+    initSheets_();
+    laporan.langkah.push('kolom yang belum ada ditambahkan di kanan (urutan lama tetap utuh)');
+  } catch (eInit) {
+    laporan.errors.push('initSheets_: ' + errMsg_(eInit));
+  }
+
+  // cache & memo harus dibuang: bentuk sheet sudah berubah
+  memoBersih_();
+  try { configMuatUlang_(); } catch (e) { }
+
+  if (!laporan.backup.length && !buatBackup) {
+    laporan.langkah.push('PERINGATAN: dijalankan tanpa cadangan (opsi backup=false)');
+  }
+
+  try {
+    logAudit_('SYSTEM', 'migrasi', 'SA', 'MIGRASI_SKEMA_V2', 'SYSTEM', 'v1->v2',
+      { jumlah: laporan.jumlah, backup: laporan.backup, errors: laporan.errors });
+  } catch (e) { }
+
+  return laporan;
+}
+
+// ============================================================================
+// 3. JALUR PEMANGGILAN
+// ============================================================================
+
+/** Dipanggil dari editor Apps Script: Run > migrasiSkemaDariEditor. */
+function migrasiSkemaDariEditor() {
+  var laporan = migrateSchemaV2_({});
+  Logger.log(JSON.stringify(laporan, null, 2));
+  return laporan;
+}
+
+/** Entri menu spreadsheet "Migrasi skema v2". */
+function menuMigrasiSkema_() {
+  try {
+    var ui = SpreadsheetApp.getUi();
+    var jawab = ui.alert('Migrasi skema v1 ke v2',
+      'Semua sheet yang berubah akan dicadangkan lebih dulu dengan akhiran _BACKUP_<tanggal>.\n\n'
+      + 'Perubahan:\n'
+      + '• Master_User: 6 kolom inti di depan, Lokasi_Kerja -> Working_Location\n'
+      + '• Master_File -> T_Sertifikasi (Doc_id -> Cert_Id, Penerbit -> Penyelenggara, Recom_Update)\n'
+      + '• T_Notifikasi & T_Email_Log: Doc_id -> Cert_Id\n'
+      + '• Master_Sertifikasi (jenis) diarsipkan\n\n'
+      + 'Lanjutkan?', ui.ButtonSet.YES_NO);
+    if (jawab !== ui.Button.YES) return { ok: true, dibatalkan: true };
+
+    var laporan = migrateSchemaV2_({});
+    ui.alert('Migrasi selesai.\n\n'
+      + (laporan.langkah || []).join('\n')
+      + '\n\nCadangan:\n' + ((laporan.backup || []).join('\n') || '(tidak ada)')
+      + ((laporan.errors && laporan.errors.length) ? '\n\nERROR:\n' + laporan.errors.join('\n') : ''));
+    return laporan;
+  } catch (e) {
+    Logger.log('menuMigrasiSkema_: ' + errMsg_(e));
+    return { ok: false, error: errMsg_(e) };
+  }
+}
+
+/** Titik masuk dari halaman Pengaturan (HC/SA). */
+function apiMigrasiSkema(token) {
+  return apiGuard_(function () {
+    var auth = requireHc_(token);
+    var laporan = migrateSchemaV2_({});
+    return {
+      ok: laporan.ok,
+      langkah: laporan.langkah,
+      dilewati: laporan.dilewati,
+      backup: laporan.backup,
+      jumlah: laporan.jumlah,
+      errors: laporan.errors,
+      dijalankan_oleh: auth.username
+    };
+  });
+}
+
+/** Ringkasan kondisi skema sekarang — untuk menampilkan tombol yang tepat di UI. */
+function apiStatusSkema(token) {
+  return apiGuard_(function () {
+    requireHc_(token);
+    var db = getDb_();
+    var daftar = ['Config', 'Master_User', 'T_Sertifikasi', 'Session_Token',
+      'T_Notifikasi', 'T_Email_Log', 'T_Audit_Trail'];
+    var kondisi = {};
+    daftar.forEach(function (n) {
+      var sh = db.getSheetByName(n);
+      kondisi[n] = {
+        ada: !!sh,
+        sesuai: sh ? headerSesuai_(sh, SCHEMAS[n]) : false,
+        baris: sh ? Math.max(sh.getLastRow() - 1, 0) : 0
+      };
+    });
+    return {
+      kondisi: kondisi,
+      perlu_migrasi: !kondisi['T_Sertifikasi'].sesuai || !kondisi['Master_User'].sesuai
+        || !!db.getSheetByName('Master_File') || !!db.getSheetByName('Master_Sertifikasi'),
+      ada_sheet_lama: {
+        Master_File: !!db.getSheetByName('Master_File'),
+        Master_Sertifikasi: !!db.getSheetByName('Master_Sertifikasi')
+      }
+    };
+  });
+}
+
+// ============================================================================
+// 4. INFO STRUKTUR SHEET (menjawab "sheet ini isinya apa & relasinya ke mana?")
+// ============================================================================
+
+/**
+ * Keterangan singkat tiap sheet: kunci utama, relasi ke user, dan jumlah baris.
+ * Dipakai menu "Info Struktur Sheet" supaya HC tidak lagi menebak-nebak mana
+ * tabel yang menyimpan data karyawan.
+ */
+var KETERANGAN_SHEET_ = {
+  'Config': { jenis: 'pengaturan', ket: 'key-value pengaturan aplikasi (ambang status, jadwal reminder, dll.)' },
+  'Master_User': { jenis: 'master', pk: 'Employee_code', ket: 'DAFTAR KARYAWAN & akun login (1 baris = 1 karyawan)' },
+  'T_Sertifikasi': {
+    jenis: 'transaksi', pk: 'Cert_Id', fk: 'Employee_Code',
+    ket: 'DATA SERTIFIKASI per karyawan (1 karyawan boleh banyak baris). '
+      + 'Relasi ke karyawan lewat kolom Employee_Code -> Master_User.Employee_code'
+  },
+  'Session_Token': { jenis: 'sistem', ket: 'sesi login yang sedang aktif' },
+  'T_Notifikasi': { jenis: 'sistem', fk: 'Employee_code', ket: 'notifikasi dalam aplikasi (Cert_Id menunjuk ke T_Sertifikasi)' },
+  'T_Email_Log': { jenis: 'sistem', fk: 'Employee_code', ket: 'riwayat pengiriman email pengingat (anti-spam)' },
+  'T_Audit_Trail': { jenis: 'sistem', ket: 'jejak audit perubahan' },
+  'Master_File': { jenis: 'USANG', ket: 'NAMA LAMA dari T_Sertifikasi — jalankan migrasi skema' },
+  'Master_Sertifikasi': {
+    jenis: 'USANG',
+    ket: 'KATALOG JENIS sertifikasi (69 jenis). TIDAK punya relasi ke karyawan — '
+      + 'memang bukan data karyawan. Sudah tidak dipakai; jalankan migrasi untuk mengarsipkannya'
+  }
+};
+
+/** Susun laporan struktur sheet (tanpa mengubah apa pun). */
+function infoStrukturSheet_() {
+  var db = getDb_();
+  var baris = [];
+
+  db.getSheets().forEach(function (sh) {
+    var nama = sh.getName();
+    var n = Math.max(sh.getLastRow() - 1, 0);
+    var info = KETERANGAN_SHEET_[nama];
+
+    var kolomUtama = '';
+    if (info && info.pk) kolomUtama = 'PK: ' + info.pk;
+    if (info && info.fk) kolomUtama += (kolomUtama ? '  |  ' : '') + 'FK ke user: ' + info.fk;
+
+    baris.push({
+      sheet: nama,
+      baris: n,
+      kolom_utama: kolomUtama,
+      jenis: info ? info.jenis : (/_(BACKUP|ARSIP)/.test(nama) ? 'arsip' : 'lain-lain'),
+      keterangan: info ? info.ket : (/_BACKUP_/.test(nama)
+        ? 'cadangan otomatis dari migrasi — aman diabaikan'
+        : 'sheet tambahan buatan sendiri / hasil impor')
+    });
+  });
+
+  // urutkan: aktif dulu, arsip paling bawah
+  var urutan = { master: 0, transaksi: 1, pengaturan: 2, sistem: 3, 'USANG': 4, 'lain-lain': 5, arsip: 6 };
+  baris.sort(function (a, b) {
+    var ua = urutan[a.jenis] === undefined ? 5 : urutan[a.jenis];
+    var ub = urutan[b.jenis] === undefined ? 5 : urutan[b.jenis];
+    if (ua !== ub) return ua - ub;
+    return a.sheet.localeCompare(b.sheet);
+  });
+
+  var perlu = !db.getSheetByName('T_Sertifikasi') || !!db.getSheetByName('Master_File')
+    || !!db.getSheetByName('Master_Sertifikasi');
+
+  return { baris: baris, perlu_migrasi: perlu, spreadsheet_id: resolveSpreadsheetId_() };
+}
+
+/** Entri menu spreadsheet: tampilkan struktur sheet dalam satu dialog. */
+function menuInfoStrukturSheet_() {
+  var laporan = infoStrukturSheet_();
+  var teks = laporan.baris.map(function (b) {
+    return b.sheet + '  (' + b.baris + ' baris)'
+      + '\n    ' + (b.jenis.toUpperCase()) + (b.kolom_utama ? '  —  ' + b.kolom_utama : '')
+      + '\n    ' + b.keterangan;
+  }).join('\n\n');
+
+  var pesan = 'STRUKTUR SHEET DATABASE myCertif\n\n' + teks
+    + (laporan.perlu_migrasi
+      ? '\n\n>>> MASIH ADA SHEET SKEMA LAMA. Jalankan menu "M1. Migrasi Skema v1 -> v2".'
+      : '\n\nSkema sudah versi terbaru: data sertifikasi ada di T_Sertifikasi.');
+
+  Logger.log(pesan);
+  try { SpreadsheetApp.getUi().alert(pesan); } catch (e) { }
+  return laporan;
+}
+

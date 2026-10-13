@@ -1,6 +1,6 @@
 <!--
   ============================================================================
-  SIAGA SERTIFIKASI — Pengaturan.html
+  myCertif — Pengaturan.html
   Halaman pengaturan sistem (khusus HC & Super Admin).
   Empat kartu: ambang status masa berlaku, reminder & notifikasi,
   tampilan & ekspor, serta kontak & akun sistem.
@@ -9,7 +9,7 @@
   ============================================================================
 -->
 <div id="setRoot">
-  <div class="siaga-loader"><div class="siaga-loader__ring"></div><p>Memuat pengaturan...</p></div>
+  <div class="mycertif-loader"><div class="mycertif-loader__ring"></div><p>Memuat pengaturan...</p></div>
 </div>
 
 <script>
@@ -22,14 +22,14 @@ function initPengaturan(param) {
   'use strict';
 
   /* ---------- guard: hanya HC & SA ---------- */
-  if (!SIAGA.isHc()) {
-    SIAGA.isiHtml('setRoot', ''
+  if (!MyCertif.isHc()) {
+    MyCertif.isiHtml('setRoot', ''
       + '<div class="gde-card"><div class="gde-card__body">'
-      + SIAGA.kosongHtml('bi-shield-lock', 'Akses ditolak',
+      + MyCertif.kosongHtml('bi-shield-lock', 'Akses ditolak',
         'Halaman pengaturan hanya dapat dibuka oleh Human Capital dan Super Admin. '
         + 'Hubungi Human Capital bila Anda memerlukan perubahan konfigurasi.')
       + '</div></div>');
-    SIAGA.gagal('Anda tidak punya akses ke halaman Pengaturan.');
+    MyCertif.gagal('Anda tidak punya akses ke halaman Pengaturan.');
     return;
   }
 
@@ -40,9 +40,9 @@ function initPengaturan(param) {
 
 /* -------------------------------------------------------------- kerangka -- */
 function renderSetKerangka() {
-  var isSa = SIAGA.isSa();
+  var isSa = MyCertif.isSa();
 
-  SIAGA.isiHtml('setRoot', ''
+  MyCertif.isiHtml('setRoot', ''
     + '<div class="gde-page-head">'
     + '  <div>'
     + '    <div class="gde-u-eyebrow">Administrasi</div>'
@@ -55,17 +55,59 @@ function renderSetKerangka() {
     + '      <i class="bi bi-arrow-clockwise"></i> Muat ulang</button>'
     + '    <button class="gde-btn gde-btn--outline-primary" type="button" id="setKeData">'
     + '      <i class="bi bi-card-checklist"></i> Hitung ulang status semua data</button>'
+    + '    <button class="gde-btn gde-btn--outline" type="button" id="setMigrasi">'
+    + '      <i class="bi bi-arrow-repeat"></i> Migrasi skema data</button>'
     + '  </div>'
     + '</div>'
-    + '<div id="setIsi">' + SIAGA.pemuatHtml('Memuat konfigurasi...') + '</div>');
+    + '<div id="setIsi">' + MyCertif.pemuatHtml('Memuat konfigurasi...') + '</div>');
 
-  var segar = SIAGA.el('setSegarkan');
+  var segar = MyCertif.el('setSegarkan');
   if (segar) segar.addEventListener('click', function () { muatPengaturan(true); });
 
-  var keData = SIAGA.el('setKeData');
+  /* ---------- migrasi skema v1 -> v2 ---------- */
+  var migrasi = MyCertif.el('setMigrasi');
+  if (migrasi) {
+    migrasi.addEventListener('click', function () {
+      MyCertif.api('apiStatusSkema', []).then(function (st) {
+        var k = (st && st.kondisi) || {};
+        var baris = Object.keys(k).map(function (n) {
+          return n + ': ' + (k[n].ada ? (k[n].sesuai ? 'sesuai skema' : 'PERLU dirapikan') : 'belum ada')
+            + ' (' + MyCertif.angka(k[n].baris) + ' baris)';
+        }).join('<br>');
+        return MyCertif.konfirmasi({
+          judul: 'Migrasi skema data',
+          pesanHtml: '<p style="margin:0 0 10px">Kondisi sheet saat ini:</p>'
+            + '<div class="mycertif-kode">' + baris + '</div>'
+            + '<p style="margin:10px 0 0">Setiap sheet yang diubah akan <b>dicadangkan lebih dulu</b> '
+            + 'dengan akhiran <code>_BACKUP_&lt;tanggal&gt;</code>, jadi data lama tetap aman.</p>'
+            + '<p style="margin:8px 0 0">Yang dirapikan: urutan kolom <b>Master_User</b>, tabel '
+            + '<b>T_Sertifikasi</b> (dari Master_File), kolom <b>Cert_Id</b> pada tabel notifikasi, '
+            + 'dan pengarsipan daftar jenis sertifikasi.</p>',
+          labelOk: st.perlu_migrasi ? 'Jalankan migrasi' : 'Jalankan ulang (aman)',
+          bahaya: false
+        });
+      }).then(function (ya) {
+        if (!ya) return;
+        MyCertif.tombolSibuk(migrasi, true, 'Memigrasikan...');
+        return MyCertif.api('apiMigrasiSkema', []).then(function (r) {
+          MyCertif.tombolSibuk(migrasi, false);
+          MyCertif.sukses('<b>Langkah:</b><br>' + ((r.langkah || []).join('<br>') || '(tidak ada perubahan)')
+            + '<br><br><b>Cadangan:</b><br>' + ((r.backup || []).join('<br>') || '(tidak ada)')
+            + ((r.errors && r.errors.length) ? ('<br><br><b>Error:</b><br>' + r.errors.join('<br>')) : ''),
+          'Migrasi selesai');
+          muatPengaturan(true);
+        }).catch(function (e) {
+          MyCertif.tombolSibuk(migrasi, false);
+          MyCertif.gagal(e.message);
+        });
+      });
+    });
+  }
+
+  var keData = MyCertif.el('setKeData');
   if (keData) {
     keData.addEventListener('click', function () {
-      SIAGA.konfirmasi({
+      MyCertif.konfirmasi({
         judul: 'Hitung ulang status semua data',
         pesan: 'Seluruh baris data sertifikasi akan dihitung ulang sisa hari, sisa bulan, dan '
           + 'statusnya memakai ambang yang tersimpan saat ini. Jalankan setelah mengubah ambang '
@@ -73,16 +115,16 @@ function renderSetKerangka() {
         labelOk: 'Hitung ulang sekarang'
       }).then(function (ya) {
         if (!ya) return;
-        SIAGA.tombolSibuk(keData, true, 'Menghitung...');
-        return SIAGA.api('apiRecalcStatus', []).then(function (r) {
-          SIAGA.tombolSibuk(keData, false);
-          SIAGA.sukses(SIAGA.angka(r.total) + ' baris diperiksa, ' + SIAGA.angka(r.diubah)
-            + ' diperbarui. Master jenis sertifikasi: ' + SIAGA.angka(r.jenis_sertifikasi_diperbarui)
-            + ' baris.', 'Hitung ulang selesai');
+        MyCertif.tombolSibuk(keData, true, 'Menghitung...');
+        return MyCertif.api('apiRecalcStatus', []).then(function (r) {
+          MyCertif.tombolSibuk(keData, false);
+          MyCertif.sukses(MyCertif.angka(r.total) + ' baris diperiksa, ' + MyCertif.angka(r.diubah)
+            + ' baris diperbarui (sisa hari, sisa bulan, status, dan Recom. Update).',
+          'Hitung ulang selesai');
           muatPengaturan(true);
         }).catch(function (e) {
-          SIAGA.tombolSibuk(keData, false);
-          SIAGA.gagal(e.message);
+          MyCertif.tombolSibuk(keData, false);
+          MyCertif.gagal(e.message);
         });
       });
     });
@@ -91,14 +133,14 @@ function renderSetKerangka() {
 
 /* ------------------------------------------------------------- pemuatan -- */
 function muatPengaturan(paksa) {
-  var isi = SIAGA.el('setIsi');
+  var isi = MyCertif.el('setIsi');
   if (!isi) return;
-  if (paksa) isi.innerHTML = SIAGA.pemuatHtml('Memuat konfigurasi...');
+  if (paksa) isi.innerHTML = MyCertif.pemuatHtml('Memuat konfigurasi...');
 
   var tugas = [
-    SIAGA.api('apiGetConfig', []),
-    SIAGA.api('apiGetMeta', []),
-    SIAGA.api('apiRingkasanReminder', []).catch(function () { return null; })
+    MyCertif.api('apiGetConfig', []),
+    MyCertif.api('apiGetMeta', []),
+    MyCertif.api('apiRingkasanReminder', []).catch(function () { return null; })
   ];
 
   Promise.all(tugas).then(function (hasil) {
@@ -107,13 +149,13 @@ function muatPengaturan(paksa) {
     SetState.ringkasan = hasil[2] || null;
     renderSetIsi();
   }).catch(function (e) {
-    isi.innerHTML = SIAGA.galatHtml(e.message);
+    isi.innerHTML = MyCertif.galatHtml(e.message);
   });
 }
 
 /* --------------------------------------------------------------- render -- */
 function renderSetIsi() {
-  var isi = SIAGA.el('setIsi');
+  var isi = MyCertif.el('setIsi');
   if (!isi) return;
   var c = SetState.config;
   var meta = SetState.meta || {};
@@ -130,17 +172,17 @@ function renderSetIsi() {
 /* ----------------------------------------------------- A. ambang status -- */
 function kartuAmbang(c) {
   return ''
-    + '<div class="gde-card siaga-mb-4">'
-    + '  <div class="siaga-panel-head">'
+    + '<div class="gde-card mycertif-mb-4">'
+    + '  <div class="mycertif-panel-head">'
     + '    <i class="bi bi-hourglass-split" style="color:var(--gde-blue)"></i>'
     + '    <div><h3>Ambang Status Masa Berlaku</h3>'
-    + '      <div class="siaga-panel-head__sub">Batas sisa hari (H-) penentu warna status sertifikasi</div></div>'
+    + '      <div class="mycertif-panel-head__sub">Batas sisa hari (H-) penentu warna status sertifikasi</div></div>'
     + '  </div>'
     + '  <div class="gde-card__body">'
     + '    <form id="setFormAmbang" novalidate>'
-    + '      <fieldset class="siaga-fieldset">'
-    + '        <legend class="siaga-fieldset__legend">Ambang hari</legend>'
-    + '        <div class="siaga-formgrid siaga-formgrid--3">'
+    + '      <fieldset class="mycertif-fieldset">'
+    + '        <legend class="mycertif-fieldset__legend">Ambang hari</legend>'
+    + '        <div class="mycertif-formgrid mycertif-formgrid--3">'
     + angkaField('setMendesak', 'status_mendesak_hari', 'Mendekati Kadaluarsa (hitam)',
       'Sisa ≤ … hari sebelum masa berlaku habis.', c.status_mendesak_hari)
     + angkaField('setSegera', 'status_segera_hari', 'Segera Perpanjang (merah)',
@@ -156,14 +198,14 @@ function kartuAmbang(c) {
     + '          <div class="span-all">'
     + '            <label class="gde-label" for="setKataKunci">Masa berlaku 5 tahun — kata kunci</label>'
     + '            <input class="gde-input" type="text" id="setKataKunci" name="masa_berlaku_5_tahun_kata_kunci"'
-    + '                   value="' + SIAGA.attr(c.masa_berlaku_5_tahun_kata_kunci) + '"'
+    + '                   value="' + MyCertif.attr(c.masa_berlaku_5_tahun_kata_kunci) + '"'
     + '                   placeholder="CSP,Infrared Thermography,CSRS">'
     + '            <div class="gde-hint">Nama jenis sertifikasi yang otomatis memakai masa berlaku 5 tahun. '
     + 'Pisahkan dengan koma.</div>'
     + '          </div>'
     + '        </div>'
     + '      </fieldset>'
-    + '      <div class="gde-alert gde-alert--info siaga-mt-4">'
+    + '      <div class="gde-alert gde-alert--info mycertif-mt-4">'
     + '        <i class="bi bi-info-circle-fill gde-alert__icon"></i>'
     + '        <div class="gde-alert__body"><strong>Urutan pembacaan status</strong>'
     + '          Sisa &gt; <b>Peringatan</b> = hijau <i>Masih Berlaku</i> · ≤ <b>Peringatan</b> = kuning · '
@@ -172,13 +214,13 @@ function kartuAmbang(c) {
     + 'Nilai ambang harus berurutan: mendesak ≤ segera ≤ perhatian ≤ peringatan.'
     + '        </div>'
     + '      </div>'
-    + '      <div class="siaga-mt-4">'
-    + '        <div class="siaga-inline-note" style="margin-bottom:.4rem">Pratinjau status (berubah saat nilai diubah)</div>'
-    + '        <div class="gde-u-flex gde-u-flex-wrap siaga-gap-2">'
-    + '          <span class="gde-u-flex gde-u-items-center siaga-gap-2">'
+    + '      <div class="mycertif-mt-4">'
+    + '        <div class="mycertif-inline-note" style="margin-bottom:.4rem">Pratinjau status (berubah saat nilai diubah)</div>'
+    + '        <div class="gde-u-flex gde-u-flex-wrap mycertif-gap-2">'
+    + '          <span class="gde-u-flex gde-u-items-center mycertif-gap-2">'
     + '            <input class="gde-input" type="text" id="setCobaHari" value="365" inputmode="numeric"'
     + '                   style="width:80px;text-align:center" aria-label="Sisa hari untuk pratinjau">'
-    + '            <span class="siaga-inline-note">hari lagi</span>'
+    + '            <span class="mycertif-inline-note">hari lagi</span>'
     + '          </span>'
     + '          <span id="setPratinjauBadge"></span>'
     + '        </div>'
@@ -195,17 +237,17 @@ function kartuAmbang(c) {
 /* -------------------------------------------------- B. reminder & email -- */
 function kartuReminder(c) {
   return ''
-    + '<div class="gde-card siaga-mb-4">'
-    + '  <div class="siaga-panel-head">'
+    + '<div class="gde-card mycertif-mb-4">'
+    + '  <div class="mycertif-panel-head">'
     + '    <i class="bi bi-bell-fill" style="color:var(--gde-blue)"></i>'
     + '    <div><h3>Reminder &amp; Notifikasi</h3>'
-    + '      <div class="siaga-panel-head__sub">Jadwal, penerima, dan isi email pengingat</div></div>'
+    + '      <div class="mycertif-panel-head__sub">Jadwal, penerima, dan isi email pengingat</div></div>'
     + '  </div>'
     + '  <div class="gde-card__body">'
     + '    <form id="setFormReminder" novalidate>'
-    + '      <fieldset class="siaga-fieldset">'
-    + '        <legend class="siaga-fieldset__legend">Jadwal pengingat</legend>'
-    + '        <div class="siaga-formgrid">'
+    + '      <fieldset class="mycertif-fieldset">'
+    + '        <legend class="mycertif-fieldset__legend">Jadwal pengingat</legend>'
+    + '        <div class="mycertif-formgrid">'
     + '          <div class="span-all">'
     + '            <label class="gde-label" for="setReminderAktif">Pengingat otomatis</label>'
     + '            <label class="gde-switch" for="setReminderAktif">'
@@ -221,7 +263,7 @@ function kartuReminder(c) {
     + '          <div>'
     + '            <label class="gde-label" for="setLevelBulan">Level pengingat (bulan)</label>'
     + '            <input class="gde-input" type="text" id="setLevelBulan" name="reminder_level_bulan"'
-    + '                   value="' + SIAGA.attr(c.reminder_level_bulan) + '" placeholder="9,6,3,2,1,0">'
+    + '                   value="' + MyCertif.attr(c.reminder_level_bulan) + '" placeholder="9,6,3,2,1,0">'
     + '            <div class="gde-hint">9,6,3,2,1,0 — pisahkan dengan koma. 0 = saat kadaluarsa.</div>'
     + '          </div>'
     + angkaField('setMaxEmail', 'reminder_max_email_per_jalan', 'Maks. email per jalan',
@@ -230,9 +272,23 @@ function kartuReminder(c) {
       'Reminder untuk sertifikat yang sudah kadaluarsa diulang tiap N hari.', c.reminder_ulang_kadaluarsa_hari)
     + '        </div>'
     + '      </fieldset>'
-    + '      <fieldset class="siaga-fieldset siaga-mt-4">'
-    + '        <legend class="siaga-fieldset__legend">Penerima</legend>'
-    + '        <div class="siaga-formgrid">'
+    + '      <fieldset class="mycertif-fieldset mycertif-mt-4">'
+    + '        <legend class="mycertif-fieldset__legend">Penerima</legend>'
+    + '        <div class="gde-alert gde-alert--info mycertif-mb-3" style="margin-top:0">'
+    + '          <i class="bi bi-info-circle gde-alert__icon"></i>'
+    + '          <div class="gde-alert__body">Alamat tujuan diambil dari <b>Master User</b> '
+    + '          (kolom Email Pribadi / Email Perusahaan) — bukan dari alamat bawaan aplikasi. '
+    + '          Pastikan email tiap karyawan sudah terisi di halaman Master User.</div></div>'
+    + '        <div class="mycertif-formgrid">'
+    + '          <div class="span-all">'
+    + pilihanField('setEmailUtama', 'reminder_email_utama', 'Alamat yang diutamakan',
+        [
+          { value: 'PRIBADI', label: 'Email Pribadi (disarankan)' },
+          { value: 'PERUSAHAAN', label: 'Email Perusahaan' }
+        ], c.reminder_email_utama,
+        'Pengingat dikirim ke kolom ini. Bila kosong, otomatis memakai kolom satunya — '
+        + 'keduanya tetap data dari Master User, bukan alamat default aplikasi.')
+    + '          </div>'
     + '          <div>'
     + '            <label class="gde-label">Kirim ke karyawan</label>'
     + saklar('setKeKaryawan', 'reminder_ke_karyawan', c.reminder_ke_karyawan, 'Email pengingat ke alamat karyawan pemegang sertifikasi.')
@@ -248,23 +304,23 @@ function kartuReminder(c) {
     + '          <div class="span-all">'
     + '            <label class="gde-label" for="setExtraEmails">Email tambahan</label>'
     + '            <textarea class="gde-textarea" id="setExtraEmails" name="reminder_extra_emails" rows="3"'
-    + '                      placeholder="atasan@gde.co.id, hc.pusat@gde.co.id">' + SIAGA.esc(c.reminder_extra_emails) + '</textarea>'
+    + '                      placeholder="atasan@gde.co.id, hc.pusat@gde.co.id">' + MyCertif.esc(c.reminder_extra_emails) + '</textarea>'
     + '            <div class="gde-hint">Email tambahan yang selalu menerima reminder — mis. atasan langsung atau HC pusat. '
     + 'Pisahkan dengan koma atau baris baru.</div>'
     + '          </div>'
     + '        </div>'
     + '      </fieldset>'
-    + '      <fieldset class="siaga-fieldset siaga-mt-4">'
-    + '        <legend class="siaga-fieldset__legend">Email</legend>'
-    + '        <div class="siaga-formgrid">'
+    + '      <fieldset class="mycertif-fieldset mycertif-mt-4">'
+    + '        <legend class="mycertif-fieldset__legend">Email</legend>'
+    + '        <div class="mycertif-formgrid">'
     + textField('setEmailPengirim', 'email_pengirim', 'Email pengirim (opsional)',
       c.email_pengirim, 'nama@gde.co.id', 'Biarkan kosong untuk memakai pengirim bawaan aplikasi.')
     + textField('setSubjectPrefix', 'email_subject_prefix', 'Awalan subjek',
-      c.email_subject_prefix, '[SIAGA Sertifikasi]', 'Ditambahkan di depan subjek setiap email pengingat.')
+      c.email_subject_prefix, '[myCertif]', 'Ditambahkan di depan subjek setiap email pengingat.')
     + '          <div class="span-all">'
     + '            <label class="gde-label" for="setEmailFooter">Catatan kaki email</label>'
     + '            <textarea class="gde-textarea" id="setEmailFooter" name="email_footer" rows="3">'
-    + SIAGA.esc(c.email_footer) + '</textarea>'
+    + MyCertif.esc(c.email_footer) + '</textarea>'
     + '            <div class="gde-hint">Teks penutup yang dicantumkan pada bagian bawah email pengingat.</div>'
     + '          </div>'
     + '        </div>'
@@ -283,17 +339,17 @@ function kartuReminder(c) {
 /* ------------------------------------------------ C. tampilan & ekspor -- */
 function kartuTampilan(c, meta) {
   return ''
-    + '<div class="gde-card siaga-mb-4">'
-    + '  <div class="siaga-panel-head">'
+    + '<div class="gde-card mycertif-mb-4">'
+    + '  <div class="mycertif-panel-head">'
     + '    <i class="bi bi-sliders" style="color:var(--gde-blue)"></i>'
     + '    <div><h3>Tampilan &amp; Ekspor</h3>'
-    + '      <div class="siaga-panel-head__sub">Jumlah baris, opsi unit/divisi, dan informasi aplikasi</div></div>'
+    + '      <div class="mycertif-panel-head__sub">Jumlah baris, opsi unit/divisi, dan informasi aplikasi</div></div>'
     + '  </div>'
     + '  <div class="gde-card__body">'
     + '    <form id="setFormTampilan" novalidate>'
-    + '      <fieldset class="siaga-fieldset">'
-    + '        <legend class="siaga-fieldset__legend">Tampilan &amp; ekspor</legend>'
-    + '        <div class="siaga-formgrid siaga-formgrid--3">'
+    + '      <fieldset class="mycertif-fieldset">'
+    + '        <legend class="mycertif-fieldset__legend">Tampilan &amp; ekspor</legend>'
+    + '        <div class="mycertif-formgrid mycertif-formgrid--3">'
     + angkaField('setPrioritasLimit', 'dashboard_prioritas_limit', 'Baris prioritas dashboard',
       'Jumlah baris daftar “Perlu Segera Ditindaklanjuti”.', c.dashboard_prioritas_limit)
     + angkaField('setBarisHalaman', 'tabel_baris_per_halaman', 'Baris per halaman tabel',
@@ -306,16 +362,16 @@ function kartuTampilan(c, meta) {
     + '            <label class="gde-label" for="setDivisiOptions">Opsi divisi</label>'
     + '            <textarea class="gde-textarea" id="setDivisiOptions" name="divisi_options" rows="3"'
     + '                      placeholder="Human Capital|Operasi|Maintenance|Engineering">'
-    + SIAGA.esc(c.divisi_options) + '</textarea>'
+    + MyCertif.esc(c.divisi_options) + '</textarea>'
     + '            <div class="gde-hint">pisahkan dengan tanda |</div>'
     + '          </div>'
     + '        </div>'
     + '      </fieldset>'
-    + '      <div class="siaga-mt-4">'
-    + '        <div class="siaga-inline-note" style="margin-bottom:.4rem">Informasi aplikasi</div>'
-    + '        <dl class="siaga-dl">'
-    + '          <dt>Versi aplikasi</dt><dd>' + SIAGA.esc(meta.app_version || SIAGA.APP.version) + '</dd>'
-    + '          <dt>Zona waktu</dt><dd>' + SIAGA.esc(meta.zona_waktu || '—') + '</dd>'
+    + '      <div class="mycertif-mt-4">'
+    + '        <div class="mycertif-inline-note" style="margin-bottom:.4rem">Informasi aplikasi</div>'
+    + '        <dl class="mycertif-dl">'
+    + '          <dt>Versi aplikasi</dt><dd>' + MyCertif.esc(meta.app_version || MyCertif.APP.version) + '</dd>'
+    + '          <dt>Zona waktu</dt><dd>' + MyCertif.esc(meta.zona_waktu || '—') + '</dd>'
     + '        </dl>'
     + '      </div>'
     + '    </form>'
@@ -333,33 +389,33 @@ function kartuTampilan(c, meta) {
 function kartuKontak(c) {
   return ''
     + '<div class="gde-card">'
-    + '  <div class="siaga-panel-head">'
+    + '  <div class="mycertif-panel-head">'
     + '    <i class="bi bi-people" style="color:var(--gde-blue)"></i>'
     + '    <div><h3>Kontak &amp; Akun Sistem</h3>'
-    + '      <div class="siaga-panel-head__sub">Alamat email resmi dan status konfigurasi infrastruktur</div></div>'
+    + '      <div class="mycertif-panel-head__sub">Alamat email resmi dan status konfigurasi infrastruktur</div></div>'
     + '  </div>'
     + '  <div class="gde-card__body">'
     + '    <form id="setFormKontak" novalidate>'
-    + '      <fieldset class="siaga-fieldset">'
-    + '        <legend class="siaga-fieldset__legend">Kontak</legend>'
-    + '        <div class="siaga-formgrid">'
+    + '      <fieldset class="mycertif-fieldset">'
+    + '        <legend class="mycertif-fieldset__legend">Kontak</legend>'
+    + '        <div class="mycertif-formgrid">'
     + '          <div>'
     + '            <label class="gde-label" for="setHcEmail">Email Human Capital</label>'
     + '            <input class="gde-input" type="email" id="setHcEmail" name="hc_email"'
-    + '                   value="' + SIAGA.attr(c.hc_email) + '" placeholder="hc@gde.co.id">'
+    + '                   value="' + MyCertif.attr(c.hc_email) + '" placeholder="hc@gde.co.id">'
     + '            <div class="gde-hint">Alamat resmi HC yang dipakai sebagai penerima &amp; kontak bantuan.</div>'
     + '          </div>'
     + '          <div>'
     + '            <label class="gde-label" for="setSaEmail">Email Super Admin</label>'
     + '            <input class="gde-input" type="email" id="setSaEmail" name="superadmin_email"'
-    + '                   value="' + SIAGA.attr(c.superadmin_email) + '"' + (SIAGA.isSa() ? '' : ' disabled') + '>'
-    + '            <div class="gde-hint">' + (SIAGA.isSa()
+    + '                   value="' + MyCertif.attr(c.superadmin_email) + '"' + (MyCertif.isSa() ? '' : ' disabled') + '>'
+    + '            <div class="gde-hint">' + (MyCertif.isSa()
       ? 'Hanya Super Admin yang dapat mengubah alamat ini.'
       : 'Hanya Super Admin') + '</div>'
     + '          </div>'
     + '        </div>'
     + '      </fieldset>'
-    + '      <div id="setPenerimaAktual" class="siaga-mt-4"></div>'
+    + '      <div id="setPenerimaAktual" class="mycertif-mt-4"></div>'
     + '    </form>'
     + '  </div>'
     + '  <div class="gde-card__foot gde-u-text-right">'
@@ -372,34 +428,56 @@ function kartuKontak(c) {
 /* ------------------------------------------------------ potongan field -- */
 function angkaField(id, nama, label, hint, nilai) {
   return '          <div>'
-    + '            <label class="gde-label" for="' + id + '">' + SIAGA.esc(label) + '</label>'
+    + '            <label class="gde-label" for="' + id + '">' + MyCertif.esc(label) + '</label>'
     + '            <input class="gde-input" type="text" inputmode="numeric" id="' + id + '" name="' + nama + '"'
-    + '                   data-set-angka="1" value="' + SIAGA.attr(formatAngka(nilai)) + '">'
-    + '            <div class="gde-hint">' + SIAGA.esc(hint) + '</div>'
+    + '                   data-set-angka="1" value="' + MyCertif.attr(formatAngka(nilai)) + '">'
+    + '            <div class="gde-hint">' + MyCertif.esc(hint) + '</div>'
     + '          </div>';
 }
 
 function textField(id, nama, label, nilai, placeholder, hint) {
   return '          <div>'
-    + '            <label class="gde-label" for="' + id + '">' + SIAGA.esc(label) + '</label>'
+    + '            <label class="gde-label" for="' + id + '">' + MyCertif.esc(label) + '</label>'
     + '            <input class="gde-input" type="text" id="' + id + '" name="' + nama + '"'
-    + '                   value="' + SIAGA.attr(nilai) + '" placeholder="' + SIAGA.attr(placeholder || '') + '">'
-    + '            <div class="gde-hint">' + SIAGA.esc(hint) + '</div>'
+    + '                   value="' + MyCertif.attr(nilai) + '" placeholder="' + MyCertif.attr(placeholder || '') + '">'
+    + '            <div class="gde-hint">' + MyCertif.esc(hint) + '</div>'
     + '          </div>';
 }
 
 function selectField(id, nama, label, opsi, nilai, hint) {
   var v = String(nilai === undefined || nilai === null ? '' : nilai);
   return '          <div>'
-    + '            <label class="gde-label" for="' + id + '">' + SIAGA.esc(label) + '</label>'
+    + '            <label class="gde-label" for="' + id + '">' + MyCertif.esc(label) + '</label>'
     + '            <select class="gde-select" id="' + id + '" name="' + nama + '">'
     + opsi.map(function (o) {
-      return '<option value="' + SIAGA.attr(o.value) + '"' + (String(o.value) === v ? ' selected' : '') + '>'
-        + SIAGA.esc(o.label) + '</option>';
+      return '<option value="' + MyCertif.attr(o.value) + '"' + (String(o.value) === v ? ' selected' : '') + '>'
+        + MyCertif.esc(o.label) + '</option>';
     }).join('')
     + '            </select>'
-    + '            <div class="gde-hint">' + SIAGA.esc(hint) + '</div>'
+    + '            <div class="gde-hint">' + MyCertif.esc(hint) + '</div>'
     + '          </div>';
+}
+
+/**
+ * Dropdown sederhana untuk setting bernilai pilihan.
+ * @param {string} id id elemen
+ * @param {string} nama nama key Config
+ * @param {string} label label tampil
+ * @param {Array} opsi [{ value, label }]
+ * @param {string} nilai nilai terpilih
+ * @param {string} hint keterangan
+ */
+function pilihanField(id, nama, label, opsi, nilai, hint) {
+  var sekarang = String(nilai === undefined || nilai === null ? '' : nilai).toUpperCase();
+  return '            <label class="gde-label" for="' + id + '">' + label + '</label>'
+    + '<select class="gde-select" id="' + id + '" name="' + nama + '">'
+    + (opsi || []).map(function (o) {
+      return '<option value="' + MyCertif.attr(o.value) + '"'
+        + (String(o.value).toUpperCase() === sekarang ? ' selected' : '') + '>'
+        + MyCertif.esc(o.label) + '</option>';
+    }).join('')
+    + '</select>'
+    + '<div class="gde-hint">' + hint + '</div>';
 }
 
 function saklar(id, nama, nilai, hint) {
@@ -422,14 +500,14 @@ function opsiHari() {
 /* --------------------------------------------------------- perilaku UI -- */
 function pasangPerilakuPengaturan() {
   /* tombol simpan per kartu */
-  SIAGA.qsa('[data-set-simpan]').forEach(function (b) {
+  MyCertif.qsa('[data-set-simpan]').forEach(function (b) {
     b.addEventListener('click', function () {
       simpanKartu(b.getAttribute('data-set-simpan'), b);
     });
   });
 
   /* normalisasi isian angka + pratinjau status */
-  SIAGA.qsa('[data-set-angka]').forEach(function (f) {
+  MyCertif.qsa('[data-set-angka]').forEach(function (f) {
     f.addEventListener('input', function () {
       var pos = f.selectionStart;
       var panjangLama = f.value.length;
@@ -440,23 +518,23 @@ function pasangPerilakuPengaturan() {
     });
   });
   ['setCobaHari', 'setMendesak', 'setSegera', 'setPerhatian', 'setPeringatan'].forEach(function (id) {
-    var f = SIAGA.el(id);
+    var f = MyCertif.el(id);
     if (f) f.addEventListener('input', perbaruiPratinjauStatus);
     if (f) f.addEventListener('change', perbaruiPratinjauStatus);
   });
   perbaruiPratinjauStatus();
 
   /* tombol muat ulang di kartu C */
-  var muat = SIAGA.el('setMuatUlang2');
+  var muat = MyCertif.el('setMuatUlang2');
   if (muat) {
     muat.addEventListener('click', function () {
       muatPengaturan(true);
-      SIAGA.info('Pengaturan dimuat ulang dari server.');
+      MyCertif.info('Pengaturan dimuat ulang dari server.');
     });
   }
 
   /* tombol kirim reminder sekarang di kartu B */
-  var kirim = SIAGA.el('setKirimReminder');
+  var kirim = MyCertif.el('setKirimReminder');
   if (kirim) kirim.addEventListener('click', kirimReminderPengaturan);
 
   renderPenerimaAktual();
@@ -470,7 +548,7 @@ function formatAngka(v) {
 }
 
 function angkaDari(v) {
-  return SIAGA.num(String(v === undefined || v === null ? '' : v).replace(/\./g, ''), 0);
+  return MyCertif.num(String(v === undefined || v === null ? '' : v).replace(/\./g, ''), 0);
 }
 
 /**
@@ -478,16 +556,16 @@ function angkaDari(v) {
  * yang sedang diketik, tanpa memanggil server.
  */
 function perbaruiPratinjauStatus() {
-  var wadah = SIAGA.el('setPratinjauBadge');
+  var wadah = MyCertif.el('setPratinjauBadge');
   if (!wadah) return;
-  var sisa = angkaDari(SIAGA.el('setCobaHari') ? SIAGA.el('setCobaHari').value : 365);
-  if ((SIAGA.el('setCobaHari') && String(SIAGA.el('setCobaHari').value).trim() === '')) sisa = 365;
+  var sisa = angkaDari(MyCertif.el('setCobaHari') ? MyCertif.el('setCobaHari').value : 365);
+  if ((MyCertif.el('setCobaHari') && String(MyCertif.el('setCobaHari').value).trim() === '')) sisa = 365;
 
   var amb = {
-    mendesak: angkaDari(SIAGA.el('setMendesak') ? SIAGA.el('setMendesak').value : 60),
-    segera: angkaDari(SIAGA.el('setSegera') ? SIAGA.el('setSegera').value : 90),
-    perhatian: angkaDari(SIAGA.el('setPerhatian') ? SIAGA.el('setPerhatian').value : 180),
-    peringatan: angkaDari(SIAGA.el('setPeringatan') ? SIAGA.el('setPeringatan').value : 270)
+    mendesak: angkaDari(MyCertif.el('setMendesak') ? MyCertif.el('setMendesak').value : 60),
+    segera: angkaDari(MyCertif.el('setSegera') ? MyCertif.el('setSegera').value : 90),
+    perhatian: angkaDari(MyCertif.el('setPerhatian') ? MyCertif.el('setPerhatian').value : 180),
+    peringatan: angkaDari(MyCertif.el('setPeringatan') ? MyCertif.el('setPeringatan').value : 270)
   };
 
   var label, tone;
@@ -499,20 +577,20 @@ function perbaruiPratinjauStatus() {
   else { label = 'Masih Berlaku'; tone = 'green'; }
 
   wadah.innerHTML = '<span class="gde-status gde-status--' + tone + '">'
-    + '<i class="bi bi-circle-fill" style="font-size:.5rem"></i>' + SIAGA.esc(label) + '</span>';
+    + '<i class="bi bi-circle-fill" style="font-size:.5rem"></i>' + MyCertif.esc(label) + '</span>';
 }
 
 /* ---------------------------------------------------------------- simpan -- */
 function simpanKartu(formId, tombol) {
-  var form = SIAGA.el(formId);
+  var form = MyCertif.el(formId);
   if (!form) return;
 
   var isi = kumpulkanKartu(formId, form);
   if (!isi) return;
 
-  SIAGA.tombolSibuk(tombol, true, 'Menyimpan...');
-  SIAGA.api('apiSetConfig', [isi.obj]).then(function (r) {
-    SIAGA.tombolSibuk(tombol, false);
+  MyCertif.tombolSibuk(tombol, true, 'Menyimpan...');
+  MyCertif.api('apiSetConfig', [isi.obj]).then(function (r) {
+    MyCertif.tombolSibuk(tombol, false);
     var diubah = (r && r.diubah) || [];
     var dilewati = (r && r.dilewati) || [];
 
@@ -521,17 +599,17 @@ function simpanKartu(formId, tombol) {
     if (formId === 'setFormReminder') renderPenerimaAktual();
 
     if (!diubah.length && dilewati.length) {
-      SIAGA.ingat('Tidak ada nilai yang berubah. Dilewati: ' + dilewati.join(', ') + '.', 'Tidak ada perubahan');
+      MyCertif.ingat('Tidak ada nilai yang berubah. Dilewati: ' + dilewati.join(', ') + '.', 'Tidak ada perubahan');
     } else {
-      SIAGA.sukses('Diubah: ' + (diubah.length ? diubah.join(', ') : '-')
+      MyCertif.sukses('Diubah: ' + (diubah.length ? diubah.join(', ') : '-')
         + (dilewati.length ? ' · Dilewati: ' + dilewati.join(', ') : ''), 'Pengaturan tersimpan');
     }
     if (dilewati.length) {
-      SIAGA.ingat('Field dilewati (tidak berubah atau bukan kewenangan Anda): ' + dilewati.join(', ') + '.');
+      MyCertif.ingat('Field dilewati (tidak berubah atau bukan kewenangan Anda): ' + dilewati.join(', ') + '.');
     }
   }).catch(function (e) {
-    SIAGA.tombolSibuk(tombol, false);
-    SIAGA.gagal(e.message);
+    MyCertif.tombolSibuk(tombol, false);
+    MyCertif.gagal(e.message);
   });
 }
 
@@ -541,64 +619,66 @@ function kumpulkanKartu(formId, form) {
 
   if (formId === 'setFormAmbang') {
     var ambang = {
-      status_mendesak_hari: angkaDari(SIAGA.el('setMendesak').value),
-      status_segera_hari: angkaDari(SIAGA.el('setSegera').value),
-      status_perhatian_hari: angkaDari(SIAGA.el('setPerhatian').value),
-      status_peringatan_hari: angkaDari(SIAGA.el('setPeringatan').value),
-      status_merah_hari: angkaDari(SIAGA.el('setMerah').value),
-      masa_berlaku_default_bulan: angkaDari(SIAGA.el('setMasaBerlaku').value)
+      status_mendesak_hari: angkaDari(MyCertif.el('setMendesak').value),
+      status_segera_hari: angkaDari(MyCertif.el('setSegera').value),
+      status_perhatian_hari: angkaDari(MyCertif.el('setPerhatian').value),
+      status_peringatan_hari: angkaDari(MyCertif.el('setPeringatan').value),
+      status_merah_hari: angkaDari(MyCertif.el('setMerah').value),
+      masa_berlaku_default_bulan: angkaDari(MyCertif.el('setMasaBerlaku').value)
     };
     if (!(ambang.status_mendesak_hari <= ambang.status_segera_hari
       && ambang.status_segera_hari <= ambang.status_perhatian_hari
       && ambang.status_perhatian_hari <= ambang.status_peringatan_hari)) {
-      SIAGA.gagal('Nilai ambang harus berurutan: mendesak ≤ segera ≤ perhatian ≤ peringatan.');
+      MyCertif.gagal('Nilai ambang harus berurutan: mendesak ≤ segera ≤ perhatian ≤ peringatan.');
       return null;
     }
     if (ambang.masa_berlaku_default_bulan < 1) {
-      SIAGA.gagal('Masa berlaku default minimal 1 bulan.');
+      MyCertif.gagal('Masa berlaku default minimal 1 bulan.');
       return null;
     }
     Object.keys(ambang).forEach(function (k) { out.push([k, String(ambang[k])]); });
-    out.push(['masa_berlaku_5_tahun_kata_kunci', String(SIAGA.el('setKataKunci').value || '').trim()]);
+    out.push(['masa_berlaku_5_tahun_kata_kunci', String(MyCertif.el('setKataKunci').value || '').trim()]);
     return { obj: keObjek(out) };
   }
 
   if (formId === 'setFormReminder') {
     out.push(['reminder_enabled', saklarNilai('setReminderAktif')]);
-    out.push(['reminder_hari_kirim', String(SIAGA.el('setHariKirim').value || '0')]);
-    out.push(['reminder_level_bulan', String(SIAGA.el('setLevelBulan').value || '').trim()]);
+    out.push(['reminder_hari_kirim', String(MyCertif.el('setHariKirim').value || '0')]);
+    out.push(['reminder_level_bulan', String(MyCertif.el('setLevelBulan').value || '').trim()]);
     out.push(['reminder_ke_karyawan', saklarNilai('setKeKaryawan')]);
     out.push(['reminder_ke_hc', saklarNilai('setKeHc')]);
     out.push(['reminder_ke_atasan', saklarNilai('setKeAtasan')]);
-    out.push(['reminder_extra_emails', String(SIAGA.el('setExtraEmails').value || '').trim()]);
-    out.push(['reminder_max_email_per_jalan', String(angkaDari(SIAGA.el('setMaxEmail').value))]);
-    out.push(['reminder_ulang_kadaluarsa_hari', String(angkaDari(SIAGA.el('setUlangKadaluarsa').value))]);
-    out.push(['email_pengirim', String(SIAGA.el('setEmailPengirim').value || '').trim()]);
-    out.push(['email_subject_prefix', String(SIAGA.el('setSubjectPrefix').value || '').trim()]);
-    out.push(['email_footer', String(SIAGA.el('setEmailFooter').value || '')]);
+    out.push(['reminder_extra_emails', String(MyCertif.el('setExtraEmails').value || '').trim()]);
+    out.push(['reminder_max_email_per_jalan', String(angkaDari(MyCertif.el('setMaxEmail').value))]);
+    out.push(['reminder_ulang_kadaluarsa_hari', String(angkaDari(MyCertif.el('setUlangKadaluarsa').value))]);
+    out.push(['email_pengirim', String(MyCertif.el('setEmailPengirim').value || '').trim()]);
+    var utama = MyCertif.el('setEmailUtama');
+    if (utama) out.push(['reminder_email_utama', String(utama.value || 'PRIBADI').trim().toUpperCase()]);
+    out.push(['email_subject_prefix', String(MyCertif.el('setSubjectPrefix').value || '').trim()]);
+    out.push(['email_footer', String(MyCertif.el('setEmailFooter').value || '')]);
     return { obj: keObjek(out) };
   }
 
   if (formId === 'setFormTampilan') {
-    out.push(['dashboard_prioritas_limit', String(angkaDari(SIAGA.el('setPrioritasLimit').value))]);
-    out.push(['tabel_baris_per_halaman', String(angkaDari(SIAGA.el('setBarisHalaman').value))]);
-    out.push(['export_max_baris', String(angkaDari(SIAGA.el('setExportMax').value))]);
-    out.push(['unit_default', String(SIAGA.el('setUnitDefault').value || '').trim()]);
-    out.push(['divisi_options', String(SIAGA.el('setDivisiOptions').value || '').trim()]);
+    out.push(['dashboard_prioritas_limit', String(angkaDari(MyCertif.el('setPrioritasLimit').value))]);
+    out.push(['tabel_baris_per_halaman', String(angkaDari(MyCertif.el('setBarisHalaman').value))]);
+    out.push(['export_max_baris', String(angkaDari(MyCertif.el('setExportMax').value))]);
+    out.push(['unit_default', String(MyCertif.el('setUnitDefault').value || '').trim()]);
+    out.push(['divisi_options', String(MyCertif.el('setDivisiOptions').value || '').trim()]);
     return { obj: keObjek(out) };
   }
 
   if (formId === 'setFormKontak') {
-    var hc = String(SIAGA.el('setHcEmail').value || '').trim();
+    var hc = String(MyCertif.el('setHcEmail').value || '').trim();
     if (hc && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(hc)) {
-      SIAGA.gagal('Format email Human Capital tidak valid.');
+      MyCertif.gagal('Format email Human Capital tidak valid.');
       return null;
     }
     out.push(['hc_email', hc]);
-    if (SIAGA.isSa()) {
-      var sa = String(SIAGA.el('setSaEmail').value || '').trim();
+    if (MyCertif.isSa()) {
+      var sa = String(MyCertif.el('setSaEmail').value || '').trim();
       if (sa && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(sa)) {
-        SIAGA.gagal('Format email Super Admin tidak valid.');
+        MyCertif.gagal('Format email Super Admin tidak valid.');
         return null;
       }
       out.push(['superadmin_email', sa]);
@@ -606,7 +686,7 @@ function kumpulkanKartu(formId, form) {
     return { obj: keObjek(out) };
   }
 
-  return { obj: SIAGA.nilaiForm(form) };
+  return { obj: MyCertif.nilaiForm(form) };
 }
 
 function keObjek(pasangan) {
@@ -616,13 +696,13 @@ function keObjek(pasangan) {
 }
 
 function saklarNilai(id) {
-  var f = SIAGA.el(id);
+  var f = MyCertif.el(id);
   return (f && f.checked) ? 'TRUE' : 'FALSE';
 }
 
 /* ------------------------------------------------- penerima & peringatan -- */
 function renderPenerimaAktual() {
-  var wadah = SIAGA.el('setPenerimaAktual');
+  var wadah = MyCertif.el('setPenerimaAktual');
   if (!wadah) return;
 
   var aktif = saklarNilai('setReminderAktif') === 'TRUE';
@@ -635,19 +715,19 @@ function renderPenerimaAktual() {
 
   var chip = semua.length
     ? semua.map(function (e) {
-      return '<span class="gde-chip"><i class="bi bi-envelope"></i> ' + SIAGA.esc(e) + '</span>';
+      return '<span class="gde-chip"><i class="bi bi-envelope"></i> ' + MyCertif.esc(e) + '</span>';
     }).join(' ')
-    : '<span class="siaga-inline-note">Belum ada alamat penerima.</span>';
+    : '<span class="mycertif-inline-note">Belum ada alamat penerima.</span>';
 
   wadah.innerHTML = ''
-    + '<div class="siaga-inline-note" style="margin-bottom:.4rem">Penerima aktual (HC/SA + email tambahan tersimpan)</div>'
-    + '<div class="gde-u-flex gde-u-flex-wrap siaga-gap-2">' + chip + '</div>'
-    + (aktif && !semua.length ? '    <div class="gde-alert gde-alert--warning siaga-mt-3">'
+    + '<div class="mycertif-inline-note" style="margin-bottom:.4rem">Penerima aktual (HC/SA + email tambahan tersimpan)</div>'
+    + '<div class="gde-u-flex gde-u-flex-wrap mycertif-gap-2">' + chip + '</div>'
+    + (aktif && !semua.length ? '    <div class="gde-alert gde-alert--warning mycertif-mt-3">'
       + '<i class="bi bi-exclamation-triangle-fill gde-alert__icon"></i>'
       + '<div class="gde-alert__body"><strong>Belum ada penerima email</strong>'
       + 'Pengingat otomatis aktif tetapi daftar penerima HC/SA kosong. Isi email pengguna HC/SA '
       + 'atau tambahkan alamat pada kolom Email tambahan.</div></div>' : '')
-    + '    <div class="siaga-inline-note siaga-mt-3">Penyimpanan berkas &amp; basis data: '
+    + '    <div class="mycertif-inline-note mycertif-mt-3">Penyimpanan berkas &amp; basis data: '
     + 'Spreadsheet <b>' + (SetState.config.spreadsheet_id ? 'terkonfigurasi' : 'terkonfigurasi (bawaan)') + '</b> · '
     + 'Folder Drive <b>' + (SetState.config.drive_folder_id ? 'terkonfigurasi' : 'belum diatur') + '</b> · '
     + 'Folder ekspor <b>' + (SetState.config.drive_folder_export_id ? 'terkonfigurasi' : 'belum diatur') + '</b>. '
@@ -656,7 +736,7 @@ function renderPenerimaAktual() {
 
 /* ----------------------------------------------------------- kirim email -- */
 function kirimReminderPengaturan() {
-  SIAGA.konfirmasi({
+  MyCertif.konfirmasi({
     judul: 'Kirim reminder sekarang',
     pesan: 'Sistem akan memeriksa seluruh sertifikasi dan mengirim email pengingat ke karyawan, '
       + 'Human Capital, dan atasan sesuai tingkat status yang aktif. '
@@ -664,24 +744,24 @@ function kirimReminderPengaturan() {
     labelOk: 'Kirim sekarang'
   }).then(function (ya) {
     if (!ya) return;
-    var tombol = SIAGA.el('setKirimReminder');
-    SIAGA.tombolSibuk(tombol, true, 'Mengirim...');
-    SIAGA.api('apiRunReminderNow', []).then(function (r) {
-      SIAGA.tombolSibuk(tombol, false);
+    var tombol = MyCertif.el('setKirimReminder');
+    MyCertif.tombolSibuk(tombol, true, 'Mengirim...');
+    MyCertif.api('apiRunReminderNow', []).then(function (r) {
+      MyCertif.tombolSibuk(tombol, false);
       tampilkanHasilReminder(r || {});
-      SIAGA.sukses('Target ' + SIAGA.angka(r.target) + ' · terkirim ' + SIAGA.angka(r.terkirim)
-        + ' · gagal ' + SIAGA.angka(r.gagal) + ' · dilewati ' + SIAGA.angka(r.dilewati) + '.',
+      MyCertif.sukses('Target ' + MyCertif.angka(r.target) + ' · terkirim ' + MyCertif.angka(r.terkirim)
+        + ' · gagal ' + MyCertif.angka(r.gagal) + ' · dilewati ' + MyCertif.angka(r.dilewati) + '.',
         'Reminder selesai');
       muatPengaturan(true);
     }).catch(function (e) {
-      SIAGA.tombolSibuk(tombol, false);
-      SIAGA.gagal(e.message);
+      MyCertif.tombolSibuk(tombol, false);
+      MyCertif.gagal(e.message);
     });
   });
 }
 
 function tampilkanHasilReminder(r) {
-  var lama = SIAGA.el('setModalHasil');
+  var lama = MyCertif.el('setModalHasil');
   if (lama) lama.parentNode.removeChild(lama);
 
   var detail = r.detail || [];
@@ -697,7 +777,7 @@ function tampilkanHasilReminder(r) {
     + '    <button class="gde-modal__close" type="button" data-tutup aria-label="Tutup">&times;</button>'
     + '  </div>'
     + '  <div class="gde-modal__body">'
-    + '    <div class="gde-grid gde-grid--4 siaga-mb-4">'
+    + '    <div class="gde-grid gde-grid--4 mycertif-mb-4">'
     + kotakHasilReminder('Target', r.target, 'bi-bullseye', 'blue')
     + kotakHasilReminder('Terkirim', r.terkirim, 'bi-check2-circle', 'green')
     + kotakHasilReminder('Gagal', r.gagal, 'bi-x-circle', 'red')
@@ -705,17 +785,17 @@ function tampilkanHasilReminder(r) {
     + '    </div>'
     + '    <div class="gde-u-between" style="margin-bottom:.5rem">'
     + '      <strong style="font-size:.85rem">Rincian pengiriman</strong>'
-    + '      <span class="siaga-inline-note">Durasi '
-    + SIAGA.angka(Math.max(Math.round(SIAGA.num(r.durasi_ms) / 1000), 0)) + ' detik</span>'
+    + '      <span class="mycertif-inline-note">Durasi '
+    + MyCertif.angka(Math.max(Math.round(MyCertif.num(r.durasi_ms) / 1000), 0)) + ' detik</span>'
     + '    </div>'
     + (detail.length
-      ? '    <div class="siaga-scroll-y"><ul class="gde-list">' + detail.map(function (t) {
+      ? '    <div class="mycertif-scroll-y"><ul class="gde-list">' + detail.map(function (t) {
         return '<li><i class="bi bi-dot" style="color:var(--gde-blue)"></i>'
-          + '<span style="font-size:.78rem;word-break:break-word">' + SIAGA.esc(t) + '</span></li>';
+          + '<span style="font-size:.78rem;word-break:break-word">' + MyCertif.esc(t) + '</span></li>';
       }).join('') + '</ul></div>'
-      : SIAGA.kosongHtml('bi-inbox', 'Tidak ada rincian', 'Tidak ada email yang perlu diproses pada penjalanan ini.'))
-    + '    <p class="siaga-inline-note siaga-mt-4">Dijalankan pada '
-    + SIAGA.esc(r.pada ? SIAGA.tglIndo(r.pada, true) : '—') + '.</p>'
+      : MyCertif.kosongHtml('bi-inbox', 'Tidak ada rincian', 'Tidak ada email yang perlu diproses pada penjalanan ini.'))
+    + '    <p class="mycertif-inline-note mycertif-mt-4">Dijalankan pada '
+    + MyCertif.esc(r.pada ? MyCertif.tglIndo(r.pada, true) : '—') + '.</p>'
     + '  </div>'
     + '  <div class="gde-modal__foot">'
     + '    <button class="gde-btn gde-btn--primary" type="button" data-tutup>Tutup</button>'
@@ -724,17 +804,17 @@ function tampilkanHasilReminder(r) {
 
   document.body.appendChild(wrap);
   document.body.style.overflow = 'hidden';
-  SIAGA.qsa('[data-tutup]', wrap).forEach(function (b) {
-    b.addEventListener('click', function () { SIAGA.modalTutup('setModalHasil'); });
+  MyCertif.qsa('[data-tutup]', wrap).forEach(function (b) {
+    b.addEventListener('click', function () { MyCertif.modalTutup('setModalHasil'); });
   });
 }
 
 function kotakHasilReminder(label, nilai, ikon, tone) {
-  return '<div class="siaga-mini siaga-mini--' + tone + '">'
-    + '<div class="siaga-mini__icon"><i class="bi ' + ikon + '"></i></div>'
+  return '<div class="mycertif-mini mycertif-mini--' + tone + '">'
+    + '<div class="mycertif-mini__icon"><i class="bi ' + ikon + '"></i></div>'
     + '<div style="min-width:0">'
-    + '<div class="siaga-mini__label">' + SIAGA.esc(label) + '</div>'
-    + '<div class="siaga-mini__value">' + SIAGA.angka(nilai) + '</div>'
+    + '<div class="mycertif-mini__label">' + MyCertif.esc(label) + '</div>'
+    + '<div class="mycertif-mini__value">' + MyCertif.angka(nilai) + '</div>'
     + '</div></div>';
 }
 </script>

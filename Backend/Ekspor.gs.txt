@@ -1,0 +1,353 @@
+/**
+ * ============================================================================
+ * myCertif — Ekspor.gs.txt
+ * PT Geo Dipa Energi (Persero) — Unit Patuha
+ * ============================================================================
+ *
+ * Berkas ini adalah hasil PEMECAHAN subprocess.gs supaya setiap berkas fokus
+ * pada satu tanggung jawab. Di Google Apps Script seluruh berkas .gs berbagi
+ * satu lingkup global, jadi pemecahan ini murni soal keterbacaan & kemudahan
+ * penelusuran — bukan pemisahan proses.
+ *
+ * ISI BERKAS INI
+ * ---------------------------------------------------------------------------
+ *   9. EXPORT (Excel & PDF)
+ *
+ * Akses spreadsheet TIDAK boleh langsung dari sini: pakai helper di Data.gs
+ * (sheetToObjects_, sheetValues_, findRowByCol_, updateRowByCol_, appendObject_,
+ *  tulisBanyak_, invalidateSheet_) supaya cache dan batch write tetap dipakai.
+ */
+
+var MARKER_EKSPOR_ = 'v1.4.0';
+var EKSPOR_BUILD_ = 'Ekspor.gs v1.4.0 — ekspor Excel & PDF';
+
+// ============================================================================
+// 9. EXPORT (Excel & PDF)
+// ============================================================================
+
+/** Siapkan baris export dari filter yang sama dengan apiListFiles. */
+function barisExport_(filter, auth) {
+  var f = filter || {};
+  var peta = petaUser_();
+  var rows = sheetToObjects_('T_Sertifikasi').map(function (x) { return fileDto_(x, peta); });
+
+  if (auth.role === 'EMP') rows = rows.filter(function (r) { return r.employee_id === auth.employee_code; });
+  if (f.employee_code) rows = rows.filter(function (r) { return r.employee_id === String(f.employee_code); });
+  if (f.divisi) rows = rows.filter(function (r) { return r.divisi === String(f.divisi); });
+  if (f.status) rows = rows.filter(function (r) { return r.status === String(f.status).toUpperCase(); });
+  if (f.verifikasi) {
+    var ver = normalkanVerifikasi_(f.verifikasi);
+    rows = rows.filter(function (r) { return r.status_verifikasi === ver; });
+  }
+  var q = String(f.q || '').trim().toLowerCase();
+  if (q) {
+    rows = rows.filter(function (r) {
+      return [r.employee_id, r.nama_pemegang, r.nama_sertifikasi, r.divisi, r.jabatan, r.no_sertifikat]
+        .join(' ').toLowerCase().indexOf(q) !== -1;
+    });
+  }
+  var dari = toDate_(f.dari), sampai = toDate_(f.sampai);
+  if (dari || sampai) {
+    rows = rows.filter(function (r) {
+      var e = toDate_(r.expired_at);
+      if (!e) return false;
+      if (dari && e.getTime() < dari.getTime()) return false;
+      if (sampai && e.getTime() > sampai.getTime()) return false;
+      return true;
+    });
+  }
+  rows.sort(function (a, b) {
+    if (a.prioritas !== b.prioritas) return a.prioritas - b.prioritas;
+    return String(a.nama_pemegang).localeCompare(String(b.nama_pemegang));
+  });
+  return rows;
+}
+
+var HEADER_EXPORT_ = [
+  'No', 'Employee Code', 'Nama', 'Divisi', 'Jabatan', 'Nama Sertifikasi',
+  'No. Sertifikat', 'Penyelenggara', 'Mulai Pelaksanaan', 'Selesai Pelaksanaan',
+  'Tanggal Sertifikasi', 'Tanggal Perpanjangan', 'Berlaku Sampai',
+  'Recom. Update', 'Sisa Hari', 'Sisa Bulan', 'Sisa Masa Berlaku', 'Status',
+  'Verifikasi', 'Link Lampiran'
+];
+
+function barisExportArray_(rows) {
+  var out = [HEADER_EXPORT_.slice()];
+  rows.forEach(function (r, i) {
+    out.push([
+      i + 1, r.employee_id, r.nama_pemegang, r.divisi, r.jabatan, r.nama_sertifikasi,
+      r.no_sertifikat, r.penyelenggara, r.start_pelaksanaan, r.end_pelaksanaan,
+      r.tanggal_sertifikasi, r.tanggal_waktu_perpanjangan, r.expired_at,
+      r.recom_update || '',
+      r.sisa_hari === null ? '' : r.sisa_hari,
+      r.sisa_bulan === null ? '' : r.sisa_bulan,
+      r.sisa_teks || '',
+      r.status_label, (r.status_verifikasi_label || r.status_verifikasi),
+      r.link_file || ''
+    ]);
+  });
+  return out;
+}
+
+/**
+ * Export Excel (.xlsx).
+ * Spreadsheet sementara dibuat, lalu diunduh sebagai xlsx lewat endpoint
+ * export Google Sheets (cara yang andal; makeCopy() akan tetap berupa
+ * Google Sheet, bukan berkas xlsx).
+ * @return {Object} { url, download_url, file_id, name, jumlah }
+ */
+function apiExportExcel(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var rows = barisExport_(filter, auth);
+    if (!rows.length) throw new Error('Tidak ada data yang cocok untuk diekspor.');
+    var max = getConfigNum_('export_max_baris', 5000);
+    var dipotong = false;
+    if (rows.length > max) { rows = rows.slice(0, max); dipotong = true; }
+
+    var data = barisExportArray_(rows);
+    var namaFile = 'Rekap_Sertifikasi_' + Utilities.formatDate(new Date(), tz_(), 'yyyyMMdd-HHmm');
+
+    // ---------- 1. spreadsheet sementara ----------
+    var tmp = SpreadsheetApp.create(namaFile);
+    var tmpId = tmp.getId();
+    var sh = tmp.getSheets()[0];
+    sh.setName('Rekap Sertifikasi');
+    sh.getRange(1, 1, data.length, data[0].length).setValues(data);
+    sh.getRange(1, 1, 1, data[0].length)
+      .setFontWeight('bold').setBackground('#093D7D').setFontColor('#FFFFFF');
+    sh.setFrozenRows(1);
+    try { sh.setColumnWidths(1, data[0].length, 150); } catch (e) { }
+    try { sh.getRange(2, 1, data.length - 1, 1).setNumberFormat('0'); } catch (e) { }
+    SpreadsheetApp.flush();
+
+    // ---------- 2. unduh sebagai xlsx ----------
+    var namaXlsx = namaFile + '.xlsx';
+    var folder = DriveApp.getFolderById(ensureExportFolder_());
+    var file;
+    try {
+      var url = 'https://docs.google.com/spreadsheets/d/' + tmpId + '/export?format=xlsx';
+      var resp = UrlFetchApp.fetch(url, {
+        headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+        muteHttpExceptions: true
+      });
+      if (resp.getResponseCode() !== 200) {
+        throw new Error('HTTP ' + resp.getResponseCode());
+      }
+      file = folder.createFile(resp.getBlob().setName(namaXlsx));
+    } catch (e) {
+      // ---------- 3. cadangan: konversi native Apps Script ----------
+      Logger.log('export xlsx via UrlFetch gagal (' + errMsg_(e) + '), memakai cadangan.');
+      var asli = DriveApp.getFileById(tmpId);
+      var blob = asli.getAs('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      file = folder.createFile(blob.setName(namaXlsx));
+    }
+
+    // ---------- 4. bersihkan spreadsheet sementara ----------
+    try { DriveApp.getFileById(tmpId).setTrashed(true); } catch (e) { }
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'EXPORT_EXCEL', 'LAPORAN', file.getId(),
+      'jumlah baris ' + rows.length + (dipotong ? ' (dipotong dari ' + max + ')' : ''));
+
+    return {
+      url: file.getUrl(),
+      download_url: 'https://drive.google.com/uc?export=download&id=' + file.getId(),
+      file_id: file.getId(),
+      name: namaXlsx,
+      jumlah: rows.length,
+      dipotong: dipotong
+    };
+  });
+}
+
+/**
+ * Export PDF rekap (HTML -> PDF). Memakai tabel agar rapi saat dicetak.
+ */
+function apiExportPdf(token, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var f = filter || {};
+    var rows = barisExport_(f, auth);
+    if (!rows.length) throw new Error('Tidak ada data yang cocok untuk diekspor.');
+    var max = getConfigNum_('export_max_baris', 5000);
+    if (rows.length > max) rows = rows.slice(0, max);
+
+    var judul = String(f.judul || 'Rekap Sertifikasi & Masa Berlaku');
+    var sub = String(f.subjudul || '').trim();
+    if (!sub) {
+      var bagian = [];
+      if (f.divisi) bagian.push('Divisi: ' + f.divisi);
+      if (f.status && STATUS_MAP_[String(f.status).toUpperCase()]) {
+        bagian.push('Status: ' + STATUS_MAP_[String(f.status).toUpperCase()].label);
+      }
+      sub = bagian.join(' · ');
+    }
+
+    var html = htmlLaporanPdf_(judul, sub, rows);
+    var namaFile = 'Rekap_Sertifikasi_' + Utilities.formatDate(new Date(), tz_(), 'yyyyMMdd-HHmm') + '.pdf';
+    var blob = Utilities.newBlob(html, 'text/html', namaFile).getAs('application/pdf');
+    var folder = DriveApp.getFolderById(ensureExportFolder_());
+    var file = folder.createFile(blob.setName(namaFile));
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'EXPORT_PDF', 'LAPORAN', file.getId(),
+      'jumlah baris ' + rows.length);
+    return {
+      url: file.getUrl(),
+      download_url: 'https://drive.google.com/uc?export=download&id=' + file.getId(),
+      file_id: file.getId(),
+      name: namaFile,
+      jumlah: rows.length
+    };
+  });
+}
+
+/** PDF profil satu pekerja (dipakai halaman Profil Pekerja). */
+function apiExportProfilPdf(token, employeeCode, filter) {
+  return apiGuard_(function () {
+    var auth = requireAuth_(token);
+    var code = String(employeeCode || auth.employee_code).trim();
+    if (code !== auth.employee_code && auth.role === 'EMP') throw new Error('Anda hanya dapat mengekspor profil sendiri.');
+
+    var u = cariUser_(code);
+    if (!u) throw new Error('Pekerja tidak ditemukan.');
+    var f = filter || {};
+    f.employee_code = code;
+    var rows = barisExport_(f, auth);
+
+    var html = htmlProfilPdf_(userPublic_(u), rows);
+    var namaFile = 'Profil_Sertifikasi_' + slugUsername_(String(u.Nama_Lengkap || code)).replace(/[^a-z0-9]/g, '_')
+      + '_' + Utilities.formatDate(new Date(), tz_(), 'yyyyMMdd') + '.pdf';
+    var blob = Utilities.newBlob(html, 'text/html', namaFile).getAs('application/pdf');
+    var folder = DriveApp.getFolderById(ensureExportFolder_());
+    var file = folder.createFile(blob.setName(namaFile));
+
+    logAudit_(auth.employee_code, auth.username, auth.role, 'EXPORT_PROFIL_PDF', 'USER', code, namaFile);
+    return { url: file.getUrl(), download_url: 'https://drive.google.com/uc?export=download&id=' + file.getId(),
+      file_id: file.getId(), name: namaFile, jumlah: rows.length };
+  });
+}
+
+function warnaTone_(tone) {
+  var m = {
+    green: '#71A62F', yellow: '#D8CE3A', orange: '#E07B14',
+    red: '#ED1B2F', black: '#1B2430', dead: '#7F1D1D', gray: '#94A3B8'
+  };
+  return m[tone] || '#5B6B80';
+}
+
+function htmlLaporanPdf_(judul, sub, rows) {
+  var peta = {};
+  STATUS_DEFS.forEach(function (s) { peta[s.key] = s; });
+
+  var body = rows.map(function (r, i) {
+    var def = peta[r.status];
+    return '<tr>'
+      + '<td class="ctr">' + (i + 1) + '</td>'
+      + '<td>' + escHtml_(r.nama_pemegang) + '<br><span class="kecil">' + escHtml_(r.employee_id) + '</span></td>'
+      + '<td>' + escHtml_(r.divisi || '-') + '</td>'
+      + '<td>' + escHtml_(r.nama_sertifikasi) + '</td>'
+      + '<td class="ctr">' + escHtml_(fmtTanggalIndo_(r.expired_at)) + '</td>'
+      + '<td class="ctr">' + (r.sisa_hari === null ? '-' : (r.sisa_hari + ' hr')) + '</td>'
+      + '<td class="ctr" style="color:' + warnaTone_(r.status_tone) + ';font-weight:700">'
+      + escHtml_(def ? def.label : 'Belum ada tanggal') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  return '<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><style>'
+    + '@page{size:A4 landscape;margin:12mm}'
+    + 'body{font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#16202E;font-size:10px;margin:0}'
+    + '.kop{border-bottom:2px solid #0B50A1;padding-bottom:8px;margin-bottom:12px}'
+    + '.kop .brand{color:#0B50A1;font-size:15px;font-weight:700}'
+    + '.kop .sub{color:#5B6B80;font-size:9px;margin-top:2px}'
+    + 'h1{font-size:14px;margin:10px 0 2px}'
+    + '.meta{color:#5B6B80;font-size:9px;margin-bottom:10px}'
+    + 'table{width:100%;border-collapse:collapse}'
+    + 'th{background:#093D7D;color:#fff;font-size:9px;text-align:left;padding:6px 5px}'
+    + 'td{border-bottom:1px solid #E4E9F0;padding:5px;vertical-align:top}'
+    + 'tr:nth-child(even) td{background:#F8FAFC}'
+    + '.ctr{text-align:center}'
+    + '.kecil{color:#8494A8;font-size:8px}'
+    + '.foot{margin-top:10px;color:#8494A8;font-size:8px}'
+    + '</style></head><body>'
+    + '<div class="kop"><div class="brand">' + APP_NAME + '</div>'
+    + '<div class="sub">' + APP_OWNER + ' · ' + APP_SUB + '</div></div>'
+    + '<h1>' + escHtml_(judul) + '</h1>'
+    + '<div class="meta">' + escHtml_(sub || '') + (sub ? ' · ' : '')
+    + 'Total ' + rows.length + ' data · dicetak ' + fmtTanggalIndo_(todayDate_()) + ' ' + nowStr_().substring(11) + '</div>'
+    + '<table><thead><tr>'
+    + '<th class="ctr" style="width:4%">No</th>'
+    + '<th style="width:20%">Pemegang</th>'
+    + '<th style="width:16%">Divisi</th>'
+    + '<th style="width:26%">Sertifikasi</th>'
+    + '<th class="ctr" style="width:12%">Berlaku sampai</th>'
+    + '<th class="ctr" style="width:8%">Sisa</th>'
+    + '<th class="ctr" style="width:14%">Status</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>'
+    + '<div class="foot">Dokumen ini dihasilkan otomatis oleh ' + APP_NAME + ' — ' + APP_OWNER + '</div>'
+    + '</body></html>';
+}
+
+function htmlProfilPdf_(u, rows) {
+  var hitung = {};
+  STATUS_DEFS.forEach(function (s) { hitung[s.key] = 0; });
+  rows.forEach(function (r) { if (r.status) hitung[r.status]++; });
+
+  var ringkas = STATUS_DEFS.map(function (s) {
+    return '<td class="ctr" style="border:1px solid #E4E9F0;padding:8px">'
+      + '<div style="font-size:16px;font-weight:700;color:' + warnaTone_(s.tone) + '">' + (hitung[s.key] || 0) + '</div>'
+      + '<div class="kecil">' + escHtml_(s.label) + '</div></td>';
+  }).join('');
+
+  var body = rows.map(function (r, i) {
+    var def = STATUS_MAP_[r.status];
+    return '<tr>'
+      + '<td class="ctr">' + (i + 1) + '</td>'
+      + '<td>' + escHtml_(r.nama_sertifikasi) + '</td>'
+      + '<td class="ctr">' + escHtml_(fmtTanggalIndo_(r.start_pelaksanaan)) + '</td>'
+      + '<td class="ctr">' + escHtml_(fmtTanggalIndo_(r.end_pelaksanaan)) + '</td>'
+      + '<td class="ctr">' + escHtml_(fmtTanggalIndo_(r.expired_at)) + '</td>'
+      + '<td class="ctr" style="color:' + warnaTone_(r.status_tone) + ';font-weight:700">'
+      + escHtml_(def ? def.label : '-') + '</td>'
+      + '</tr>';
+  }).join('');
+
+  return '<!DOCTYPE html><html lang="id"><head><meta charset="utf-8"><style>'
+    + '@page{size:A4;margin:12mm}'
+    + 'body{font-family:Segoe UI,Arial,Helvetica,sans-serif;color:#16202E;font-size:10px;margin:0}'
+    + '.kop{border-bottom:2px solid #0B50A1;padding-bottom:8px;margin-bottom:12px}'
+    + '.kop .brand{color:#0B50A1;font-size:15px;font-weight:700}'
+    + '.kop .sub{color:#5B6B80;font-size:9px;margin-top:2px}'
+    + 'h1{font-size:14px;margin:10px 0 4px}'
+    + '.kecil{color:#8494A8;font-size:8px}'
+    + 'table{width:100%;border-collapse:collapse}'
+    + 'th{background:#093D7D;color:#fff;font-size:9px;text-align:left;padding:6px 5px}'
+    + 'td{border-bottom:1px solid #E4E9F0;padding:5px;vertical-align:top}'
+    + '.ctr{text-align:center}'
+    + '.ident td{padding:4px 6px;border-bottom:1px dashed #E4E9F0}'
+    + '.ident .k{color:#5B6B80;width:26%}'
+    + '</style></head><body>'
+    + '<div class="kop"><div class="brand">' + APP_NAME + '</div>'
+    + '<div class="sub">' + APP_OWNER + '</div></div>'
+    + '<h1>Profil Sertifikasi — ' + escHtml_(u.nama_lengkap) + '</h1>'
+    + '<div class="kecil">' + escHtml_(u.employee_code) + ' · dicetak ' + fmtTanggalIndo_(todayDate_()) + '</div>'
+    + '<table class="ident" style="margin:10px 0 14px">'
+    + '<tr><td class="k">Employee Code</td><td>' + escHtml_(u.employee_code) + '</td>'
+    + '<td class="k">Username</td><td>' + escHtml_(u.username) + '</td></tr>'
+    + '<tr><td class="k">Divisi</td><td>' + escHtml_(u.divisi || '-') + '</td>'
+    + '<td class="k">Jabatan</td><td>' + escHtml_(u.jabatan || '-') + '</td></tr>'
+    + '<tr><td class="k">Email Perusahaan</td><td>' + escHtml_(u.email_perusahaan || '-') + '</td>'
+    + '<td class="k">Email Pribadi</td><td>' + escHtml_(u.email_pribadi || '-') + '</td></tr>'
+    + '<tr><td class="k">Lokasi Kerja</td><td>' + escHtml_(u.lokasi_kerja || '-') + '</td>'
+    + '<td class="k">No. HP</td><td>' + escHtml_(u.no_hp || '-') + '</td></tr>'
+    + '</table>'
+    + '<table style="margin-bottom:14px"><tr>' + ringkas + '</tr></table>'
+    + '<table><thead><tr>'
+    + '<th class="ctr" style="width:5%">No</th><th style="width:30%">Sertifikasi</th>'
+    + '<th class="ctr" style="width:14%">Mulai</th>'
+    + '<th class="ctr" style="width:12%">Selesai</th><th class="ctr" style="width:12%">Berlaku sampai</th>'
+    + '<th class="ctr" style="width:13%">Status</th>'
+    + '</tr></thead><tbody>' + body + '</tbody></table>'
+    + '<div class="kecil" style="margin-top:10px">Dokumen ini dihasilkan otomatis oleh '
+    + APP_NAME + ' — ' + APP_OWNER + '</div>'
+    + '</body></html>';
+}
